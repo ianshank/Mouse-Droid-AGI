@@ -266,8 +266,7 @@ def test_reset_samples_domain_when_dr_on_without_pending(monkeypatch):
     )
     env._built = True
     _, info = env.reset(seed=0)
-    assert env._pending_domain is not None
-    assert "friction" in env._pending_domain
+    assert env._pending_domain is None
     assert info["dr_enabled"] is True
 
 
@@ -403,6 +402,38 @@ def test_apply_domain_params_stores_when_dr_on(monkeypatch):
     assert env._pending_domain["friction"] == pytest.approx(0.8)
 
 
+def test_pending_sample_is_consumed_on_reset_without_resampling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mousedroid.config.schema import DomainRandomizationConfig
+    from mousedroid.training.domain_randomization import DomainRandomizer
+
+    monkeypatch.setattr(rover_env_module, "_isaaclab_available", lambda: True)
+    cfg = RoverConfig(
+        sim=RoverSimConfig(backend="isaac_lab"),
+        reward=RoverRewardConfig(),
+    )
+    env = RoverIsaacLabEnv(
+        cfg,
+        wheel_radius_m=0.042,
+        track_width_m=0.20,
+        domain_randomization=DomainRandomizationConfig(enabled=True),
+    )
+    env._built = True
+    env.apply_domain_params(friction=0.8, slip=0.02, mass_kg=2.6, motor_gain=0.9)
+    count = {"n": 0}
+    original = DomainRandomizer.sample
+
+    def _count(self: DomainRandomizer, rng: np.random.Generator) -> object:
+        count["n"] += 1
+        return original(self, rng)
+
+    monkeypatch.setattr(DomainRandomizer, "sample", _count)
+    env.reset(seed=0)
+    assert env._pending_domain is None
+    assert count["n"] == 0
+
+
 def test_read_imu_from_fake_sensor_on_step(monkeypatch):
     from types import SimpleNamespace
 
@@ -411,11 +442,14 @@ def test_read_imu_from_fake_sensor_on_step(monkeypatch):
     monkeypatch.setattr(rover_env_module, "_isaaclab_available", lambda: True)
     env = _make_env(with_reward=True)
     env._built = True
-    env._sensors[ROVER_SENSOR_LINK_NAMES[0]] = SimpleNamespace(
-        data=SimpleNamespace(
-            lin_acc_b=np.array([[0.0, 0.0, 9.8]], dtype=np.float32),
-            ang_vel_b=np.zeros((1, 3), dtype=np.float32),
-        )
+    env.inject_sensor(
+        ROVER_SENSOR_LINK_NAMES[0],
+        SimpleNamespace(
+            data=SimpleNamespace(
+                lin_acc_b=np.array([[0.0, 0.0, 9.8]], dtype=np.float32),
+                ang_vel_b=np.zeros((1, 3), dtype=np.float32),
+            )
+        ),
     )
     env.reset(seed=0)
     obs, _, _, _, _ = env.step(np.zeros(2, dtype=np.float32))
@@ -431,10 +465,135 @@ def test_read_lidar_from_fake_sensor_on_step(monkeypatch):
     monkeypatch.setattr(rover_env_module, "_isaaclab_available", lambda: True)
     env = _make_env(with_reward=True)
     env._built = True
-    env._sensors[ROVER_SENSOR_LINK_NAMES[1]] = SimpleNamespace(
-        data=SimpleNamespace(ray_distance=np.ones(8, dtype=np.float32) * 2.0)
+    env.inject_sensor(
+        ROVER_SENSOR_LINK_NAMES[1],
+        SimpleNamespace(data=SimpleNamespace(ray_distance=np.ones(8, dtype=np.float32) * 2.0)),
     )
     env.reset(seed=0)
     obs, _, _, _, _ = env.step(np.zeros(2, dtype=np.float32))
     assert obs["lidar"].shape == (env._cfg.observation.lidar_num_sectors,)
     assert float(obs["lidar"].max()) <= 1.0 + 1e-6
+
+
+def test_inject_sensor_rejects_empty_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(rover_env_module, "_isaaclab_available", lambda: True)
+    env = _make_env(with_reward=True)
+    with pytest.raises(ValueError, match="non-empty"):
+        env.inject_sensor("", object())
+
+
+def test_reset_clears_pending_so_next_reset_resamples(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mousedroid.config.schema import DomainRandomizationConfig
+    from mousedroid.training.domain_randomization import DomainRandomizer
+
+    monkeypatch.setattr(rover_env_module, "_isaaclab_available", lambda: True)
+    cfg = RoverConfig(
+        sim=RoverSimConfig(backend="isaac_lab"),
+        reward=RoverRewardConfig(),
+    )
+    env = RoverIsaacLabEnv(
+        cfg,
+        wheel_radius_m=0.042,
+        track_width_m=0.20,
+        domain_randomization=DomainRandomizationConfig(enabled=True),
+    )
+    env._built = True
+    count = {"n": 0}
+    original = DomainRandomizer.sample
+
+    def _count(self: DomainRandomizer, rng: np.random.Generator) -> object:
+        count["n"] += 1
+        return original(self, rng)
+
+    monkeypatch.setattr(DomainRandomizer, "sample", _count)
+    env.reset(seed=0)
+    assert env._pending_domain is None
+    assert count["n"] == 1
+    env.reset(seed=1)
+    assert env._pending_domain is None
+    assert count["n"] == 2
+
+
+def test_step_truncates_when_episode_budget_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(rover_env_module, "_isaaclab_available", lambda: True)
+    cfg = RoverConfig(
+        sim=RoverSimConfig(
+            backend="isaac_lab",
+            sim_dt_s=0.1,
+            decimation=1,
+            episode_length_s=0.2,
+        ),
+        reward=RoverRewardConfig(),
+    )
+    env = RoverIsaacLabEnv(cfg, wheel_radius_m=0.042, track_width_m=0.20)
+    env._built = True
+    env.reset(seed=0)
+    zeros = np.zeros(2, dtype=np.float32)
+    _, _, terminated, truncated, _ = env.step(zeros)
+    assert terminated is False
+    assert truncated is False
+    _, _, terminated, truncated, _ = env.step(zeros)
+    assert terminated is False
+    assert truncated is True
+
+
+def test_step_terminates_when_pose_inside_goal(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mousedroid.config.schema import RoverTaskConfig
+
+    monkeypatch.setattr(rover_env_module, "_isaaclab_available", lambda: True)
+    cfg = RoverConfig(
+        sim=RoverSimConfig(backend="isaac_lab"),
+        reward=RoverRewardConfig(),
+        task=RoverTaskConfig(goal_xy_m=(0.0, 0.0), goal_reach_radius_m=0.5),
+    )
+    env = RoverIsaacLabEnv(cfg, wheel_radius_m=0.042, track_width_m=0.20)
+    env._built = True
+    env.reset(seed=0)
+    _, _, terminated, truncated, _ = env.step(np.zeros(2, dtype=np.float32))
+    assert terminated is True
+    assert truncated is False
+
+
+def test_step_uses_measured_root_velocity_not_commanded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(rover_env_module, "_isaaclab_available", lambda: True)
+    env = _make_env(with_reward=True)
+    env._built = True
+    env._articulation = SimpleNamespace(
+        data=SimpleNamespace(
+            root_lin_vel_b=np.array([[0.4, 0.0, 0.0]], dtype=np.float32),
+            root_ang_vel_b=np.array([[0.0, 0.0, -0.2]], dtype=np.float32),
+        )
+    )
+    env.reset(seed=0)
+    _, reward, _, _, info = env.step(np.zeros(2, dtype=np.float32))
+    assert info["vx_body_mps"] == pytest.approx(0.4)
+    assert info["omega_rads"] == pytest.approx(-0.2)
+    assert info["forward_velocity_mps"] == pytest.approx(0.4)
+    assert reward == pytest.approx(RoverRewardConfig().forward_velocity_weight * 0.4)
+
+
+def test_step_zero_measured_vx_does_not_fall_back_to_wheels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(rover_env_module, "_isaaclab_available", lambda: True)
+    env = _make_env(with_reward=True)
+    env._built = True
+    env._articulation = SimpleNamespace(
+        data=SimpleNamespace(
+            root_lin_vel_b=np.array([[0.0, 0.0, 0.0]], dtype=np.float32),
+            root_ang_vel_b=np.array([[0.0, 0.0, 0.5]], dtype=np.float32),
+        )
+    )
+    env.reset(seed=0)
+    action = np.array([1.0, 1.0], dtype=np.float32)
+    _, _, _, _, info = env.step(action)
+    assert info["vx_body_mps"] == pytest.approx(0.0)
+    assert info["omega_rads"] == pytest.approx(0.5)

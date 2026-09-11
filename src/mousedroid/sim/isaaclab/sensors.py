@@ -20,6 +20,7 @@ from mousedroid.sim.protocols import ROVER_CHASSIS_POSE_DIM, ROVER_IMU_DIM
 
 _IMU_LINK = ROVER_SENSOR_LINK_NAMES[0]
 _LIDAR_LINK = ROVER_SENSOR_LINK_NAMES[1]
+_IMU_HALF = int(ROVER_IMU_DIM / (1.0 + 1.0))
 
 
 def to_numpy(value: Any) -> NDArray[np.float32] | None:
@@ -106,7 +107,12 @@ def resample_lidar(raw: NDArray[np.float32], n_sectors: int) -> NDArray[np.float
         return np.zeros(n_sectors, dtype=np.float32)
     idx = np.linspace(0.0, float(n - 1), n_sectors)
     xp = np.arange(n, dtype=np.float32)
-    return np.interp(idx, xp, flat).astype(np.float32)
+    # Write through a typed buffer so mypy 3.10 does not treat ``np.interp``
+    # as ``Any`` (``no-any-return`` on the CI 3.10 typecheck matrix).
+    out = np.zeros(n_sectors, dtype=np.float32)
+    interpolated = np.asarray(np.interp(idx, xp, flat), dtype=np.float32)
+    out[:] = interpolated
+    return out
 
 
 def _sensor_data(sensors: Mapping[str, Any], *names: str) -> Any:
@@ -154,14 +160,16 @@ def read_rover_imu(*, sensors: Mapping[str, Any], articulation: Any) -> NDArray[
     ang = _attr_row(data, "ang_vel_b", "ang_vel_w")
     if ang is None:
         ang = _attr_row(art_data, "ang_vel_b", "ang_vel_w")
-    parts: list[NDArray[np.float32]] = []
+    out = np.zeros(ROVER_IMU_DIM, dtype=np.float32)
     if lin is not None:
-        parts.append(np.asarray(lin, dtype=np.float32).reshape(-1))
+        lin_arr = np.asarray(lin, dtype=np.float32).reshape(-1)
+        n = min(int(lin_arr.size), _IMU_HALF)
+        out[:n] = lin_arr[:n]
     if ang is not None:
-        parts.append(np.asarray(ang, dtype=np.float32).reshape(-1))
-    if not parts:
-        return np.zeros(ROVER_IMU_DIM, dtype=np.float32)
-    return fit_vector(np.concatenate(parts), ROVER_IMU_DIM)
+        ang_arr = np.asarray(ang, dtype=np.float32).reshape(-1)
+        n = min(int(ang_arr.size), _IMU_HALF)
+        out[_IMU_HALF : _IMU_HALF + n] = ang_arr[:n]
+    return out
 
 
 def read_rover_pose(*, sensors: Mapping[str, Any], articulation: Any) -> NDArray[np.float32]:

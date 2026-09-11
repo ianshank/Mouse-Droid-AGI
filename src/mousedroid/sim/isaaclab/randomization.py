@@ -16,6 +16,32 @@ from mousedroid.logging.setup import get_logger
 
 _log = get_logger(__name__)
 
+_CHASSIS_KEYS: tuple[str, ...] = ("friction", "slip", "mass_kg", "motor_gain")
+
+
+def domain_write_coverage(
+    *,
+    duck_writer: bool,
+    mass_written: bool,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Classify which chassis DR fields a handle could actually write.
+
+    Args:
+        duck_writer: True when ``apply_chassis_domain_params`` is present.
+        mass_written: True when the PhysX mass path succeeded.
+
+    Returns:
+        ``(wrote, skipped)`` field-name tuples in chassis-key order.
+    """
+    if duck_writer:
+        return _CHASSIS_KEYS, ()
+    wrote_list: list[str] = []
+    if mass_written:
+        wrote_list.append("mass_kg")
+    wrote = tuple(wrote_list)
+    skipped = tuple(name for name in _CHASSIS_KEYS if name not in wrote)
+    return wrote, skipped
+
 
 def apply_isaac_domain_params(
     articulation: Any,
@@ -45,6 +71,14 @@ def apply_isaac_domain_params(
         has_articulation=articulation is not None,
     )
     if articulation is None:
+        _log_domain_coverage(
+            wrote=(),
+            skipped=_CHASSIS_KEYS,
+            friction=friction,
+            slip=slip,
+            mass_kg=mass_kg,
+            motor_gain=motor_gain,
+        )
         return
     writer = getattr(articulation, "apply_chassis_domain_params", None)
     if callable(writer):
@@ -54,19 +88,29 @@ def apply_isaac_domain_params(
             mass_kg=mass_kg,
             motor_gain=motor_gain,
         )
+        wrote, skipped = domain_write_coverage(duck_writer=True, mass_written=True)
+        _log_domain_coverage(
+            wrote=wrote,
+            skipped=skipped,
+            friction=friction,
+            slip=slip,
+            mass_kg=mass_kg,
+            motor_gain=motor_gain,
+        )
         return
     # Live Isaac Lab 0.20+: best-effort PhysX view writes. Missing attributes
     # are skipped so a partial API never raises on the training loop.
-    view = getattr(articulation, "root_physx_view", None)
-    masses = getattr(view, "get_masses", None) if view is not None else None
-    set_masses = getattr(view, "set_masses", None) if view is not None else None
-    if callable(masses) and callable(set_masses):
-        current = masses()
-        filled = getattr(current, "fill", None)
-        if callable(filled):
-            filled(mass_kg)
-            set_masses(current)
+    mass_written = _write_physx_mass(articulation, mass_kg)
     _try_replicator_write(articulation, friction=friction, mass_kg=mass_kg)
+    wrote, skipped = domain_write_coverage(duck_writer=False, mass_written=mass_written)
+    _log_domain_coverage(
+        wrote=wrote,
+        skipped=skipped,
+        friction=friction,
+        slip=slip,
+        mass_kg=mass_kg,
+        motor_gain=motor_gain,
+    )
 
 
 def apply_isaac_episode_extras(extras: Mapping[str, float]) -> None:
@@ -85,6 +129,55 @@ def apply_isaac_episode_extras(extras: Mapping[str, float]) -> None:
         extras=dict(extras),
         n_fields=len(extras),
     )
+
+
+def _write_physx_mass(articulation: Any, mass_kg: float) -> bool:
+    """Best-effort PhysX mass write. Returns True when the buffer was filled."""
+    view = getattr(articulation, "root_physx_view", None)
+    masses = getattr(view, "get_masses", None) if view is not None else None
+    set_masses = getattr(view, "set_masses", None) if view is not None else None
+    if not callable(masses) or not callable(set_masses):
+        return False
+    current = masses()
+    filled = getattr(current, "fill", None)
+    if not callable(filled):
+        return False
+    filled(mass_kg)
+    set_masses(current)
+    return True
+
+
+def _log_domain_coverage(
+    *,
+    wrote: tuple[str, ...],
+    skipped: tuple[str, ...],
+    friction: float,
+    slip: float,
+    mass_kg: float,
+    motor_gain: float,
+) -> None:
+    """Log partial / unapplied DR writes without raising on a live loop."""
+    if not wrote:
+        _log.info(
+            "isaac_lab_domain_params_unapplied",
+            wrote=wrote,
+            skipped=skipped,
+            friction=friction,
+            slip=slip,
+            mass_kg=mass_kg,
+            motor_gain=motor_gain,
+        )
+        return
+    if skipped:
+        _log.info(
+            "isaac_lab_domain_params_partial",
+            wrote=wrote,
+            skipped=skipped,
+            friction=friction,
+            slip=slip,
+            mass_kg=mass_kg,
+            motor_gain=motor_gain,
+        )
 
 
 def _try_replicator_write(

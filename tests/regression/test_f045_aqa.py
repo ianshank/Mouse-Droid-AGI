@@ -38,3 +38,10 @@ def test_replicator_helper_is_present_check_only() -> None:
     assert "modify_pose" in helper
     assert "does not write" in helper
     assert "writer(" not in helper
+
+
+def test_incomplete_live_writes_log_partial_or_unapplied() -> None:
+    src = _RANDOMIZATION.read_text(encoding="utf-8")
+    assert "isaac_lab_domain_params_partial" in src
+    assert "isaac_lab_domain_params_unapplied" in src
+    assert "domain_write_coverage" in src

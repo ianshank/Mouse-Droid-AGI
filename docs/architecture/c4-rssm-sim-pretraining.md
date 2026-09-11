@@ -108,11 +108,11 @@ skips (byte-identical). Vision-on fine-tune stays MuJoCo until Isaac grows
 
 Isaac `lidar_dim` is sized from `RoverObservationConfig.lidar_num_sectors`,
 not hardware `LidarConfig`. Battery voltage for the adapter is
-`rover.sim.battery_voltage_const_v` (parent field; the nested MuJoCo
-`battery_voltage_const_v` stays at 12.0 for YAML compat and is unused by
-the adapter). Isaac RSSM skips when `rover.reward is None`
+`rover.sim.battery_voltage_const_v` for Isaac/mock and nested
+`rover.sim.mujoco.battery_voltage_const_v` for MuJoCo (so YAML overrides
+on the nested field stay effective). Isaac RSSM skips when `rover.reward is None`
 (`reason=isaac_reward_block_required`). Training metrics stay on MLflow;
 there is no Prometheus `track_isaac_sim` family. Live `build()` wires
-contact only; IMU/LiDAR are duck-typed readers. Replicator is a
-present-check, not a write.
+contact only; IMU/LiDAR are duck-typed readers attached via
+`RoverIsaacLabEnv.inject_sensor`. Replicator is a present-check, not a write.
 

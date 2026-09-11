@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from mousedroid.config.schema import (
+    MujocoSimConfig,
     RoverConfig,
     RoverRewardConfig,
     RoverSimConfig,
@@ -19,6 +20,7 @@ from mousedroid.training.pipeline_orchestrator import (
     _ISAAC_REWARD_BLOCK_REASON,
     PipelineOrchestrator,
     _maybe_build_rover_env,
+    _rssm_battery_v,
     _rssm_pretrain_skip_reason,
 )
 
@@ -125,6 +127,22 @@ async def test_train_rssm_runs_when_enabled_and_isaac_lab(
     await orch._train_rssm(batch_size=4)
     assert cfg.rover is not None
     assert called["battery_v"] == pytest.approx(cfg.rover.sim.battery_voltage_const_v)
+
+
+def test_rssm_battery_v_mujoco_uses_nested() -> None:
+    rover = RoverConfig(
+        sim=RoverSimConfig(
+            backend="mujoco",
+            battery_voltage_const_v=11.1,
+            mujoco=MujocoSimConfig(battery_voltage_const_v=13.0),
+        )
+    )
+    assert _rssm_battery_v(rover) == pytest.approx(13.0)
+
+
+def test_rssm_battery_v_isaac_uses_parent() -> None:
+    rover = RoverConfig(sim=RoverSimConfig(backend="isaac_lab", battery_voltage_const_v=11.1))
+    assert _rssm_battery_v(rover) == pytest.approx(11.1)
 
 
 @pytest.mark.asyncio

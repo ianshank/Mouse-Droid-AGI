@@ -14,7 +14,7 @@ from mousedroid.config.schema import (
     RoverSimConfig,
 )
 from mousedroid.factory.world_model import build_rover_env
-from mousedroid.training.pipeline_orchestrator import PipelineOrchestrator
+from mousedroid.training.pipeline_orchestrator import PipelineOrchestrator, _rssm_battery_v
 
 
 def _desc(model: type, name: str) -> FieldInfo:
@@ -88,10 +88,13 @@ def test_parent_battery_is_independent_of_mujoco_nested() -> None:
     assert cfg.mujoco.battery_voltage_const_v == 12.0
 
 
-def test_pipeline_rssm_reads_parent_battery_field() -> None:
+def test_pipeline_rssm_uses_battery_helper() -> None:
     src = inspect.getsource(PipelineOrchestrator._train_rssm)
-    assert "rover.sim.battery_voltage_const_v" in src
-    assert "mujoco.battery_voltage_const_v" not in src
+    assert "_rssm_battery_v" in src
+    helper = inspect.getsource(_rssm_battery_v)
+    assert "mujoco.battery_voltage_const_v" in helper
+    vision = inspect.getsource(PipelineOrchestrator._run_vision_finetune)
+    assert "_rssm_battery_v" in vision
 
 
 def test_build_rover_env_docstring_does_not_claim_mujoco_unimplemented() -> None:

@@ -27,6 +27,13 @@ def test_env_exposes_to_body_action() -> None:
     assert "imu_dim" not in doc.lower() or "not" in doc.lower()
 
 
+def test_env_exposes_inject_sensor() -> None:
+    assert callable(RoverIsaacLabEnv.inject_sensor)
+    doc = inspect.getdoc(RoverIsaacLabEnv.inject_sensor)
+    assert doc
+    assert "zeros" in doc.lower()
+
+
 def test_adapter_still_zeros_rssm_imu_slot() -> None:
     adapter = RoverObsAdapter(battery_v=12.0)
     out = adapter.adapt(

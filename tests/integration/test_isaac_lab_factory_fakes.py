@@ -27,14 +27,18 @@ def test_factory_isaac_lab_steps_with_injected_fakes(monkeypatch: pytest.MonkeyP
     env = build_rover_env(cfg)
     assert isinstance(env, RoverIsaacLabEnv)
     env._built = True
-    env._sensors[ROVER_SENSOR_LINK_NAMES[0]] = SimpleNamespace(
-        data=SimpleNamespace(
-            lin_acc_b=np.zeros((1, 3), dtype=np.float32),
-            ang_vel_b=np.zeros((1, 3), dtype=np.float32),
-        )
+    env.inject_sensor(
+        ROVER_SENSOR_LINK_NAMES[0],
+        SimpleNamespace(
+            data=SimpleNamespace(
+                lin_acc_b=np.zeros((1, 3), dtype=np.float32),
+                ang_vel_b=np.zeros((1, 3), dtype=np.float32),
+            )
+        ),
     )
-    env._sensors[ROVER_CONTACT_SENSOR_NAME] = SimpleNamespace(
-        data=SimpleNamespace(net_forces_w=np.zeros((1, 1, 3), dtype=np.float32))
+    env.inject_sensor(
+        ROVER_CONTACT_SENSOR_NAME,
+        SimpleNamespace(data=SimpleNamespace(net_forces_w=np.zeros((1, 1, 3), dtype=np.float32))),
     )
     try:
         obs, info = env.reset(seed=0)

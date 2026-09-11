@@ -24,7 +24,11 @@ _log = get_logger(__name__)
 
 
 def _rssm_lidar_update(cfg: Settings) -> dict[str, object]:
-    """Size RSSM lidar from rover observation sectors for physics backends.
+    """Size RSSM lidar from the backend that actually emits the scan.
+
+    MuJoCo emits :attr:`MujocoSimConfig.lidar_num_sectors`. Isaac emits
+    :attr:`RoverObservationConfig.lidar_num_sectors`. Disabled LiDAR
+    keeps ``lidar_dim=0`` so the adapter's empty tensor matches the model.
 
     Args:
         cfg: Root settings.
@@ -36,8 +40,14 @@ def _rssm_lidar_update(cfg: Settings) -> dict[str, object]:
     rover = cfg.rover
     if rover is None or rover.sim.backend not in ROVER_RSSM_PHYSICS_BACKENDS:
         return {}
+    if not rover.observation.include_lidar_sectors:
+        return {"lidar_dim": 0, "lidar_proj_dim": 0}
+    if rover.sim.backend == "mujoco":
+        sectors = rover.sim.mujoco.lidar_num_sectors
+    else:
+        sectors = rover.observation.lidar_num_sectors
     return {
-        "lidar_dim": rover.observation.lidar_num_sectors,
+        "lidar_dim": sectors,
         "lidar_proj_dim": cfg.model.lidar_proj_dim,
     }
 
@@ -145,9 +155,11 @@ def build_rssm_trainable(cfg: Settings) -> RSSM:
     pretrained. Operator pretrain knobs from :class:`TrainingConfig` are copied
     onto the model config so they live in one place (``training:``).
 
-    ``lidar_dim`` is sized from :attr:`RoverObservationConfig.lidar_num_sectors`
-    for both ``mujoco`` and ``isaac_lab`` backends. Mock / absent rover keeps
-    the model default.
+    ``lidar_dim`` follows the emitting backend: MuJoCo uses
+    :attr:`MujocoSimConfig.lidar_num_sectors`; Isaac uses
+    :attr:`RoverObservationConfig.lidar_num_sectors`. Disabled
+    ``include_lidar_sectors`` keeps ``lidar_dim=0``. Mock / absent rover
+    keeps the model default.
 
     Args:
         cfg: Root settings.

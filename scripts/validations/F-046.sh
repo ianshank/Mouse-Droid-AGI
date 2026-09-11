@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# F-046 — RSSM gates accept isaac_lab; lidar_dim from observation; mock still skips.
+# F-046 — RSSM gates accept isaac_lab; lidar_dim from emitting backend; mock still skips.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."

@@ -341,8 +341,9 @@ hardware next-feature (`critical` / `todo`). F-043–F-046 and F-048 are
 `in_progress`.
 
 - **F-043** nested `RoverIsaacSimConfig`; no new `config/*.yaml` keys.
-- **F-044** fake-injectable readers + `to_body_action` + `vx_body_mps` /
-  `omega_rads`. Does not map 6-DoF IMU into RSSM `imu_dim`.
+- **F-044** fake-injectable readers (`inject_sensor`) + `to_body_action` +
+  `vx_body_mps` / `omega_rads`. Does not map 6-DoF IMU into RSSM `imu_dim`.
+  Live `build()` constructs contact only.
 - **F-045** `apply_domain_params` on Isaac. Replicator is a best-effort
   import present-check; this slice does not write Omniverse attributes.
 - **F-046** `_train_rssm` accepts `{mujoco, isaac_lab}`; vision fine-tune stays

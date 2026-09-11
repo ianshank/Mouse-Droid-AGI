@@ -19,6 +19,19 @@ prim, and USD knobs without new YAML keys. Isaac now emits `vx_body_mps` /
 stays MuJoCo. PPO/ONNX hot-load and Cosmos are catalog-deferred (F-047,
 F-049). No Prometheus Isaac family; runtime `Settings.harness` stays None.
 
+### Fixed — Isaac sensor injection, IMU slots, RSSM lidar/battery parity
+
+Copilot review on PR #224: live `build()` still constructs contact only;
+IMU/LiDAR attach through tested `RoverIsaacLabEnv.inject_sensor`. IMU
+ang-only readings occupy the last half of the 6-DoF vector. RSSM
+`lidar_dim` is 0 when sectors are disabled; MuJoCo uses nested
+`lidar_num_sectors`. Adapter battery uses nested MuJoCo voltage and the
+Isaac parent field. Isaac episodes truncate/terminate like MuJoCo; body
+velocity prefers measured root twist; DR pending samples clear on reset;
+incomplete live DR writes log `partial` / `unapplied` without raising.
+`resample_lidar` returns a typed buffer so mypy 3.10 no longer reports
+`no-any-return`.
+
 ### Fixed — Isaac RSSM skip without reward; hygiene (F-043–F-048 follow-up)
 
 Default YAML leaves `rover.reward` unset, so live Isaac `build()` would

@@ -190,10 +190,10 @@ class RoverSimConfig(StrictBaseModel):
         12.0,
         gt=0.0,
         description=(
-            "Constant battery voltage stamped into RSSM motor_state[3] for any "
-            "rover backend. The RSSM adapter reads THIS parent field, not "
-            "MujocoSimConfig.battery_voltage_const_v (that nested default stays "
-            "12.0 so existing MuJoCo YAML is unchanged)."
+            "Constant battery voltage stamped into RSSM motor_state[3] for "
+            "Isaac and mock. MuJoCo pretrain reads nested "
+            "MujocoSimConfig.battery_voltage_const_v so existing YAML overrides "
+            "on that field stay effective; the nested default remains 12.0."
         ),
     )
 

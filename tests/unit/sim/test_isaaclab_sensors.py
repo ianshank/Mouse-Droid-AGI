@@ -63,6 +63,19 @@ def test_read_imu_concatenates_lin_and_ang() -> None:
     np.testing.assert_allclose(imu, [1.0, 2.0, 3.0, 0.1, 0.2, 0.3])
 
 
+def test_read_imu_ang_only_occupies_last_half() -> None:
+    handle = SimpleNamespace(
+        data=SimpleNamespace(ang_vel_b=np.array([[0.1, 0.2, 0.3]], dtype=np.float32))
+    )
+    imu = read_rover_imu(
+        sensors={ROVER_SENSOR_LINK_NAMES[0]: handle},
+        articulation=None,
+    )
+    half = int(ROVER_IMU_DIM / (1.0 + 1.0))
+    np.testing.assert_array_equal(imu[:half], np.zeros(half, dtype=np.float32))
+    np.testing.assert_allclose(imu[half:], [0.1, 0.2, 0.3])
+
+
 def test_read_imu_zeros_when_missing() -> None:
     imu = read_rover_imu(sensors={}, articulation=None)
     np.testing.assert_array_equal(imu, np.zeros(ROVER_IMU_DIM, dtype=np.float32))

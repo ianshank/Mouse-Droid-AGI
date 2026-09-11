@@ -37,3 +37,8 @@ def test_isaac_reward_block_skip_is_wired() -> None:
         )
         is None
     )
+
+
+def test_train_rssm_uses_battery_helper() -> None:
+    src = inspect.getsource(PipelineOrchestrator._train_rssm)
+    assert "_rssm_battery_v" in src

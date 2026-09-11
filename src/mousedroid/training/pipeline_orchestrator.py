@@ -40,6 +40,25 @@ _UNSUPPORTED_RSSM_BACKEND_REASON = "unsupported_rssm_backend"
 _ISAAC_REWARD_BLOCK_REASON = "isaac_reward_block_required"
 
 
+def _rssm_battery_v(rover: RoverConfig) -> float:
+    """Return the RSSM adapter battery voltage for the emitting backend.
+
+    MuJoCo YAML historically overrides nested
+    ``sim.mujoco.battery_voltage_const_v``. Isaac (and mock) stamp the
+    parent ``sim.battery_voltage_const_v``. Mixing the two silently
+    dropped MuJoCo operator overrides.
+
+    Args:
+        rover: Rover block from :class:`Settings`.
+
+    Returns:
+        Battery voltage in volts for ``RoverObsAdapter``.
+    """
+    if rover.sim.backend == "mujoco":
+        return rover.sim.mujoco.battery_voltage_const_v
+    return rover.sim.battery_voltage_const_v
+
+
 def _rssm_pretrain_skip_reason(rover: RoverConfig | None) -> str | None:
     """Return why physics RSSM pretrain must skip, or ``None`` to run.
 
@@ -317,7 +336,7 @@ class PipelineOrchestrator:
                 await self._run_rssm_training(
                     model=build_rssm_trainable(self._settings),
                     env=build_rover_env(self._settings),
-                    battery_v=rover.sim.battery_voltage_const_v,
+                    battery_v=_rssm_battery_v(rover),
                     checkpoint=Path(tcfg.weights_dir) / tcfg.rssm_checkpoint_name,
                     epochs=tcfg.epochs,
                     event_prefix="rssm_training",
@@ -362,7 +381,7 @@ class PipelineOrchestrator:
         await self._run_rssm_training(
             model=build_rssm_vision_finetune(render_cfg, checkpoint),
             env=build_rover_env(render_cfg),
-            battery_v=rover.sim.battery_voltage_const_v,
+            battery_v=_rssm_battery_v(rover),
             checkpoint=Path(tcfg.weights_dir) / tcfg.rssm_vision_checkpoint_name,
             epochs=tcfg.rssm_finetune_epochs,
             event_prefix="rssm_vision_finetune",

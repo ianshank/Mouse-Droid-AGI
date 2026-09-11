@@ -74,8 +74,9 @@ ROVER_SENSOR_LINK_NAMES: Final[tuple[str, str, str]] = (
 This slice's live ``RoverIsaacLabEnv.build()`` wires the chassis
 :class:`ContactSensor` only. IMU and LiDAR observations come from the
 duck-typed readers in :mod:`mousedroid.sim.isaaclab.sensors` when a
-handle is present under these keys (CI fakes or an operator-injected
-live sensor). Camera / ``render_rgb`` is out of this slice — do not
+handle is present under these keys (CI fakes via
+``RoverIsaacLabEnv.inject_sensor``, or an operator-injected live sensor).
+Camera / ``render_rgb`` is out of this slice — do not
 read this tuple as a promise that IMU, LiDAR, or camera sensors are
 constructed in ``build()``."""
 

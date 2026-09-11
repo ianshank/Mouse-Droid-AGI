@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from mousedroid.sim.isaaclab.randomization import (
     apply_isaac_domain_params,
     apply_isaac_episode_extras,
+    domain_write_coverage,
 )
 
 
@@ -47,3 +50,51 @@ def test_extras_empty_is_safe() -> None:
 
 def test_extras_with_fields_is_safe() -> None:
     apply_isaac_episode_extras({"uart_latency_ms": 12.0, "push_force_n": 1.5})
+
+
+def test_domain_write_coverage_duck_writer_writes_all() -> None:
+    wrote, skipped = domain_write_coverage(duck_writer=True, mass_written=True)
+    assert wrote == ("friction", "slip", "mass_kg", "motor_gain")
+    assert skipped == ()
+
+
+def test_domain_write_coverage_physx_mass_is_partial() -> None:
+    wrote, skipped = domain_write_coverage(duck_writer=False, mass_written=True)
+    assert wrote == ("mass_kg",)
+    assert skipped == ("friction", "slip", "motor_gain")
+
+
+def test_domain_write_coverage_missing_handle_is_unapplied() -> None:
+    wrote, skipped = domain_write_coverage(duck_writer=False, mass_written=False)
+    assert wrote == ()
+    assert skipped == ("friction", "slip", "mass_kg", "motor_gain")
+
+
+def test_none_articulation_logs_unapplied(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+
+    def _info(event: str, **_kwargs: object) -> None:
+        events.append(event)
+
+    monkeypatch.setattr("mousedroid.sim.isaaclab.randomization._log.info", _info)
+    apply_isaac_domain_params(None, friction=1.0, slip=0.0, mass_kg=2.7, motor_gain=1.0)
+    assert "isaac_lab_domain_params_unapplied" in events
+
+
+def test_physx_mass_logs_partial(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+
+    def _info(event: str, **_kwargs: object) -> None:
+        events.append(event)
+
+    monkeypatch.setattr("mousedroid.sim.isaaclab.randomization._log.info", _info)
+
+    class _Buf:
+        def fill(self, value: float) -> None:
+            self.filled = value
+
+    buf = _Buf()
+    view = SimpleNamespace(get_masses=lambda: buf, set_masses=lambda _buf: None)
+    art = SimpleNamespace(root_physx_view=view)
+    apply_isaac_domain_params(art, friction=1.0, slip=0.0, mass_kg=3.0, motor_gain=1.0)
+    assert "isaac_lab_domain_params_partial" in events

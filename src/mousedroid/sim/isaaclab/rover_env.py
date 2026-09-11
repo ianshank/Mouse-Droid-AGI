@@ -60,6 +60,7 @@ from mousedroid.sim.isaaclab.scene import (
     simulation_cfg_kwargs,
 )
 from mousedroid.sim.isaaclab.sensors import (
+    first_env_row,
     identity_chassis_pose,
     read_rover_imu,
     read_rover_lidar,
@@ -79,6 +80,26 @@ if TYPE_CHECKING:
     from mousedroid.config.schema import DomainRandomizationConfig
 
 _log = get_logger(__name__)
+
+
+def _vector_head(row: NDArray[np.float32] | None) -> float:
+    """Return the first component, or 0.0 when the row is missing/empty."""
+    if row is None:
+        return 0.0
+    flat = np.asarray(row, dtype=np.float32).reshape(-1)
+    if int(flat.size) == 0:
+        return 0.0
+    return float(flat[0])
+
+
+def _vector_tail(row: NDArray[np.float32] | None) -> float:
+    """Return the last component, or 0.0 when the row is missing/empty."""
+    if row is None:
+        return 0.0
+    flat = np.asarray(row, dtype=np.float32).reshape(-1)
+    if int(flat.size) == 0:
+        return 0.0
+    return float(flat[-1])
 
 
 class IsaacLabUnavailableError(RuntimeError):
@@ -153,6 +174,10 @@ class RoverIsaacLabEnv:
         self._articulation: Any = None
         self._sensors: dict[str, Any] = {}
         self._pending_domain: dict[str, float] | None = None
+        self._control_dt_s = cfg.sim.sim_dt_s * cfg.sim.decimation
+        self._max_steps = max(1, int(cfg.sim.episode_length_s / self._control_dt_s))
+        self._goal_xy: NDArray[np.float32] = np.asarray(cfg.task.goal_xy_m, dtype=np.float32)
+        self._goal_reach_radius_m = cfg.task.goal_reach_radius_m
 
     # ----- lifecycle --------------------------------------------------------
 
@@ -163,8 +188,8 @@ class RoverIsaacLabEnv:
         :class:`ManagerBasedRLEnv`-style scene with actuators on the four
         :data:`ROVER_WHEEL_JOINT_NAMES` continuous wheel joints and a
         chassis :class:`ContactSensor`. IMU / LiDAR / camera handles stay
-        ``None`` unless an operator (or a test) injects them; readers are
-        duck-typed and return zeros when unwired.
+        ``None`` until :meth:`inject_sensor` (CI fakes or a workstation
+        operator). Readers are duck-typed and return zeros when unwired.
 
         Raises:
             IsaacLabUnavailableError: When ``isaaclab`` cannot be imported.
@@ -255,7 +280,8 @@ class RoverIsaacLabEnv:
             "dr_enabled": dr_enabled,
         }
         zeros = np.zeros(ROVER_NUM_WHEELS, dtype=np.float32)
-        self._stamp_body_velocity_info(info, zeros)
+        vx_body, omega = self._measured_body_velocity(zeros)
+        self._stamp_body_velocity_info(info, vx_body, omega)
         if episode_params is not None:
             info["episode_params"] = episode_params
         return self._read_observation(zeros), info
@@ -308,20 +334,21 @@ class RoverIsaacLabEnv:
         self._substep_physics()
 
         obs = self._read_observation(wheel_velocities)
-        vx_body, _omega = self._body_velocity_from_wheels(wheel_velocities)
+        vx_body, omega = self._measured_body_velocity(wheel_velocities)
         is_colliding = self._read_collision_flag()
         reward = reward_cfg.forward_velocity_weight * vx_body - reward_cfg.collision_weight * float(
             is_colliding
         )
 
         self._step_idx += 1
+        terminated, truncated = self._episode_flags(obs)
         info: dict[str, Any] = {
             "step_idx": self._step_idx,
             "wheel_velocities": wheel_velocities.tolist(),
             "is_colliding": bool(is_colliding),
         }
-        self._stamp_body_velocity_info(info, wheel_velocities)
-        return (obs, float(reward), False, False, info)
+        self._stamp_body_velocity_info(info, vx_body, omega)
+        return (obs, float(reward), terminated, truncated, info)
 
     def close(self) -> None:
         """Tear down the Isaac Lab simulation context.
@@ -338,6 +365,37 @@ class RoverIsaacLabEnv:
         self._pending_domain = None
         self._built = False
         self._step_idx = 0
+
+    def inject_sensor(self, name: str, handle: Any) -> None:
+        """Attach a duck-typed IMU / LiDAR / camera / contact handle.
+
+        Live :meth:`build` constructs the chassis contact sensor only.
+        CI fakes and workstation operators inject IMU/LiDAR here so
+        :func:`read_rover_imu` / :func:`read_rover_lidar` see a buffer
+        instead of zeros. ``None`` handles are stored and still read as
+        missing.
+
+        Args:
+            name: Sensor key (URDF link, ``imu`` / ``lidar`` alias, or
+                :data:`ROVER_CONTACT_SENSOR_NAME`).
+            handle: Duck-typed sensor or ``None`` to unwind an injection.
+
+        Raises:
+            ValueError: When ``name`` is empty.
+        """
+        if not name:
+            msg = "inject_sensor requires a non-empty name"
+            raise ValueError(msg)
+        self._sensors[name] = handle
+        imu_key = ROVER_SENSOR_LINK_NAMES[0]
+        lidar_key = ROVER_SENSOR_LINK_NAMES[1]
+        _log.info(
+            "isaac_lab_sensor_injected",
+            name=name,
+            handle_type=type(handle).__name__,
+            wired_imu=self._sensors.get(imu_key) is not None,
+            wired_lidar=self._sensors.get(lidar_key) is not None,
+        )
 
     # ----- internals --------------------------------------------------------
 
@@ -408,10 +466,9 @@ class RoverIsaacLabEnv:
 
         # Sensor handles keyed by the URDF link name so reset/step
         # body can resolve them without re-reading the constants tuple.
-        # IMU / LiDAR / camera sensors are wired lazily by the operator
-        # on Linux + Isaac Sim post-merge per the C4 playbook; the
-        # contact sensor MUST be wired here because the reward signal
-        # in ``RoverRewardConfig.collision_weight`` depends on it.
+        # IMU / LiDAR stay None until inject_sensor — this slice does
+        # not construct IMUSensorCfg / RayCaster (CI has no isaaclab).
+        # Contact MUST be wired because collision_weight depends on it.
         self._sensors = dict.fromkeys(ROVER_SENSOR_LINK_NAMES)
         contact_cfg = ContactSensorCfg(
             prim_path=isaac_cfg.contact_prim_glob,
@@ -422,6 +479,8 @@ class RoverIsaacLabEnv:
         self._sensors[ROVER_CONTACT_SENSOR_NAME] = ContactSensor(contact_cfg)
 
         self._built = True
+        imu_key = ROVER_SENSOR_LINK_NAMES[0]
+        lidar_key = ROVER_SENSOR_LINK_NAMES[1]
         _log.info(
             "isaac_lab_env_built",
             urdf_path=self._cfg.sim.urdf_path,
@@ -429,6 +488,10 @@ class RoverIsaacLabEnv:
             wheel_joints=list(ROVER_WHEEL_JOINT_NAMES),
             sensor_links=list(ROVER_SENSOR_LINK_NAMES),
             sensor_keys=sorted(self._sensors.keys()),
+            wired_contact=True,
+            wired_imu=self._sensors.get(imu_key) is not None,
+            wired_lidar=self._sensors.get(lidar_key) is not None,
+            sensor_injection="inject_sensor",
             reward_weights={
                 "forward_velocity_weight": self._cfg.reward.forward_velocity_weight,
                 "collision_weight": self._cfg.reward.collision_weight,
@@ -537,13 +600,45 @@ class RoverIsaacLabEnv:
     def _stamp_body_velocity_info(
         self,
         info: dict[str, Any],
-        wheel_velocities: NDArray[np.float32],
+        vx_body: float,
+        omega: float,
     ) -> None:
         """Write ``vx_body_mps`` / ``omega_rads`` / ``forward_velocity_mps``."""
-        vx, omega = self._body_velocity_from_wheels(wheel_velocities)
-        info["vx_body_mps"] = float(vx)
+        info["vx_body_mps"] = float(vx_body)
         info["omega_rads"] = float(omega)
-        info["forward_velocity_mps"] = float(vx)
+        info["forward_velocity_mps"] = float(vx_body)
+
+    def _measured_body_velocity(self, wheel_velocities: NDArray[np.float32]) -> tuple[float, float]:
+        """Prefer articulation root velocity; fall back to commanded wheels.
+
+        ``vx == 0`` is a valid measured value and must not fall through to
+        the wheel kinematic estimate.
+        """
+        art_data = getattr(self._articulation, "data", None)
+        lin = first_env_row(getattr(art_data, "root_lin_vel_b", None))
+        if lin is None:
+            lin = first_env_row(getattr(art_data, "root_lin_vel_w", None))
+        ang = first_env_row(getattr(art_data, "root_ang_vel_b", None))
+        if ang is None:
+            ang = first_env_row(getattr(art_data, "root_ang_vel_w", None))
+        if lin is None and ang is None:
+            return self._body_velocity_from_wheels(wheel_velocities)
+        return _vector_head(lin), _vector_tail(ang)
+
+    def _episode_flags(self, obs: dict[str, NDArray[np.float32]]) -> tuple[bool, bool]:
+        """Return ``(terminated, truncated)`` from pose and step budget."""
+        truncated = self._step_idx >= self._max_steps
+        pose = obs.get("chassis_pose")
+        if pose is None:
+            return False, truncated
+        flat = np.asarray(pose, dtype=np.float32).reshape(-1)
+        if int(flat.size) <= 1:
+            return False, truncated
+        dx = float(self._goal_xy[0]) - float(flat[0])
+        dy = float(self._goal_xy[1]) - float(flat[1])
+        reach = self._goal_reach_radius_m
+        terminated = (dx * dx + dy * dy) < (reach * reach)
+        return terminated, truncated
 
     def _apply_reset_randomization(self, seed: int | None) -> Any:
         """Re-apply pending DR or sample a new bundle when DR is enabled."""
@@ -557,12 +652,14 @@ class RoverIsaacLabEnv:
             )
             return None
         if self._pending_domain is not None:
-            apply_isaac_domain_params(self._articulation, **self._pending_domain)
+            chassis = dict(self._pending_domain)
+            apply_isaac_domain_params(self._articulation, **chassis)
+            self._pending_domain = None
             _log.info(
                 "isaac_lab_env_reset_with_randomization",
                 seed=seed,
                 dr_enabled=True,
-                chassis=dict(self._pending_domain),
+                chassis=chassis,
             )
             return None
         from mousedroid.training.domain_randomization import DomainRandomizer
@@ -570,13 +667,14 @@ class RoverIsaacLabEnv:
         rng = np.random.default_rng(seed)
         randomizer = DomainRandomizer(dr_cfg)
         episode_params = randomizer.sample(rng)
-        chassis = episode_params.chassis
+        sampled = dict(episode_params.chassis)
         self.apply_domain_params(
-            friction=float(chassis["friction"]),
-            slip=float(chassis["slip"]),
-            mass_kg=float(chassis["mass_kg"]),
-            motor_gain=float(chassis["motor_gain"]),
+            friction=float(sampled["friction"]),
+            slip=float(sampled["slip"]),
+            mass_kg=float(sampled["mass_kg"]),
+            motor_gain=float(sampled["motor_gain"]),
         )
+        self._pending_domain = None
         extras: dict[str, float] = {}
         extras.update(dict(episode_params.comms))
         extras.update(dict(episode_params.visual))
@@ -586,7 +684,7 @@ class RoverIsaacLabEnv:
             "isaac_lab_env_reset_with_randomization",
             seed=seed,
             dr_enabled=True,
-            chassis=dict(chassis),
+            chassis=sampled,
             comms=dict(episode_params.comms),
         )
         return episode_params
