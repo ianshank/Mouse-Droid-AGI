@@ -39,6 +39,11 @@ def test_rover_config_defaults():
     assert cfg.observation.include_chassis_pose is True
     assert cfg.observation.include_lidar_sectors is True
     assert cfg.observation.lidar_num_sectors == 16
+    assert cfg.observation.lidar_max_range_m == 4.0
+    assert cfg.sim.battery_voltage_const_v == 12.0
+    assert cfg.sim.isaac.device_headless == "cuda:0"
+    assert cfg.sim.isaac.device_gui == "cpu"
+    assert cfg.sim.isaac.usd_path is None
 
 
 def test_rover_inertial_defaults():

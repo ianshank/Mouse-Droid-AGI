@@ -61,6 +61,13 @@ def test_stub_implements_protocol():
     assert isinstance(env, RoverEnvProtocol)
 
 
+def test_observation_keys_match_mock():
+    cfg = RoverConfig(sim=RoverSimConfig(backend="isaac_lab"))
+    mock_env = MockRoverEnv(cfg, wheel_radius_m=0.042, track_width_m=0.20)
+    env = _make_env()
+    assert env.observation_keys == mock_env.observation_keys
+
+
 def test_reset_raises_when_isaaclab_missing():
     if _isaaclab_available():
         pytest.skip("Isaac Lab installed; this path only triggers without it.")
@@ -282,3 +289,115 @@ def test_chassis_pose_matches_mock_reset_identity(monkeypatch):
     # And the encoding must actually be a unit heading vector.
     cos_t, sin_t = float(isaac_obs["chassis_pose"][2]), float(isaac_obs["chassis_pose"][3])
     assert cos_t**2 + sin_t**2 == pytest.approx(1.0)
+
+
+def test_step_info_includes_body_velocity_keys(monkeypatch):
+    monkeypatch.setattr(rover_env_module, "_isaaclab_available", lambda: True)
+    env = _make_env(with_reward=True)
+    env._built = True
+    env.reset(seed=0)
+    _, _, _, _, info = env.step(np.zeros(2, dtype=np.float32))
+    assert "vx_body_mps" in info
+    assert "omega_rads" in info
+    assert "forward_velocity_mps" in info
+    assert info["vx_body_mps"] == pytest.approx(info["forward_velocity_mps"])
+
+
+def test_to_body_action_differential(monkeypatch):
+    monkeypatch.setattr(rover_env_module, "_isaaclab_available", lambda: True)
+    env = _make_env(with_reward=True)
+    body = env.to_body_action(np.array([2.0, 2.0], dtype=np.float32))
+    assert body.shape == (3,)
+    assert body[1] == pytest.approx(0.0)
+    assert body[2] == pytest.approx(0.0)
+
+
+def test_to_body_action_body_velocity_mode():
+    from mousedroid.config.schema import RoverActionConfig
+
+    cfg = RoverConfig(
+        sim=RoverSimConfig(backend="isaac_lab"),
+        action=RoverActionConfig(mode="body_velocity"),
+        reward=RoverRewardConfig(),
+    )
+    env = RoverIsaacLabEnv(cfg, wheel_radius_m=0.042, track_width_m=0.20)
+    body = env.to_body_action(np.array([0.4, -0.2], dtype=np.float32))
+    assert body[0] == pytest.approx(0.4)
+    assert body[1] == pytest.approx(0.0)
+    assert body[2] == pytest.approx(-0.2)
+
+
+def test_apply_domain_params_noop_when_dr_off(monkeypatch):
+    from mousedroid.config.schema import DomainRandomizationConfig
+
+    monkeypatch.setattr(rover_env_module, "_isaaclab_available", lambda: True)
+    cfg = RoverConfig(
+        sim=RoverSimConfig(backend="isaac_lab"),
+        reward=RoverRewardConfig(),
+    )
+    env = RoverIsaacLabEnv(
+        cfg,
+        wheel_radius_m=0.042,
+        track_width_m=0.20,
+        domain_randomization=DomainRandomizationConfig(enabled=False),
+    )
+    env._built = True
+    env.apply_domain_params(friction=0.9, slip=0.1, mass_kg=2.5, motor_gain=1.1)
+    assert env._pending_domain is None
+
+
+def test_apply_domain_params_stores_when_dr_on(monkeypatch):
+    from mousedroid.config.schema import DomainRandomizationConfig
+
+    monkeypatch.setattr(rover_env_module, "_isaaclab_available", lambda: True)
+    cfg = RoverConfig(
+        sim=RoverSimConfig(backend="isaac_lab"),
+        reward=RoverRewardConfig(),
+    )
+    env = RoverIsaacLabEnv(
+        cfg,
+        wheel_radius_m=0.042,
+        track_width_m=0.20,
+        domain_randomization=DomainRandomizationConfig(enabled=True),
+    )
+    env._built = True
+    env.apply_domain_params(friction=0.8, slip=0.02, mass_kg=2.6, motor_gain=0.9)
+    assert env._pending_domain is not None
+    assert env._pending_domain["friction"] == pytest.approx(0.8)
+
+
+def test_read_imu_from_fake_sensor_on_step(monkeypatch):
+    from types import SimpleNamespace
+
+    from mousedroid.sim.isaaclab.constants import ROVER_SENSOR_LINK_NAMES
+
+    monkeypatch.setattr(rover_env_module, "_isaaclab_available", lambda: True)
+    env = _make_env(with_reward=True)
+    env._built = True
+    env._sensors[ROVER_SENSOR_LINK_NAMES[0]] = SimpleNamespace(
+        data=SimpleNamespace(
+            lin_acc_b=np.array([[0.0, 0.0, 9.8]], dtype=np.float32),
+            ang_vel_b=np.zeros((1, 3), dtype=np.float32),
+        )
+    )
+    env.reset(seed=0)
+    obs, _, _, _, _ = env.step(np.zeros(2, dtype=np.float32))
+    assert obs["imu"].shape == (6,)
+    assert obs["imu"][2] == pytest.approx(9.8)
+
+
+def test_read_lidar_from_fake_sensor_on_step(monkeypatch):
+    from types import SimpleNamespace
+
+    from mousedroid.sim.isaaclab.constants import ROVER_SENSOR_LINK_NAMES
+
+    monkeypatch.setattr(rover_env_module, "_isaaclab_available", lambda: True)
+    env = _make_env(with_reward=True)
+    env._built = True
+    env._sensors[ROVER_SENSOR_LINK_NAMES[1]] = SimpleNamespace(
+        data=SimpleNamespace(ray_distance=np.ones(8, dtype=np.float32) * 2.0)
+    )
+    env.reset(seed=0)
+    obs, _, _, _, _ = env.step(np.zeros(2, dtype=np.float32))
+    assert obs["lidar"].shape == (env._cfg.observation.lidar_num_sectors,)
+    assert float(obs["lidar"].max()) <= 1.0 + 1e-6

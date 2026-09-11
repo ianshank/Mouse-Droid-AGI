@@ -27,23 +27,57 @@ def test_mujoco_rover_enables_lidar_matching_sectors() -> None:
         mock_hardware=True,
         rover=RoverConfig(sim=RoverSimConfig(backend="mujoco")),
     )
+    assert cfg.rover is not None
     cfg = cfg.model_copy(
         update={
             "rover": cfg.rover.model_copy(
                 update={
+                    "observation": cfg.rover.observation.model_copy(
+                        update={"lidar_num_sectors": sectors}
+                    ),
                     "sim": cfg.rover.sim.model_copy(
                         update={
                             "mujoco": cfg.rover.sim.mujoco.model_copy(
                                 update={"lidar_num_sectors": sectors}
                             )
                         }
-                    )
+                    ),
                 }
             )
         }
     )
     model = build_rssm_trainable(cfg)
     assert model.cfg.lidar_dim == sectors  # model reconstructs the full lidar signal
+    assert model.encoder.lidar_enabled is True
+
+
+def test_isaac_lab_rover_uses_observation_lidar_sectors() -> None:
+    sectors = 12
+    cfg = Settings(
+        mock_hardware=True,
+        rover=RoverConfig(sim=RoverSimConfig(backend="isaac_lab")),
+    )
+    assert cfg.rover is not None
+    cfg = cfg.model_copy(
+        update={
+            "rover": cfg.rover.model_copy(
+                update={
+                    "observation": cfg.rover.observation.model_copy(
+                        update={"lidar_num_sectors": sectors}
+                    ),
+                    "sim": cfg.rover.sim.model_copy(
+                        update={
+                            "mujoco": cfg.rover.sim.mujoco.model_copy(
+                                update={"lidar_num_sectors": 16}
+                            )
+                        }
+                    ),
+                }
+            )
+        }
+    )
+    model = build_rssm_trainable(cfg)
+    assert model.cfg.lidar_dim == sectors
     assert model.encoder.lidar_enabled is True
 
 

@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from mousedroid.config.schema import RoverConfig, Settings, TrainingPipelineConfig
 from mousedroid.logging.setup import get_logger
+from mousedroid.sim.protocols import ROVER_RSSM_PHYSICS_BACKENDS
 from mousedroid.training.batch_tuner import VRAMBatchTuner
 from mousedroid.training.gpu_monitor import JetsonGPUMonitor
 
@@ -34,6 +35,18 @@ if TYPE_CHECKING:
     from mousedroid.world_model.rssm import RSSM
 
 logger = get_logger(__name__)
+
+
+def _maybe_build_rover_env(env: Any) -> None:
+    """Call ``build()`` when the backend uses lazy Isaac construction.
+
+    MuJoCo and mock construct in ``__init__``. Isaac Lab requires an
+    explicit ``env.build()`` before ``reset``/``step``. Missing the
+    method is a no-op so existing backends stay byte-identical.
+    """
+    build = getattr(env, "build", None)
+    if callable(build):
+        build()
 
 
 class PipelineOrchestrator:
@@ -243,11 +256,12 @@ class PipelineOrchestrator:
         return runners[phase]
 
     async def _train_rssm(self, batch_size: int) -> None:
-        """Run RSSM dynamics pretraining on MuJoCo-generated episodes.
+        """Run RSSM dynamics pretraining on physics-sim episodes.
 
         Inert (byte-identical to the prior stub) unless
-        ``training.rssm_pretrain_enabled`` is True AND a rover with the
-        ``mujoco`` backend is configured. The synchronous torch loop runs in a
+        ``training.rssm_pretrain_enabled`` is True AND a rover with a
+        physics backend (``mujoco`` or ``isaac_lab``) is configured. The
+        default ``mock`` backend still skips. The synchronous torch loop runs in a
         worker thread so the orchestrator event loop (and the cooperative
         thermal-pause check) is not blocked.
 
@@ -263,15 +277,19 @@ class PipelineOrchestrator:
         # consume the freshly written checkpoint. The two flags are independent —
         # vision fine-tune must NOT short-circuit pretraining.
         if tcfg.rssm_pretrain_enabled:
-            if rover is None or rover.sim.backend != "mujoco":
-                logger.info("rssm_training_skipped", reason="non_mujoco_backend")
+            if rover is None or rover.sim.backend not in ROVER_RSSM_PHYSICS_BACKENDS:
+                logger.info(
+                    "rssm_training_skipped",
+                    reason="unsupported_rssm_backend",
+                    backend=None if rover is None else rover.sim.backend,
+                )
             else:
                 from mousedroid.factory import build_rover_env, build_rssm_trainable
 
                 await self._run_rssm_training(
                     model=build_rssm_trainable(self._settings),
                     env=build_rover_env(self._settings),
-                    battery_v=rover.sim.mujoco.battery_voltage_const_v,
+                    battery_v=rover.sim.battery_voltage_const_v,
                     checkpoint=Path(tcfg.weights_dir) / tcfg.rssm_checkpoint_name,
                     epochs=tcfg.epochs,
                     event_prefix="rssm_training",
@@ -316,7 +334,7 @@ class PipelineOrchestrator:
         await self._run_rssm_training(
             model=build_rssm_vision_finetune(render_cfg, checkpoint),
             env=build_rover_env(render_cfg),
-            battery_v=rover.sim.mujoco.battery_voltage_const_v,
+            battery_v=rover.sim.battery_voltage_const_v,
             checkpoint=Path(tcfg.weights_dir) / tcfg.rssm_vision_checkpoint_name,
             epochs=tcfg.rssm_finetune_epochs,
             event_prefix="rssm_vision_finetune",
@@ -369,6 +387,7 @@ class PipelineOrchestrator:
 
         tcfg = self._settings.training
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        _maybe_build_rover_env(env)
         adapter = RoverObsAdapter(battery_v=battery_v)
         generator = SimEpisodeGenerator(
             env,

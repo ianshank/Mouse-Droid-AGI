@@ -14,7 +14,10 @@ from mousedroid.config.schema import (
     TrainingConfig,
     TrainingPipelineConfig,
 )
-from mousedroid.training.pipeline_orchestrator import PipelineOrchestrator
+from mousedroid.training.pipeline_orchestrator import (
+    PipelineOrchestrator,
+    _maybe_build_rover_env,
+)
 
 
 def _orch(settings: Settings, checkpoint_dir: Path) -> PipelineOrchestrator:
@@ -38,6 +41,19 @@ async def test_train_rssm_inert_when_disabled(tmp_path: Path) -> None:
     assert not (tmp_path / "rssm_pretrained.pt").exists()
 
 
+def test_maybe_build_rover_env_invokes_build_when_present() -> None:
+    seen: list[str] = []
+
+    class _Lazy:
+        def build(self) -> None:
+            seen.append("built")
+
+    _maybe_build_rover_env(_Lazy())
+    assert seen == ["built"]
+    _maybe_build_rover_env(object())
+    assert seen == ["built"]
+
+
 @pytest.mark.asyncio
 async def test_train_rssm_skipped_for_non_mujoco_backend(tmp_path: Path) -> None:
     cfg = Settings(
@@ -48,6 +64,47 @@ async def test_train_rssm_skipped_for_non_mujoco_backend(tmp_path: Path) -> None
     orch = _orch(cfg, tmp_path)
     await orch._train_rssm(batch_size=4)
     assert not (tmp_path / "rssm_pretrained.pt").exists()
+
+
+@pytest.mark.asyncio
+async def test_train_rssm_runs_when_enabled_and_isaac_lab(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    called: dict[str, float] = {}
+
+    async def _fake_run(self: PipelineOrchestrator, **kwargs: object) -> None:
+        env = kwargs["env"]
+        called["battery_v"] = float(kwargs["battery_v"])  # type: ignore[arg-type]
+        close = getattr(env, "close", None)
+        if callable(close):
+            close()
+
+    monkeypatch.setattr(PipelineOrchestrator, "_run_rssm_training", _fake_run)
+    cfg = Settings(
+        mock_hardware=True,
+        rover=RoverConfig(sim=RoverSimConfig(backend="isaac_lab")),
+        training=TrainingConfig(rssm_pretrain_enabled=True, weights_dir=str(tmp_path)),
+    )
+    orch = _orch(cfg, tmp_path)
+    await orch._train_rssm(batch_size=4)
+    assert cfg.rover is not None
+    assert called["battery_v"] == pytest.approx(cfg.rover.sim.battery_voltage_const_v)
+
+
+@pytest.mark.asyncio
+async def test_vision_finetune_skipped_for_isaac_lab(tmp_path: Path) -> None:
+    cfg = Settings(
+        mock_hardware=True,
+        rover=RoverConfig(sim=RoverSimConfig(backend="isaac_lab")),
+        training=TrainingConfig(
+            rssm_vision_finetune_enabled=True,
+            rssm_finetune_checkpoint=str(tmp_path / "missing.pt"),
+            weights_dir=str(tmp_path),
+        ),
+    )
+    orch = _orch(cfg, tmp_path)
+    await orch._train_rssm(batch_size=2)
+    assert not (tmp_path / cfg.training.rssm_vision_checkpoint_name).exists()
 
 
 @pytest.mark.asyncio

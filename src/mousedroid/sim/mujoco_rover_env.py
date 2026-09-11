@@ -11,6 +11,11 @@ from numpy.typing import NDArray
 
 from mousedroid.config.schema import RoverConfig
 from mousedroid.logging.setup import get_logger
+from mousedroid.sim.kinematics import (
+    body_velocity_to_wheels,
+    policy_action_to_body,
+    yaw_from_wxyz,
+)
 from mousedroid.sim.protocols import (
     ROVER_CHASSIS_POSE_DIM,
     ROVER_IMU_DIM,
@@ -296,8 +301,12 @@ class RoverMuJoCoEnv:
             return float(np.clip(action[0], -cap, cap)), float(np.clip(action[1], -cap, cap))
         # body_velocity: [vx, omega] -> wheel setpoints
         vx, omega = float(action[0]), float(action[1])
-        left = (vx - 0.5 * omega * self._track_width) / self._wheel_radius
-        right = (vx + 0.5 * omega * self._track_width) / self._wheel_radius
+        left, right = body_velocity_to_wheels(
+            vx,
+            omega,
+            wheel_radius_m=self._wheel_radius,
+            track_width_m=self._track_width,
+        )
         return float(np.clip(left, -cap, cap)), float(np.clip(right, -cap, cap))
 
     def to_body_action(self, action: NDArray[np.float32]) -> NDArray[np.float32]:
@@ -311,13 +320,12 @@ class RoverMuJoCoEnv:
         wheel setpoints would otherwise mislabel them as body velocities and make
         the learned dynamics conditioning inconsistent with the deployed policy.
         """
-        if self._cfg.action.mode == "differential":
-            left, right = float(action[0]), float(action[1])
-            vx = self._wheel_radius * (left + right) / 2.0
-            omega = self._wheel_radius * (right - left) / self._track_width
-        else:  # body_velocity: [vx, omega]
-            vx, omega = float(action[0]), float(action[1])
-        return np.asarray([vx, 0.0, omega], dtype=np.float32)
+        return policy_action_to_body(
+            action,
+            mode=self._cfg.action.mode,
+            wheel_radius_m=self._wheel_radius,
+            track_width_m=self._track_width,
+        )
 
     def _body_velocity(self) -> tuple[float, float]:
         """Return ``(forward_speed_mps, yaw_rate_rads)`` from the freejoint qvel."""
@@ -330,7 +338,7 @@ class RoverMuJoCoEnv:
     def _heading(self) -> float:
         """Yaw about world-z from the freejoint quaternion ``qpos[3:7] = (w,x,y,z)``."""
         qw, qx, qy, qz = (float(self._data.qpos[i]) for i in range(3, 7))
-        return math.atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+        return yaw_from_wxyz(qw, qx, qy, qz)
 
     def _observe(self) -> dict[str, NDArray[np.float32]]:
         obs: dict[str, NDArray[np.float32]] = {}

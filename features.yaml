@@ -1250,4 +1250,163 @@ features:
       No CHARTER §3 carve-out: CI gate honesty only. Does not lower the
       coverage threshold. Do not re-open factory/ as a prefix.
 
+  - id: "F-043"
+    epic: "Isaac Lab workstation"
+    name: "Nested Isaac schema + de-hardcode + factory docstring"
+    description: >-
+      Nested RoverIsaacSimConfig preserves today's headless/device branch
+      (cuda:0 vs cpu). Shared battery_voltage_const_v. Wire num_envs into
+      SimulationCfg when the API accepts it. Factory docstring no longer
+      claims mujoco raises NotImplementedError. Always-on AQA/compat.
+      validation_command asserts pytest passed>0 (skip-all is not done).
+    category: "infrastructure"
+    priority: "high"
+    status: "in_progress"
+    tier: "fast"
+    verification:
+      - "RoverIsaacSimConfig FieldInfo defaults match pre-F-043 literals"
+      - "Omitting isaac: keys still loads Settings"
+      - "build_rover_env docstring does not mention NotImplementedError"
+      - "scripts/validations/F-043.sh reports passed>0"
+    validation_command: "bash scripts/validations/F-043.sh"
+    implemented_in: null
+    depends_on: ["F-002"]
+    notes: >-
+      No CHARTER §3 carve-out. Do not add isaac keys to config/default.yaml.
+      Runtime Settings.harness stays None. F-008 remains the hardware next
+      feature; this is in_progress so select_next resumes Isaac coding.
+
+  - id: "F-044"
+    epic: "Isaac Lab workstation"
+    name: "Fake-injectable IMU/pose/lidar readers + training seams"
+    description: >-
+      Isaac _read_pose/_read_imu/_read_lidar run on duck-typed _sensors
+      fakes. to_body_action uses shared kinematics. step/reset info includes
+      vx_body_mps and omega_rads. LiDAR bins come from
+      RoverObservationConfig, not hardware LidarConfig. Does not map
+      6-DoF IMU into RSSM imu_dim.
+    category: "functional"
+    priority: "high"
+    status: "todo"
+    tier: "fast"
+    verification:
+      - "Fake IMU/pose/lidar readers produce configured shapes"
+      - "to_body_action returns length-3 body velocity"
+      - "info contains vx_body_mps and omega_rads"
+      - "RoverObsAdapter still zeros SENSOR_SLOT_MAP imu"
+    validation_command: "bash scripts/validations/F-044.sh"
+    implemented_in: null
+    depends_on: ["F-043"]
+    notes: >-
+      Live Isaac Sim stays skip-gated inside methods, not the Golden Rule
+      command. Camera/render_rgb is out of slice.
+
+  - id: "F-045"
+    epic: "Isaac Lab workstation"
+    name: "Isaac apply_domain_params (Replicator behind the method)"
+    description: >-
+      RoverIsaacLabEnv.apply_domain_params matches the MuJoCo/generator
+      four-float chassis contract. DR disabled is a no-op. Replicator is
+      imported only inside the translator when isaaclab is present.
+    category: "functional"
+    priority: "high"
+    status: "todo"
+    tier: "fast"
+    verification:
+      - "apply_domain_params no-ops when domain_randomization.enabled is False"
+      - "duck-typed articulation writer is invoked when DR is on"
+      - "SimEpisodeGenerator + MockRoverEnv still rolls without mujoco"
+    validation_command: "bash scripts/validations/F-045.sh"
+    implemented_in: null
+    depends_on: ["F-043"]
+    notes: >-
+      Do not invent a second DR schema. Do not parallel this with F-044
+      on two worktrees — both land in rover_env.py.
+
+  - id: "F-046"
+    epic: "Isaac Lab workstation"
+    name: "Lift mujoco-only RSSM gates to mujoco and isaac_lab"
+    description: >-
+      PipelineOrchestrator._train_rssm trains when backend is mujoco or
+      isaac_lab and rssm_pretrain_enabled. Default mock still skips.
+      build_rssm_trainable sizes lidar_dim from
+      RoverObservationConfig.lidar_num_sectors. Vision fine-tune stays
+      mujoco-only until Isaac render_rgb exists. Battery from
+      rover.sim.battery_voltage_const_v.
+    category: "functional"
+    priority: "medium"
+    status: "todo"
+    tier: "slow"
+    verification:
+      - "mock + rssm_pretrain_enabled still skips"
+      - "isaac_lab + enabled invokes the training runner (factory env, no live Sim)"
+      - "lidar_dim follows observation.lidar_num_sectors for isaac_lab"
+      - "vision fine-tune still skips for isaac_lab"
+    validation_command: "bash scripts/validations/F-046.sh"
+    implemented_in: null
+    depends_on: ["F-044", "F-045"]
+    notes: >-
+      Default-OFF flags unchanged. Do not hot-load PPO into the 30 Hz loop.
+
+  - id: "F-047"
+    epic: "Isaac Lab workstation"
+    name: "Workstation PPO ONNX artifact (deferred)"
+    description: >-
+      Workstation PPO + ONNX artifact only. Never vla/policy.py, never
+      DistilledVLAOnnx, never RSSM TensorRT, never 3-DoF action_dim in the
+      30 Hz loop. Deferred until an explicit CHARTER discussion.
+    category: "functional"
+    priority: "low"
+    status: "deferred"
+    tier: "slow"
+    verification:
+      - "Catalog status remains deferred until a CHARTER carve-out exists"
+    validation_command: null
+    implemented_in: null
+    depends_on: ["F-044"]
+    notes: >-
+      Loading a PPO graph through vla/policy.py would change 30 Hz actuation
+      (CHARTER §3 Q1/Q3). That is why this feature is deferred.
+
+  - id: "F-048"
+    epic: "Isaac Lab workstation"
+    name: "HARNESS_SPEC C4 ADR-009 Isaac addenda"
+    description: >-
+      HARNESS_SPEC Isaac Lab workstation section, C4 RSSM pretraining no
+      longer MuJoCo-only, ADR-009 addendum. No MetricsConfig.track_isaac_sim.
+      Training metrics stay on existing MLflow. CHANGELOG/NEXT_STEPS.
+      Closeout SHAs are hex, not branch names.
+    category: "infrastructure"
+    priority: "high"
+    status: "todo"
+    tier: "fast"
+    verification:
+      - "HARNESS_SPEC documents F-043+ workstation Isaac"
+      - "MetricsConfig has no track_isaac_sim field"
+      - "Settings.harness is None"
+      - "/metrics unused render has no isaac family"
+    validation_command: "bash scripts/validations/F-048.sh"
+    implemented_in: null
+    depends_on: ["F-043"]
+    notes: >-
+      Do not add LANDED rows to Current Next Steps (doc_hygiene --strict).
+
+  - id: "F-049"
+    epic: "Isaac Lab workstation"
+    name: "Cosmos / MobilityGen (deferred)"
+    description: >-
+      NVIDIA Cosmos / MobilityGen photoreal data is deferred. Not in the
+      first Isaac Lab sensor-parity slice. Depends on RSSM Isaac rollouts.
+    category: "functional"
+    priority: "low"
+    status: "deferred"
+    tier: "slow"
+    verification:
+      - "Catalog status remains deferred"
+    validation_command: null
+    implemented_in: null
+    depends_on: ["F-046"]
+    notes: >-
+      No CHARTER carve-out in this slice. Do not enable on Jetson.
+
 

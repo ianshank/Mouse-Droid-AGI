@@ -287,6 +287,24 @@ python -m pytest \
 - **Multi-rover scenes / arm integration / ultrasonic** — explicitly
   out of scope per the active production baseline.
 
+## F-043+ addendum (2026-09-11) — workstation sensor/info/DR seams
+
+Isaac Lab remains an **optional workstation extra**. This addendum does not
+replace CHARTER M5 (MuJoCo is the CI-trainable physics backend).
+
+- Nested `RoverIsaacSimConfig` holds device/prim/USD/contact knobs. Headless
+  still selects `device_headless` (`cuda:0`); GUI stays `device_gui` (`cpu`).
+- `RoverIsaacLabEnv` exposes `to_body_action` (shared kinematics) and
+  `apply_domain_params`. `step`/`reset` info includes `vx_body_mps` and
+  `omega_rads` so `RoverObsAdapter` can train motor state. Forward-velocity
+  reward still uses `forward_velocity_mps`.
+- LiDAR sectors/range come from `RoverObservationConfig`, not `LidarConfig`.
+- RSSM pretrain may roll Isaac when `rssm_pretrain_enabled` (default false).
+  Vision fine-tune stays MuJoCo until `render_rgb` exists.
+- PPO export is **out of scope** (catalog F-047 deferred). Do not hot-load
+  a PPO graph into `vla/policy.py` or the 3-DoF world-model engine.
+- Do not add `MetricsConfig.track_isaac_sim`. Do not commit `.usd`.
+
 ## References
 
 - Tier B sprint plan: tracked in the planning Linear project; high-level

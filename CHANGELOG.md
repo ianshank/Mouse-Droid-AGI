@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Isaac Lab workstation harness (F-043–F-046, F-048)
+
+Isaac Lab is an opt-in workstation training backend behind
+`factory.build_rover_env`. Nested `RoverIsaacSimConfig` de-hardcodes device,
+prim, and USD knobs without new YAML keys. Isaac now emits `vx_body_mps` /
+`omega_rads`, shares skid-steer kinematics with MuJoCo, and implements
+`apply_domain_params`. RSSM pretrain accepts `{mujoco, isaac_lab}` when
+`rssm_pretrain_enabled` (default OFF; mock still skips). Vision fine-tune
+stays MuJoCo. PPO/ONNX hot-load and Cosmos are catalog-deferred (F-047,
+F-049). No Prometheus Isaac family; runtime `Settings.harness` stays None.
+
 ### Fixed — Enumerate factory/orchestrator coverage exemptions (F-042)
 
 `check_branch_coverage.py` treated every file under `factory/` and every
