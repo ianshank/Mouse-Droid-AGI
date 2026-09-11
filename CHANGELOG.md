@@ -8,6 +8,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Isaac Lab workstation harness (F-043–F-046, F-048)
+
+Isaac Lab is an opt-in workstation training backend behind
+`factory.build_rover_env`. Nested `RoverIsaacSimConfig` de-hardcodes device,
+prim, and USD knobs without new YAML keys. Isaac now emits `vx_body_mps` /
+`omega_rads`, shares skid-steer kinematics with MuJoCo, and implements
+`apply_domain_params`. RSSM pretrain accepts `{mujoco, isaac_lab}` when
+`rssm_pretrain_enabled` (default OFF; mock still skips). Vision fine-tune
+stays MuJoCo. PPO/ONNX hot-load and Cosmos are catalog-deferred (F-047,
+F-049). No Prometheus Isaac family; runtime `Settings.harness` stays None.
+
+### Fixed — Isaac sensor injection, IMU slots, RSSM lidar/battery parity
+
+Copilot review on PR #224: live `build()` still constructs contact only;
+IMU/LiDAR attach through tested `RoverIsaacLabEnv.inject_sensor`. IMU
+ang-only readings occupy the last half of the 6-DoF vector. RSSM
+`lidar_dim` is 0 when sectors are disabled; MuJoCo uses nested
+`lidar_num_sectors`. Adapter battery uses nested MuJoCo voltage and the
+Isaac parent field. Isaac episodes truncate/terminate like MuJoCo; body
+velocity prefers measured root twist; DR pending samples clear on reset;
+incomplete live DR writes log `partial` / `unapplied` without raising.
+`resample_lidar` returns a typed buffer so mypy 3.10 no longer reports
+`no-any-return`.
+
+### Fixed — Isaac RSSM skip without reward; hygiene (F-043–F-048 follow-up)
+
+Default YAML leaves `rover.reward` unset, so live Isaac `build()` would
+crash `_train_rssm`. The orchestrator now skips with
+`reason=isaac_reward_block_required` and runs `env.build()` inside
+`asyncio.to_thread`. Live `build()` is documented as contact-only; Replicator
+is a present-check. Generated `*.usd` is gitignored. Workstation skill
+`isaac-lab-workstation` plus `make install-isaac` are operator-only.
+
 ### Fixed — Enumerate factory/orchestrator coverage exemptions (F-042)
 
 `check_branch_coverage.py` treated every file under `factory/` and every

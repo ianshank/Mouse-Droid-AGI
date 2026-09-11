@@ -69,9 +69,16 @@ ROVER_SENSOR_LINK_NAMES: Final[tuple[str, str, str]] = (
     "lidar_link",
     "camera_link",
 )
-"""URDF link names for the 3 fixed sensor frames. Isaac Lab attaches
-``IMUSensorCfg``, ``RayCasterSensorCfg`` (LiDAR), and ``CameraSensorCfg``
-to these links during ``RoverIsaacLabEnv.build()``."""
+"""URDF link names for the 3 fixed sensor frames.
+
+This slice's live ``RoverIsaacLabEnv.build()`` wires the chassis
+:class:`ContactSensor` only. IMU and LiDAR observations come from the
+duck-typed readers in :mod:`mousedroid.sim.isaaclab.sensors` when a
+handle is present under these keys (CI fakes via
+``RoverIsaacLabEnv.inject_sensor``, or an operator-injected live sensor).
+Camera / ``render_rgb`` is out of this slice — do not
+read this tuple as a promise that IMU, LiDAR, or camera sensors are
+constructed in ``build()``."""
 
 
 ROVER_CONTACT_SENSOR_NAME: Final[str] = "contact_sensor"

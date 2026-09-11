@@ -29,6 +29,11 @@ ROVER_CHASSIS_POSE_DIM: int = 4
 # URDF (assets/rover/mse6_4wd.urdf) ships four continuous wheel joints.
 ROVER_NUM_WHEELS: int = 4
 
+# Physics backends that may generate RSSM pretrain rollouts. Mock stays
+# default-OFF (the pipeline still skips). Vision fine-tune stays MuJoCo-only
+# until Isaac exposes ``render_rgb``.
+ROVER_RSSM_PHYSICS_BACKENDS: frozenset[str] = frozenset({"mujoco", "isaac_lab"})
+
 
 @runtime_checkable
 class RoverEnvProtocol(Protocol):

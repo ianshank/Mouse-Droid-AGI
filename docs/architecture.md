@@ -1064,12 +1064,14 @@ graph LR
 | 3a | VLA Protocol + `MockVLA` + factory + orchestrator branch | `mousedroid.vla` |
 | 3b | `DistilledVLAOnnx` adapter — TensorRT/ONNX with HF Hub weights pull | `mousedroid.vla.policy`, `[vla]` extra in `pyproject.toml` |
 | 4 | VLM-derived dense rewards (VLAC pattern) — pluggable into `MultiObjectiveRewardModel` | `mousedroid.reward.vlm_progress` |
-| 5 (stretch) | Real physics simulator (MuJoCo MJX / Isaac Sim Lite) — replace synthetic-sequence generator with ground-truth dynamics | `training/sim/` (new) |
+| 5 | Physics sim RSSM pretrain (MuJoCo on CI; opt-in Isaac Lab on workstation) | `src/mousedroid/sim/` (not `training/sim/`) |
 | 6 (stretch) | On-device LoRA-adapter fine-tuning for the VLA from continuously-logged real episodes | `mousedroid.vla.adapters` (new) |
 
 Each phase ships in an isolated PR off the default branch; dependency direction
-is strictly Phase 1 → 2 → 3 → 4. Phases 5 and 6 are deferred until Phase 3b has
-been in production for ≥30 days.
+is strictly Phase 1 → 2 → 3 → 4. Phase 5 MuJoCo RSSM pretrain and the Isaac Lab
+workstation seams (F-043–F-046, F-048) have landed in `src/mousedroid/sim/`.
+Catalog F-049 (Cosmos / MobilityGen) and Phase 6 LoRA remain deferred until
+Phase 3b has been in production for ≥30 days.
 
 ---
 

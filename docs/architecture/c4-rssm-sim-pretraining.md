@@ -1,22 +1,23 @@
-# C4 Component — MuJoCo Sim → RSSM Dynamics Pretraining (Phase 5 + Vision Fine-Tune)
+# C4 Component — Sim → RSSM Dynamics Pretraining (MuJoCo + optional Isaac Lab)
 
-> Sim-first RSSM world-model training for the MSE-6 rover. A MuJoCo skid-steer
-> physics simulator generates episodes that pretrain the RSSM dynamics core
-> (vision OFF), and a follow-on phase renders an RGB camera + extracts vision
-> features to fine-tune the model with vision ON. Everything is opt-in and runs
-> OUTSIDE the 30 Hz reactive control loop (offline training, not the hot path).
+> Sim-first RSSM world-model training for the MSE-6 rover. A physics simulator
+> (MuJoCo on CI; optional Isaac Lab on a workstation GPU) generates episodes
+> that pretrain the RSSM dynamics core (vision OFF). A follow-on phase renders an
+> RGB camera on **MuJoCo only** to fine-tune with vision ON. Everything is opt-in
+> and runs OUTSIDE the 30 Hz reactive control loop.
 
 ## Component Diagram
 
 ```mermaid
 C4Component
-title MuJoCo Sim → RSSM Pretraining + Vision Fine-Tune — Component Diagram
+title Sim → RSSM Pretraining + Vision Fine-Tune — Component Diagram
 
 Container_Boundary(train, "Offline training (PipelineOrchestrator rssm phase)") {
 
     Component_Boundary(sim, "Simulation (sim/)") {
-        Component(env, "RoverMuJoCoEnv", "mujoco>=3.0", "Skid-steer physics; RoverEnvProtocol; obs-parity with MockRoverEnv")
-        Component(mjcf, "mse6_4wd.xml", "MJCF asset", "Chassis + 4 wheels + walls + accel/gyro + N-sector rangefinder + camera")
+        Component(env, "RoverEnvProtocol", "mujoco | isaac_lab", "Skid-steer physics; obs-parity with MockRoverEnv; Isaac optional")
+        Component(mjcf, "mse6_4wd.xml", "MJCF asset", "MuJoCo chassis + 4 wheels + walls + rangefinder + camera")
+        Component(usd, "mse6_4wd.usd", "USD (operator-local)", "Isaac Lab articulation; generated, gitignored")
         Component(render, "render_rgb()", "mujoco.Renderer", "Lazy offscreen RGB (vision fine-tune only)")
         Component(dr, "DomainRandomizer", "config ranges", "Per-episode friction/slip/mass/motor_gain")
     }
@@ -40,8 +41,9 @@ Container_Boundary(train, "Offline training (PipelineOrchestrator rssm phase)") 
 Component(factory, "factory/world_model.py", "DI", "build_rover_env / build_rssm_trainable / build_rssm_vision_finetune / build_vision_feature_extractor")
 ComponentDb(ckpt, "Checkpoints", "weights_dir", "rssm_pretrained.pt / rssm_vision_finetuned.pt")
 
-Rel(factory, env, "builds (backend=mujoco)")
-Rel(env, mjcf, "loads + splices lidar fan")
+Rel(factory, env, "builds (backend=mujoco or isaac_lab)")
+Rel(env, mjcf, "loads when backend=mujoco")
+Rel(env, usd, "loads when backend=isaac_lab")
 Rel(env, render, "exposes")
 Rel(gen, env, "reset/step")
 Rel(gen, render, "renders (vision)")
@@ -94,3 +96,23 @@ python -m mousedroid.training.pipeline_orchestrator --config <training.yaml>
 
 Plan + spec: `docs/superpowers/plans/2026-06-07-phase5-mujoco-rssm-pretraining.md`,
 `docs/superpowers/plans/2026-06-08-vision-on-rssm-finetune.md`.
+
+## F-043+ addendum — Isaac Lab is a second physics backend (not MuJoCo-only)
+
+The pipeline is **no longer MuJoCo-only**. `factory.build_rover_env` already
+dispatches `mock` | `mujoco` | `isaac_lab`. `PipelineOrchestrator._train_rssm`
+runs when `training.rssm_pretrain_enabled` and
+`rover.sim.backend in {mujoco, isaac_lab}`. The default `mock` backend still
+skips (byte-identical). Vision-on fine-tune stays MuJoCo until Isaac grows
+`render_rgb`.
+
+Isaac `lidar_dim` is sized from `RoverObservationConfig.lidar_num_sectors`,
+not hardware `LidarConfig`. Battery voltage for the adapter is
+`rover.sim.battery_voltage_const_v` for Isaac/mock and nested
+`rover.sim.mujoco.battery_voltage_const_v` for MuJoCo (so YAML overrides
+on the nested field stay effective). Isaac RSSM skips when `rover.reward is None`
+(`reason=isaac_reward_block_required`). Training metrics stay on MLflow;
+there is no Prometheus `track_isaac_sim` family. Live `build()` wires
+contact only; IMU/LiDAR are duck-typed readers attached via
+`RoverIsaacLabEnv.inject_sensor`. Replicator is a present-check, not a write.
+

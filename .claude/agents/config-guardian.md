@@ -31,5 +31,9 @@ Rules:
    from .claude/workforce.yaml ratchet_budgets.
 6. When a value belongs in workforce.yaml (dev tooling, not robot runtime),
    propose it there, not in Settings (the two roots are deliberately separate).
+7. Isaac Lab knobs live on nested `RoverIsaacSimConfig`. Do not add Isaac keys
+   to `config/*.yaml`. Do not reuse hardware `LidarConfig` for sim bins. RSSM
+   battery: MuJoCo reads nested `mujoco.battery_voltage_const_v`; Isaac/mock
+   read parent `rover.sim.battery_voltage_const_v`.
 
 Output: list of hardcoded-value findings + schema-bypass patterns, or CLEAN.

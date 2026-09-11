@@ -27,17 +27,21 @@ def test_mujoco_rover_enables_lidar_matching_sectors() -> None:
         mock_hardware=True,
         rover=RoverConfig(sim=RoverSimConfig(backend="mujoco")),
     )
+    assert cfg.rover is not None
     cfg = cfg.model_copy(
         update={
             "rover": cfg.rover.model_copy(
                 update={
+                    "observation": cfg.rover.observation.model_copy(
+                        update={"lidar_num_sectors": sectors}
+                    ),
                     "sim": cfg.rover.sim.model_copy(
                         update={
                             "mujoco": cfg.rover.sim.mujoco.model_copy(
                                 update={"lidar_num_sectors": sectors}
                             )
                         }
-                    )
+                    ),
                 }
             )
         }
@@ -45,6 +49,88 @@ def test_mujoco_rover_enables_lidar_matching_sectors() -> None:
     model = build_rssm_trainable(cfg)
     assert model.cfg.lidar_dim == sectors  # model reconstructs the full lidar signal
     assert model.encoder.lidar_enabled is True
+
+
+def test_isaac_lab_rover_uses_observation_lidar_sectors() -> None:
+    sectors = 12
+    cfg = Settings(
+        mock_hardware=True,
+        rover=RoverConfig(sim=RoverSimConfig(backend="isaac_lab")),
+    )
+    assert cfg.rover is not None
+    cfg = cfg.model_copy(
+        update={
+            "rover": cfg.rover.model_copy(
+                update={
+                    "observation": cfg.rover.observation.model_copy(
+                        update={"lidar_num_sectors": sectors}
+                    ),
+                    "sim": cfg.rover.sim.model_copy(
+                        update={
+                            "mujoco": cfg.rover.sim.mujoco.model_copy(
+                                update={"lidar_num_sectors": 16}
+                            )
+                        }
+                    ),
+                }
+            )
+        }
+    )
+    model = build_rssm_trainable(cfg)
+    assert model.cfg.lidar_dim == sectors
+    assert model.encoder.lidar_enabled is True
+
+
+def test_lidar_dim_zero_when_include_lidar_sectors_false() -> None:
+    cfg = Settings(
+        mock_hardware=True,
+        rover=RoverConfig(sim=RoverSimConfig(backend="isaac_lab")),
+    )
+    assert cfg.rover is not None
+    cfg = cfg.model_copy(
+        update={
+            "rover": cfg.rover.model_copy(
+                update={
+                    "observation": cfg.rover.observation.model_copy(
+                        update={"include_lidar_sectors": False}
+                    )
+                }
+            )
+        }
+    )
+    model = build_rssm_trainable(cfg)
+    assert model.cfg.lidar_dim == 0
+    assert model.cfg.lidar_proj_dim == 0
+    assert model.encoder.lidar_enabled is False
+
+
+def test_mujoco_lidar_dim_uses_nested_sectors_not_observation() -> None:
+    nested = 12
+    cfg = Settings(
+        mock_hardware=True,
+        rover=RoverConfig(sim=RoverSimConfig(backend="mujoco")),
+    )
+    assert cfg.rover is not None
+    cfg = cfg.model_copy(
+        update={
+            "rover": cfg.rover.model_copy(
+                update={
+                    "observation": cfg.rover.observation.model_copy(
+                        update={"lidar_num_sectors": 16}
+                    ),
+                    "sim": cfg.rover.sim.model_copy(
+                        update={
+                            "mujoco": cfg.rover.sim.mujoco.model_copy(
+                                update={"lidar_num_sectors": nested}
+                            )
+                        }
+                    ),
+                }
+            )
+        }
+    )
+    model = build_rssm_trainable(cfg)
+    assert model.cfg.lidar_dim == nested
 
 
 def test_overrides_pretrain_knobs_from_training_config() -> None:

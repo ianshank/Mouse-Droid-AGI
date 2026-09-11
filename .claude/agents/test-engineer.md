@@ -22,6 +22,9 @@ Rules:
 4. Hardware-tier tests (tests/hardware/) must NOT use mock/patch on the device
    under test — they exist to exercise real hardware via @pytest.mark.hardware.
 5. Optional deps: use pytest.importorskip("mujoco") for arm dependencies.
+   Isaac Lab: skip-all `importorskip("isaaclab")` is operator evidence, not
+   Golden Rule `done`. Always-on fakes must assert pytest `passed > 0`.
+   Do not register `@pytest.mark.isaac` unless it is listed in pyproject.toml.
 6. Fixture hygiene: never mutate session-scoped fixtures — use
    Settings.model_copy(deep=True) instead.
 7. No assert in code paths that run under PYTHONOPTIMIZE=1 (Jetson entrypoint).

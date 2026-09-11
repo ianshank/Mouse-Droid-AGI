@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import Field
 
-from mousedroid.config.schema._primitives import StrictBaseModel
+from mousedroid.config.schema._primitives import StrictBaseModel, _settings_default_factory
 
 
 class RoverInertialConfig(StrictBaseModel):
@@ -94,6 +94,58 @@ class MujocoSimConfig(StrictBaseModel):
     )
 
 
+class RoverIsaacSimConfig(StrictBaseModel):
+    """Isaac Lab scene knobs (consumed when ``rover.sim.backend == 'isaac_lab'``).
+
+    Defaults match the pre-F-043 literals in ``RoverIsaacLabEnv._wire_isaaclab_scene``
+    so existing YAML without an ``isaac:`` block stays byte-identical: headless
+    runs on ``cuda:0``, the GUI path stays on ``cpu``, and USD is derived from
+    the URDF path when ``usd_path`` is omitted.
+    """
+
+    device_headless: str = Field(
+        "cuda:0",
+        min_length=1,
+        description="Physics device string used when rover.sim.headless is True.",
+    )
+    device_gui: str = Field(
+        "cpu",
+        min_length=1,
+        description="Physics device string used when rover.sim.headless is False.",
+    )
+    prim_path: str = Field(
+        "/World/envs/env_.*/Robot",
+        min_length=1,
+        description="Isaac Lab ArticulationCfg prim path expression for the rover.",
+    )
+    contact_prim_glob: str = Field(
+        "/World/envs/env_.*/Robot/.*",
+        min_length=1,
+        description="Contact-sensor prim glob covering every articulation body.",
+    )
+    usd_path: str | None = Field(
+        None,
+        description=(
+            "Optional USD asset path. None derives it by replacing '.urdf' with "
+            "'.usd' on rover.sim.urdf_path (the convert_urdf_to_usd.py contract)."
+        ),
+    )
+    actuator_stiffness: float = Field(
+        0.0,
+        ge=0.0,
+        description="Implicit wheel-actuator stiffness (velocity-target wheels use 0).",
+    )
+    contact_history_length: int = Field(
+        0,
+        ge=0,
+        description="ContactSensorCfg history length (0 keeps the current live path).",
+    )
+    track_air_time: bool = Field(
+        False,
+        description="ContactSensorCfg.track_air_time; False matches the pre-feature body.",
+    )
+
+
 class RoverSimConfig(StrictBaseModel):
     """Simulation backend selection and physics timing for rover training."""
 
@@ -126,6 +178,23 @@ class RoverSimConfig(StrictBaseModel):
     mujoco: MujocoSimConfig = Field(
         default_factory=MujocoSimConfig,
         description="MuJoCo backend parameters (used only when backend == 'mujoco').",
+    )
+    isaac: RoverIsaacSimConfig = Field(
+        default_factory=_settings_default_factory(RoverIsaacSimConfig),
+        description=(
+            "Isaac Lab scene knobs (device, prim paths, USD, contact sensor). "
+            "Ignored when backend is not isaac_lab; defaults match pre-F-043 literals."
+        ),
+    )
+    battery_voltage_const_v: float = Field(
+        12.0,
+        gt=0.0,
+        description=(
+            "Constant battery voltage stamped into RSSM motor_state[3] for "
+            "Isaac and mock. MuJoCo pretrain reads nested "
+            "MujocoSimConfig.battery_voltage_const_v so existing YAML overrides "
+            "on that field stay effective; the nested default remains 12.0."
+        ),
     )
 
 
@@ -178,6 +247,14 @@ class RoverObservationConfig(StrictBaseModel):
     include_lidar_sectors: bool = Field(True, description="Sector-binned LiDAR clearance features")
     lidar_num_sectors: int = Field(
         16, ge=1, description="Number of angular sectors for LiDAR features"
+    )
+    lidar_max_range_m: float = Field(
+        4.0,
+        gt=0.0,
+        description=(
+            "Sim LiDAR clip used to normalise sector features to [0, 1]. "
+            "Independent of hardware LidarConfig.max_range_m (12 m on the LD19)."
+        ),
     )
 
     def enabled_keys(self) -> tuple[str, ...]:

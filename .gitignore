@@ -67,6 +67,12 @@ mousedroid_experience/
 *.onnx
 *.plan
 
+# Isaac Sim / Omniverse generated USD (operator-local — never commit; ADR-009 F-043+)
+*.usd
+*.usda
+*.usdc
+.nvidia-omniverse/
+
 # Jetson / CUDA
 *.cubin
 *.fatbin

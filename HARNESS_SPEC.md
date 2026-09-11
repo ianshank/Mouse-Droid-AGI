@@ -329,9 +329,44 @@ pytest. Observability: structlog structured events + Prometheus families. ADRs i
 
 ---
 
-## 16. Changelog
+## 16. Isaac Lab workstation harness (F-043+)
+
+Isaac Lab is an **opt-in workstation training backend** (`pip install -e ".[isaac]"`).
+It is **not** on the Jetson, not in hosted CI, and not the runtime rover harness
+(`Settings.harness` stays `None`). CHARTER M5 physics for CI remains MuJoCo.
+
+Catalog ids F-043–F-049 live in `features.yaml`. F-008 remains the operator
+hardware next-feature (`critical` / `todo`). F-043–F-046 and F-048 are
+`done`; `select_next` returns F-008. Do not flip a done Isaac id back to
+`in_progress`.
+
+- **F-043** nested `RoverIsaacSimConfig`; no new `config/*.yaml` keys.
+- **F-044** fake-injectable readers (`inject_sensor`) + `to_body_action` +
+  `vx_body_mps` / `omega_rads`. Does not map 6-DoF IMU into RSSM `imu_dim`.
+  Live `build()` constructs contact only.
+- **F-045** `apply_domain_params` on Isaac. Replicator is a best-effort
+  import present-check; this slice does not write Omniverse attributes.
+- **F-046** `_train_rssm` accepts `{mujoco, isaac_lab}`; vision fine-tune stays
+  mujoco-only until `render_rgb` exists. Default mock still skips. Isaac skips
+  when `rover.reward is None` (`reason=isaac_reward_block_required`) because
+  live `build()` requires the reward block.
+- **F-047** PPO ONNX **deferred** — never `vla/policy.py` / 3-DoF TensorRT.
+- **F-048** this section + C4 / ADR-009 addenda. Training metrics stay on
+  existing MLflow (F-034). Do not add a rover Prometheus scrape family for
+  workstation Isaac.
+- **F-049** Cosmos / MobilityGen **deferred**.
+
+Every `done` validation_command must run always-on fakes and assert
+`passed > 0`. Module-level `importorskip("isaaclab")` is operator evidence,
+not Golden Rule truth. Do not register an `isaac` pytest marker unless it is
+also listed in `pyproject.toml` (`--strict-markers`).
+
+---
+
+## 17. Changelog
 
 | Version | Change |
 |---------|--------|
 | 2.1 (adopted) | Adopted the v2.1 template into MouseDroid: schema + tier-gated `validate.py` + DAG-aware `select_next.py` + standalone `harness.yml`. Seeded 8 features mapping to real checks. ADRs reuse `docs/architecture/`. `F-001` validated by `scripts/validations/F-001.sh` (avoids the template's recursive `--check`). See ADR-012. |
 | 2.1 + F-namespaces | Declared the two independent F-number sequences (catalog vs SMOKE_REPORT findings); catalog continues from F-015, skipping the finding-burned 9–14. Landed with the rev. B software work streams (F-015..F-020, PR #151). |
+| 2.1 + Isaac workstation | F-043–F-049 catalogue Isaac Lab as opt-in workstation training. Runtime harness stays None. Validation scripts assert pytest `passed > 0`. |

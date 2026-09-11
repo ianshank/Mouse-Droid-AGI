@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from mousedroid.config.schema import RoverConfig, Settings, TrainingPipelineConfig
 from mousedroid.logging.setup import get_logger
+from mousedroid.sim.protocols import ROVER_RSSM_PHYSICS_BACKENDS
 from mousedroid.training.batch_tuner import VRAMBatchTuner
 from mousedroid.training.gpu_monitor import JetsonGPUMonitor
 
@@ -34,6 +35,64 @@ if TYPE_CHECKING:
     from mousedroid.world_model.rssm import RSSM
 
 logger = get_logger(__name__)
+
+_UNSUPPORTED_RSSM_BACKEND_REASON = "unsupported_rssm_backend"
+_ISAAC_REWARD_BLOCK_REASON = "isaac_reward_block_required"
+
+
+def _rssm_battery_v(rover: RoverConfig) -> float:
+    """Return the RSSM adapter battery voltage for the emitting backend.
+
+    MuJoCo YAML historically overrides nested
+    ``sim.mujoco.battery_voltage_const_v``. Isaac (and mock) stamp the
+    parent ``sim.battery_voltage_const_v``. Mixing the two silently
+    dropped MuJoCo operator overrides.
+
+    Args:
+        rover: Rover block from :class:`Settings`.
+
+    Returns:
+        Battery voltage in volts for ``RoverObsAdapter``.
+    """
+    if rover.sim.backend == "mujoco":
+        return rover.sim.mujoco.battery_voltage_const_v
+    return rover.sim.battery_voltage_const_v
+
+
+def _rssm_pretrain_skip_reason(rover: RoverConfig | None) -> str | None:
+    """Return why physics RSSM pretrain must skip, or ``None`` to run.
+
+    Isaac Lab ``build()`` raises when ``rover.reward`` is missing (schema
+    default). Skipping here keeps default YAML + ``backend=isaac_lab``
+    from crashing the orchestrator.
+
+    Args:
+        rover: Optional rover block from ``Settings``.
+
+    Returns:
+        Structured-log ``reason`` when pretrain must not run.
+    """
+    if rover is None or rover.sim.backend not in ROVER_RSSM_PHYSICS_BACKENDS:
+        return _UNSUPPORTED_RSSM_BACKEND_REASON
+    if rover.sim.backend == "isaac_lab" and rover.reward is None:
+        return _ISAAC_REWARD_BLOCK_REASON
+    return None
+
+
+def _maybe_build_rover_env(env: Any) -> None:
+    """Call ``build()`` when the backend uses lazy Isaac construction.
+
+    MuJoCo and mock construct in ``__init__``. Isaac Lab requires an
+    explicit ``env.build()`` before ``reset``/``step``. Missing the
+    method is a no-op so existing backends stay byte-identical.
+
+    Call this from the ``asyncio.to_thread`` worker, not the event loop:
+    live Isaac ``build()`` is a blocking syscall.
+    """
+    build = getattr(env, "build", None)
+    if callable(build):
+        logger.debug("rover_env_build_invoked", env_type=type(env).__name__)
+        build()
 
 
 class PipelineOrchestrator:
@@ -243,11 +302,12 @@ class PipelineOrchestrator:
         return runners[phase]
 
     async def _train_rssm(self, batch_size: int) -> None:
-        """Run RSSM dynamics pretraining on MuJoCo-generated episodes.
+        """Run RSSM dynamics pretraining on physics-sim episodes.
 
         Inert (byte-identical to the prior stub) unless
-        ``training.rssm_pretrain_enabled`` is True AND a rover with the
-        ``mujoco`` backend is configured. The synchronous torch loop runs in a
+        ``training.rssm_pretrain_enabled`` is True AND a rover with a
+        physics backend (``mujoco`` or ``isaac_lab``) is configured. The
+        default ``mock`` backend still skips. The synchronous torch loop runs in a
         worker thread so the orchestrator event loop (and the cooperative
         thermal-pause check) is not blocked.
 
@@ -263,15 +323,20 @@ class PipelineOrchestrator:
         # consume the freshly written checkpoint. The two flags are independent —
         # vision fine-tune must NOT short-circuit pretraining.
         if tcfg.rssm_pretrain_enabled:
-            if rover is None or rover.sim.backend != "mujoco":
-                logger.info("rssm_training_skipped", reason="non_mujoco_backend")
+            reason = _rssm_pretrain_skip_reason(rover)
+            if reason is not None or rover is None:
+                logger.info(
+                    "rssm_training_skipped",
+                    reason=reason or _UNSUPPORTED_RSSM_BACKEND_REASON,
+                    backend=None if rover is None else rover.sim.backend,
+                )
             else:
                 from mousedroid.factory import build_rover_env, build_rssm_trainable
 
                 await self._run_rssm_training(
                     model=build_rssm_trainable(self._settings),
                     env=build_rover_env(self._settings),
-                    battery_v=rover.sim.mujoco.battery_voltage_const_v,
+                    battery_v=_rssm_battery_v(rover),
                     checkpoint=Path(tcfg.weights_dir) / tcfg.rssm_checkpoint_name,
                     epochs=tcfg.epochs,
                     event_prefix="rssm_training",
@@ -316,7 +381,7 @@ class PipelineOrchestrator:
         await self._run_rssm_training(
             model=build_rssm_vision_finetune(render_cfg, checkpoint),
             env=build_rover_env(render_cfg),
-            battery_v=rover.sim.mujoco.battery_voltage_const_v,
+            battery_v=_rssm_battery_v(rover),
             checkpoint=Path(tcfg.weights_dir) / tcfg.rssm_vision_checkpoint_name,
             epochs=tcfg.rssm_finetune_epochs,
             event_prefix="rssm_vision_finetune",
@@ -357,8 +422,9 @@ class PipelineOrchestrator:
         Builds the obs adapter + episode generator, runs the synchronous torch
         loop in a worker thread (so the orchestrator event loop + thermal-pause
         check are not blocked), closes the env, and logs ``{event_prefix}_started``
-        / ``{event_prefix}_done``. Centralising this prevents the two phases from
-        silently diverging on shared knobs.
+        / ``{event_prefix}_done``. ``env.build()`` (Isaac lazy construction) runs
+        inside that worker, not on the event loop. Centralising this prevents the
+        two phases from silently diverging on shared knobs.
         """
         import torch  # local import keeps cold-start light
 
@@ -383,6 +449,7 @@ class PipelineOrchestrator:
         )
 
         def _run() -> list[float]:
+            _maybe_build_rover_env(env)
             batch = generator.generate()
             trainer = RSSMPretrainer(
                 model,

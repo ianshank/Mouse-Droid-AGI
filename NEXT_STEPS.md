@@ -26,7 +26,9 @@ Catalog **F-008** (USB-C rover smoke in `features.yaml`) is the hardware next
 feature (`python scripts/select_next.py`). Smoke-report F-008 (telemetry :8080,
 2026-05-12) is a different namespace — see
 `docs/architecture/ADR-013-f-number-namespaces.md`. Closing catalog F-008 is
-bench work, not a coding sprint.
+bench work, not a coding sprint. Opt-in workstation Isaac Lab training
+(`backend: isaac_lab`) does not replace F-008.
+
 
 1. **[Security — P0] Rotate the `ANTHROPIC_API_KEY`.** Treat the chat-exposed
    key as compromised: inventory consumers, replace on Jetson, restart,

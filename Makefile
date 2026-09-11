@@ -30,7 +30,7 @@ LINT_DIRS := src/ tests/ tools/
 COV_MIN   := 90
 
 .DEFAULT_GOAL := help
-.PHONY: help install lint format typecheck test test-fast smoke regression \
+.PHONY: help install install-isaac lint format typecheck test test-fast smoke regression \
         behaviour coverage branch-coverage validate skills hooks gates ci clean
 
 help: ## Show this help
@@ -39,6 +39,9 @@ help: ## Show this help
 
 install: ## Install with the extras CI uses (NOT a bare [dev] — see gate-ladder)
 	$(PYTHON) -m pip install -e ".[dev,telemetry,mcp]"
+
+install-isaac: ## Workstation Isaac Lab extra (NOT in CI; Linux + Isaac Sim)
+	$(PYTHON) -m pip install -e ".[dev,telemetry,mcp,isaac]"
 
 lint: ## ruff check over src/ tests/ tools/ (+ scripts/)
 	$(PYTHON) -m ruff check $(LINT_DIRS)

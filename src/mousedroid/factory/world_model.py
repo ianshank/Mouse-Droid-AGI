@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from mousedroid.logging.setup import get_logger
+from mousedroid.sim.protocols import ROVER_RSSM_PHYSICS_BACKENDS
 
 if TYPE_CHECKING:
     from mousedroid.config.schema import (
@@ -20,6 +21,35 @@ if TYPE_CHECKING:
     from mousedroid.world_model.rssm import RSSM
 
 _log = get_logger(__name__)
+
+
+def _rssm_lidar_update(cfg: Settings) -> dict[str, object]:
+    """Size RSSM lidar from the backend that actually emits the scan.
+
+    MuJoCo emits :attr:`MujocoSimConfig.lidar_num_sectors`. Isaac emits
+    :attr:`RoverObservationConfig.lidar_num_sectors`. Disabled LiDAR
+    keeps ``lidar_dim=0`` so the adapter's empty tensor matches the model.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Partial ``ModelConfig`` update. Empty when the rover is absent or
+        the backend is mock (default-OFF, byte-identical lidar_dim).
+    """
+    rover = cfg.rover
+    if rover is None or rover.sim.backend not in ROVER_RSSM_PHYSICS_BACKENDS:
+        return {}
+    if not rover.observation.include_lidar_sectors:
+        return {"lidar_dim": 0, "lidar_proj_dim": 0}
+    if rover.sim.backend == "mujoco":
+        sectors = rover.sim.mujoco.lidar_num_sectors
+    else:
+        sectors = rover.observation.lidar_num_sectors
+    return {
+        "lidar_dim": sectors,
+        "lidar_proj_dim": cfg.model.lidar_proj_dim,
+    }
 
 
 def build_world_model(cfg: Settings) -> WorldModelProtocol:
@@ -115,7 +145,7 @@ def build_latent_context(cfg: Settings) -> LatentContextProtocol | None:
 
 
 def build_rssm_trainable(cfg: Settings) -> RSSM:
-    """Build the concrete trainable RSSM for MuJoCo dynamics pretraining.
+    """Build the concrete trainable RSSM for physics-sim dynamics pretraining.
 
     Unlike :func:`build_world_model` (which returns a ``WorldModelProtocol``
     wrapper for deployment), this returns the concrete ``nn.Module`` so the
@@ -124,6 +154,12 @@ def build_rssm_trainable(cfg: Settings) -> RSSM:
     validator) — the sim has no camera; the dynamics core is what gets
     pretrained. Operator pretrain knobs from :class:`TrainingConfig` are copied
     onto the model config so they live in one place (``training:``).
+
+    ``lidar_dim`` follows the emitting backend: MuJoCo uses
+    :attr:`MujocoSimConfig.lidar_num_sectors`; Isaac uses
+    :attr:`RoverObservationConfig.lidar_num_sectors`. Disabled
+    ``include_lidar_sectors`` keeps ``lidar_dim=0``. Mock / absent rover
+    keeps the model default.
 
     Args:
         cfg: Root settings.
@@ -140,14 +176,7 @@ def build_rssm_trainable(cfg: Settings) -> RSSM:
         "kl_free_nats": cfg.training.rssm_free_nats,
         "kl_balance_alpha": cfg.training.rssm_kl_balance_alpha,
     }
-    # Use the rover's full lidar signal when a MuJoCo rover is configured: size the
-    # model's lidar modality to the sim's sector count so train_sequence actually
-    # reconstructs lidar (otherwise it is silently dropped — leaving only motor +
-    # a single min-range scalar). Falls back to the model default when no rover.
-    rover = cfg.rover
-    if rover is not None and rover.sim.backend == "mujoco":
-        update["lidar_dim"] = rover.sim.mujoco.lidar_num_sectors
-        update["lidar_proj_dim"] = cfg.model.lidar_proj_dim
+    update.update(_rssm_lidar_update(cfg))
     model_cfg = cfg.model.model_copy(update=update)
     return RSSM(model_cfg)
 
@@ -182,10 +211,7 @@ def build_rssm_vision_finetune(cfg: Settings, checkpoint: Path) -> RSSM:
         "kl_free_nats": cfg.training.rssm_free_nats,
         "kl_balance_alpha": cfg.training.rssm_kl_balance_alpha,
     }
-    rover = cfg.rover
-    if rover is not None and rover.sim.backend == "mujoco":
-        update["lidar_dim"] = rover.sim.mujoco.lidar_num_sectors
-        update["lidar_proj_dim"] = cfg.model.lidar_proj_dim
+    update.update(_rssm_lidar_update(cfg))
     model_cfg = cfg.model.model_copy(update=update)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     return load_rssm_with_migration(checkpoint, model_cfg, device)
@@ -341,12 +367,11 @@ def build_rover_env(cfg: Settings) -> RoverEnvProtocol:
     Backends:
         - ``"mock"`` (default): NumPy-only kinematic integrator. Has no
           physics or GPU dependency and is the only backend used in CI.
-        - ``"isaac_lab"``: Isaac Lab env stub; requires
+        - ``"isaac_lab"``: Isaac Lab env; requires
           ``pip install -e ".[isaac]"`` on a workstation with NVIDIA
-          Isaac Lab prerequisites. Phase B fills in the actual
-          articulation / sensor wiring.
-        - ``"mujoco"``: reserved for a future PR — raises
-          :class:`NotImplementedError`.
+          Isaac Lab prerequisites. Construction is lazy (``env.build()``).
+        - ``"mujoco"``: MuJoCo skid-steer physics (CHARTER M5 CI-trainable
+          backend). Wired through :class:`RoverMuJoCoEnv`.
 
     Args:
         cfg: Root settings. ``cfg.rover`` must be populated.
@@ -355,8 +380,7 @@ def build_rover_env(cfg: Settings) -> RoverEnvProtocol:
         Environment conforming to :class:`RoverEnvProtocol`.
 
     Raises:
-        ValueError: If ``cfg.rover`` is ``None``.
-        NotImplementedError: For backends not yet wired in this phase.
+        ValueError: If ``cfg.rover`` is ``None`` or the backend name is unknown.
     """
     if cfg.rover is None:
         msg = (
