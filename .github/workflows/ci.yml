@@ -410,6 +410,13 @@ jobs:
             - name: Subsystem boundary gate (Protocol-based DI, full tree)
               run: python scripts/check_subsystem_boundaries.py
 
+            - name: Docs core line budget (CLAUDE.md vs DocsConfig.core_max_lines)
+              # Was a scripts/ci.sh-only gate: no workflow ran it, so a PR that
+              # blew the budget passed all 17 jobs. The unit tests exercise the
+              # tool against synthetic fixtures only — nothing asserted the real
+              # CLAUDE.md is under its configured ceiling until this step.
+              run: python -m tools.claude_hooks.docs_trimmer
+
             - name: Doc hygiene (strict size/checkmark budget)
               run: python tools/doc_hygiene.py NEXT_STEPS.md --strict
 

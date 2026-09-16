@@ -138,6 +138,157 @@ def test_multiple_checkers_run_in_configured_order(tmp_path: Path, stub_bin: Pat
 
 
 # ---------------------------------------------------------------------------
+# mypy path profiles
+# ---------------------------------------------------------------------------
+
+
+def _profile_config(**profile: Any) -> WorkforceConfig:
+    return _config(checks=["mypy"], mypy_profiles=[profile])
+
+
+def test_profile_is_selected_by_repo_relative_glob() -> None:
+    cfg = _profile_config(paths=["tools/**"], args=["--strict"], mypy_path=".")
+    assert post_edit_check._mypy_profile(cfg, "tools/claude_hooks/config.py") is not None
+    assert post_edit_check._mypy_profile(cfg, "src/mousedroid/x.py") is None
+
+
+def test_unmatched_file_keeps_the_default_mypy_args(tmp_path: Path) -> None:
+    """A non-matching path must not inherit another tree's flags.
+
+    ``--explicit-package-bases`` is wrong for ``src/``: it makes mypy resolve the
+    same file as both ``src.mousedroid`` and ``mousedroid`` and report nothing
+    else, which is the exact failure the profiles exist to avoid.
+    """
+    repo = _repo(tmp_path)
+    cfg = _profile_config(paths=["tools/**"], args=["--explicit-package-bases"], mypy_path=".")
+    invocation = post_edit_check._checker_invocation(
+        "mypy", cfg, repo / "src/x.py", rel_path="src/x.py", repo_root=repo
+    )
+    assert invocation is not None
+    argv, env = invocation
+    assert "--explicit-package-bases" not in argv
+    assert argv[3:] == [*cfg.post_edit.mypy_args, str(repo / "src/x.py")]
+    assert env == {}
+
+
+def test_matched_file_replaces_args_rather_than_appending(tmp_path: Path) -> None:
+    """A profile exists because the default set is wrong for the tree."""
+    repo = _repo(tmp_path)
+    cfg = _profile_config(paths=["tools/**"], args=["--strict"])
+    invocation = post_edit_check._checker_invocation(
+        "mypy", cfg, repo / "tools/a.py", rel_path="tools/a.py", repo_root=repo
+    )
+    assert invocation is not None
+    argv, env = invocation
+    assert argv[:3] == [sys.executable, "-m", "mypy"]
+    assert argv[3:] == ["--strict", str(repo / "tools/a.py")]
+    assert "--follow-imports=silent" not in argv
+    assert env == {}
+
+
+def test_profile_mypy_path_is_absolutised_against_the_repo_root(tmp_path: Path) -> None:
+    """Config stays repo-relative (I-3); mypy receives a cwd-independent path."""
+    repo = _repo(tmp_path)
+    cfg = _profile_config(paths=["tools/**"], args=["--strict"], mypy_path=".")
+    invocation = post_edit_check._checker_invocation(
+        "mypy", cfg, repo / "tools/a.py", rel_path="tools/a.py", repo_root=repo
+    )
+    assert invocation is not None
+    assert Path(invocation[1]["MYPYPATH"]).is_absolute()
+    assert Path(invocation[1]["MYPYPATH"]) == repo
+
+
+def test_profiles_do_not_apply_to_other_checkers(tmp_path: Path) -> None:
+    """``ruff`` has no module resolution, so it must keep ``ruff_args``."""
+    repo = _repo(tmp_path)
+    cfg = _config(checks=["ruff"], mypy_profiles=[{"paths": ["tools/**"], "args": ["--strict"]}])
+    invocation = post_edit_check._checker_invocation(
+        "ruff", cfg, repo / "tools/a.py", rel_path="tools/a.py", repo_root=repo
+    )
+    assert invocation is not None
+    argv, env = invocation
+    assert argv[:3] == [sys.executable, "-m", "ruff"]
+    assert argv[3:] == ["check", "--no-fix", str(repo / "tools/a.py")]
+    assert env == {}
+
+
+def test_file_outside_the_repo_matches_no_profile(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    cfg = _profile_config(paths=["**"], args=["--strict"], mypy_path=".")
+    assert post_edit_check._mypy_profile(cfg, None) is None
+    invocation = post_edit_check._checker_invocation(
+        "mypy", cfg, repo / "a.py", rel_path=None, repo_root=repo
+    )
+    assert invocation is not None
+    assert invocation[1] == {}
+
+
+def test_first_matching_profile_wins() -> None:
+    cfg = _config(
+        checks=["mypy"],
+        mypy_profiles=[
+            {"paths": ["tools/**"], "args": ["--first"]},
+            {"paths": ["tools/claude_hooks/**"], "args": ["--second"]},
+        ],
+    )
+    profile = post_edit_check._mypy_profile(cfg, "tools/claude_hooks/config.py")
+    assert profile is not None
+    assert profile.args == ["--first"]
+
+
+def test_profile_mypy_path_reaches_the_subprocess_environment(
+    tmp_path: Path, stub_bin: Path
+) -> None:
+    """The behavioural proof: an argv assertion cannot show MYPYPATH was exported.
+
+    The stub reports its own ``MYPYPATH`` and exits non-zero so the value comes
+    back as a finding.
+    """
+    repo = _repo(tmp_path)
+    target = repo / "tools" / "a.py"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("x = 1\n", encoding="utf-8")
+    script = tmp_path / "stubs" / "echo_env.py"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text(
+        'import os, sys\nprint("MYPYPATH=" + os.environ.get("MYPYPATH", "<unset>"))\nsys.exit(1)\n',
+        encoding="utf-8",
+    )
+    _STUBS["mypy"] = [sys.executable, str(script)]
+
+    findings = post_edit_check.run_checks(
+        target,
+        _profile_config(paths=["tools/**"], args=[], mypy_path="."),
+        repo_root=repo,
+    )
+    assert len(findings) == 1
+    assert f"MYPYPATH={repo}" in findings[0][1]
+
+
+def test_unmatched_file_does_not_export_mypy_path(tmp_path: Path, stub_bin: Path) -> None:
+    """The negative half: the overlay must not leak to non-matching files."""
+    repo = _repo(tmp_path)
+    target = repo / "src" / "a.py"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("x = 1\n", encoding="utf-8")
+    script = tmp_path / "stubs" / "echo_env.py"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text(
+        'import os, sys\nprint("MYPYPATH=" + os.environ.get("MYPYPATH", "<unset>"))\nsys.exit(1)\n',
+        encoding="utf-8",
+    )
+    _STUBS["mypy"] = [sys.executable, str(script)]
+
+    findings = post_edit_check.run_checks(
+        target,
+        _profile_config(paths=["tools/**"], args=[], mypy_path="."),
+        repo_root=repo,
+    )
+    assert len(findings) == 1
+    assert "MYPYPATH=<unset>" in findings[0][1]
+
+
+# ---------------------------------------------------------------------------
 # main()
 # ---------------------------------------------------------------------------
 

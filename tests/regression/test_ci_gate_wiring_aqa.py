@@ -250,13 +250,14 @@ class TestPerformanceJob:
 class TestLocalGatesJob:
     """The deterministic scripts/ci.sh-only gates keep running in GitHub CI."""
 
-    def test_all_eight_gates_present(self) -> None:
+    def test_all_nine_gates_present(self) -> None:
         run_text = _job_run_text(_load_ci_jobs()["local-gates"])
         for needle in (
             "check_settings_identity.py",
             "mypy tools/claude_hooks",
             "validate_skill_commands.py",
             "doc_hygiene.py",
+            "tools.claude_hooks.docs_trimmer",
             "tools.ratchet_budgets",
             "--cov=tools/claude_hooks",
             "check_no_hardcoded_values.py",
@@ -513,6 +514,120 @@ class TestEveryTierReachesCi:
         """A bare exemption is indistinguishable from an oversight."""
         for tier, reason in _CI_EXEMPT_TIERS.items():
             assert reason.strip(), f"exemption for {tier!r} has no documented reason"
+
+
+#: Regex for the deterministic gate invocations in scripts/ci.sh: a module run
+#: as ``-m pkg.mod`` or a script run as ``tools/x.py`` / ``scripts/x.py``.
+_CI_SH_GATE_RE = re.compile(
+    r'(?:-m\s+(?P<module>[a-z_][a-z0-9_.]*)'
+    r'|"?\$PYTHON_BIN"?\s+(?P<script>(?:tools|scripts)/[\w/]+\.py))'
+)
+
+#: Generic tooling that is a *runner*, not a gate — matching these would assert
+#: that "pytest appears in a workflow", which proves nothing about coverage.
+_CI_SH_RUNNERS = frozenset({"pytest", "ruff", "mypy", "pip", "coverage"})
+
+#: ci.sh gates deliberately absent from hosted CI, each with the reason. Same
+#: ratchet posture as _CI_EXEMPT_TIERS: an entry is a reviewable decision.
+_CI_EXEMPT_GATES: dict[str, str] = {
+    "mousedroid.cli.validate_pillars": (
+        "redundant with pytest, not unwired: ci.sh runs it as a ~50ms "
+        "importability smoke check, and tests/unit/cli/test_validate_pillars_cli.py "
+        "invokes the same main(['--dry-run']) inside the blocking `test` job. A "
+        "workflow step would re-run what pytest already covers."
+    ),
+    "scripts/check_branch_coverage.py": (
+        "local-only by design, and ci.yml's own Stage 3c banner says so: it "
+        "re-runs the whole unit/property/integration suite to compute a "
+        "changed-file branch delta, which the blocking `test` job already pays "
+        "for once at the line level. Duplicating it would roughly double the "
+        "job's wall-clock for a second view of the same run."
+    ),
+    "mousedroid.main": (
+        "not a gate: ci.sh invokes the application entrypoint itself for a "
+        "startup smoke check, which the e2e and smoke tiers cover in the "
+        "blocking `test` job."
+    ),
+}
+
+
+def _discover_ci_sh_gates() -> set[str]:
+    """Every deterministic gate scripts/ci.sh invokes.
+
+    Discovered by regex rather than listed, for the same reason
+    :func:`_discover_test_tiers` is: a hardcoded roster would let the *next*
+    ci.sh-only gate slip through exactly as ``tools.claude_hooks.docs_trimmer``
+    did — it guarded the root CLAUDE.md line budget and no workflow ran it, so a
+    PR that blew the budget passed all 17 jobs.
+    """
+    text = _CI_SH.read_text(encoding="utf-8")
+    gates: set[str] = set()
+    for match in _CI_SH_GATE_RE.finditer(text):
+        module, script = match.group("module"), match.group("script")
+        if module and module not in _CI_SH_RUNNERS:
+            gates.add(module)
+        elif script:
+            gates.add(script)
+    return gates
+
+
+def _all_workflow_text() -> str:
+    """The raw text of every workflow, comments included.
+
+    Raw rather than parsed: a gate may be invoked from any workflow (``validate.py``
+    lives in harness.yml, not ci.yml), and this only ever asks whether a gate is
+    mentioned *somewhere*, which the enumerated per-job pins above then sharpen.
+    """
+    workflows = _REPO_ROOT / ".github" / "workflows"
+    return "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(workflows.glob("*.yml"))
+    )
+
+
+class TestEveryCiShGateReachesCi:
+    """No deterministic ci.sh gate may run in zero GitHub Actions paths.
+
+    ``scripts/ci.sh`` is the authoritative local superset, so a gate added there
+    feels wired — but only a workflow enforces it on a PR. This sweep is the
+    generic guard; the enumerated per-job pins above are the specific ones.
+    """
+
+    def test_every_gate_is_wired_or_explicitly_exempt(self) -> None:
+        workflow_text = _all_workflow_text()
+        orphans = sorted(
+            gate
+            for gate in _discover_ci_sh_gates()
+            if gate not in _CI_EXEMPT_GATES and gate not in workflow_text
+        )
+        assert not orphans, (
+            f"scripts/ci.sh gate(s) {orphans} run in ZERO GitHub Actions paths, so a "
+            "PR that breaks them passes every job. Either add a workflow step, or "
+            "add an entry to _CI_EXEMPT_GATES with a documented reason."
+        )
+
+    def test_the_sweep_actually_finds_gates(self) -> None:
+        """Guard against a regex that silently matches nothing.
+
+        Without this, a typo in ``_CI_SH_GATE_RE`` would turn the sweep above into
+        an unconditional pass — the exact failure mode it exists to prevent.
+        """
+        discovered = _discover_ci_sh_gates()
+        assert len(discovered) >= 10, f"the ci.sh gate sweep found only {discovered}"
+        assert "scripts/check_subsystem_boundaries.py" in discovered
+        assert "tools.claude_hooks.docs_trimmer" in discovered
+
+    def test_exemptions_are_not_stale(self) -> None:
+        """An exemption for a gate ci.sh no longer runs is dead policy."""
+        discovered = _discover_ci_sh_gates()
+        stale = sorted(gate for gate in _CI_EXEMPT_GATES if gate not in discovered)
+        assert not stale, (
+            f"_CI_EXEMPT_GATES names gate(s) {stale} that scripts/ci.sh no longer "
+            "invokes — drop the entry rather than leaving a rule nobody can trip"
+        )
+
+    def test_every_exemption_carries_a_reason(self) -> None:
+        for gate, reason in _CI_EXEMPT_GATES.items():
+            assert reason.strip(), f"exemption for {gate!r} has no documented reason"
 
 
 class TestOrphanTierWiring:

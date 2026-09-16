@@ -18,6 +18,9 @@ Contracts pinned here:
   names — permission patterns like ``Bash(git diff*)`` are silently ignored by
   the platform, so they must fail here instead;
 * wired hook commands point at files that exist;
+* wired hook commands resolve an interpreter that can actually import the hook
+  package — a bare ``python3`` silently disabled every gate (see
+  :func:`test_wired_hook_commands_do_not_invoke_a_bare_interpreter`);
 * the legacy ``.claude/commands/`` layout stays deleted;
 * pre-existing settings survive the hooks block being added.
 """
@@ -27,12 +30,14 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
 from tools.claude_hooks.config import DEFAULT_CONFIG_RELPATH, WorkforceConfig, load_config
+from tools.claude_hooks.paths import path_matches_any
 from tools.claude_hooks.portability import find_absolute_paths
 from tools.validate_skill_commands import find_hardcoded_hosts
 
@@ -393,8 +398,10 @@ def test_wired_hook_commands_run_from_the_project_directory() -> None:
     """Hook commands stay portable and importable.
 
     ``python -m tools.claude_hooks.<mod>`` needs the repository root on
-    ``sys.path``; running the module file by path does not provide that, so the
-    command must ``cd`` to ``$CLAUDE_PROJECT_DIR`` first.
+    ``sys.path``; running the module file by path does not provide that. Claude
+    Code does not guarantee the hook's working directory, so the command must
+    locate the project through ``$CLAUDE_PROJECT_DIR`` — today by handing that
+    path to :data:`_INTERPRETER_WRAPPER`, which chdirs before exec.
     """
     for command in _hook_commands():
         assert "$CLAUDE_PROJECT_DIR" in command, (
@@ -404,6 +411,163 @@ def test_wired_hook_commands_run_from_the_project_directory() -> None:
             "hook must use 'python -m package.module' so the repo root is importable; "
             f"got: {command}"
         )
+
+
+#: Wrapper that resolves a capable interpreter for every wired hook.
+_INTERPRETER_WRAPPER_RELPATH = "tools/claude_hooks/run_hook.sh"
+_INTERPRETER_WRAPPER = _REPO_ROOT / _INTERPRETER_WRAPPER_RELPATH
+
+#: Interpreter spellings that resolve through ``PATH`` rather than by capability.
+_BARE_INTERPRETERS = ("python", "python3", "python3.10", "python3.11", "python3.12", "py")
+
+
+def test_wired_hook_commands_do_not_invoke_a_bare_interpreter() -> None:
+    """The highest-value pin in this file: a bare ``python3`` disables every gate.
+
+    This is not hypothetical. The hooks shipped as ``cd "$CLAUDE_PROJECT_DIR" &&
+    python3 -m tools.claude_hooks.<mod>``. ``python3`` is whatever is first on the
+    hook process's ``PATH`` — the *system* interpreter in this project's
+    containers, which has no pydantic — so :mod:`tools.claude_hooks.config` failed
+    to import, the hook exited 1, and Claude Code treats a non-2 exit from a
+    ``PreToolUse`` hook as a non-blocking hook *error*. The F-008 freeze gate and
+    the edit-time secret scan both failed open, and nothing was visible: a gate
+    that never blocks looks exactly like a gate with nothing to block.
+
+    The command must therefore go through the wrapper, which picks an interpreter
+    that can actually import the hook package.
+    """
+    for command in _hook_commands():
+        tokens = command.split()
+        offenders = [
+            token
+            for token in tokens[: tokens.index("-m")]
+            if Path(token.strip('"')).name in _BARE_INTERPRETERS
+        ]
+        assert not offenders, (
+            f"hook command invokes {offenders} from PATH, which is not guaranteed to "
+            f"have the hook package's dependencies — route it through "
+            f"{_INTERPRETER_WRAPPER_RELPATH} instead. Command: {command}"
+        )
+        assert _INTERPRETER_WRAPPER_RELPATH in command, (
+            f"hook command must resolve its interpreter through "
+            f"{_INTERPRETER_WRAPPER_RELPATH}, got: {command}"
+        )
+
+
+def test_interpreter_wrapper_is_tracked_and_executable() -> None:
+    """The wrapper is only useful if it ships and can run.
+
+    ``.gitignore`` does not cover ``tools/``, so tracking is the weaker risk
+    here; a wrapper that lost its executable bit would still work under the
+    wired ``bash <path>`` form, so this pins the stronger contract of both.
+    """
+    assert _INTERPRETER_WRAPPER.is_file()
+    assert _git_tracked(_INTERPRETER_WRAPPER_RELPATH), (
+        f"{_INTERPRETER_WRAPPER_RELPATH} is untracked — every hook would fail in CI "
+        "and in every fresh clone."
+    )
+    assert os.access(_INTERPRETER_WRAPPER, os.X_OK), (
+        f"{_INTERPRETER_WRAPPER_RELPATH} is not executable"
+    )
+
+
+def test_interpreter_wrapper_resolves_an_interpreter_that_can_import_the_hooks() -> None:
+    """An executable pin: the wrapper's *output* must be a capable interpreter.
+
+    Asserting on the wrapper's text would pass for a wrapper that resolves the
+    wrong interpreter. Running it is what proves the gates can execute, and is
+    the assertion that would have caught the original bug.
+    """
+    completed = subprocess.run(
+        [
+            "bash",
+            str(_INTERPRETER_WRAPPER),
+            "-c",
+            "import tools.claude_hooks.config; print('ok')",
+        ],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "CLAUDE_PROJECT_DIR": str(_REPO_ROOT)},
+    )
+    assert completed.returncode == 0, (
+        f"the wrapper resolved an interpreter that cannot import the hook package — "
+        f"every gate would fail open.\nstdout: {completed.stdout}\nstderr: {completed.stderr}"
+    )
+    assert "ok" in completed.stdout
+
+
+def test_interpreter_wrapper_fails_fast_with_no_arguments() -> None:
+    """An argument-less wiring must error, not hang.
+
+    Without a guard the wrapper would ``exec`` a bare interpreter, which reads
+    the hook payload on stdin as a REPL script and blocks until Claude Code's
+    hook timeout. A hang mid-edit is worse than a visible error, and the timeout
+    is 15-90s depending on the hook.
+    """
+    completed = subprocess.run(
+        ["bash", str(_INTERPRETER_WRAPPER)],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=15,
+        env={**os.environ, "CLAUDE_PROJECT_DIR": str(_REPO_ROOT)},
+        stdin=subprocess.DEVNULL,
+    )
+    assert completed.returncode != 0
+    assert "no arguments" in completed.stderr
+
+
+def test_post_edit_mypy_profile_covers_the_hook_package_itself() -> None:
+    """The shipped config must cover the tree whose module resolution collides.
+
+    ``tools/claude_hooks`` is a package under a plain directory that imports
+    itself as ``tools.claude_hooks.*``. Under mypy's defaults every file there
+    resolves to two module names, so mypy reports that collision and checks
+    nothing — the post-edit hook then answers every edit to the workforce tooling
+    with a finding that is not about the edit. A wrong advisory finding is worse
+    than none: it trains contributors to ignore the hook, which is how the
+    fail-open bug above survived unnoticed.
+    """
+    profiles = _config().post_edit.mypy_profiles
+    matched = [
+        profile
+        for profile in profiles
+        if path_matches_any("tools/claude_hooks/config.py", profile.paths) is not None
+    ]
+    assert matched, (
+        "no post_edit.mypy_profiles entry matches tools/claude_hooks/**; the "
+        "edit-time mypy check reports a module-name collision instead of real findings"
+    )
+    profile = matched[0]
+    assert "--explicit-package-bases" in profile.args, (
+        f"profile {profile.paths} matches the hook package but omits "
+        "--explicit-package-bases, so mypy still resolves each file twice"
+    )
+    assert profile.mypy_path is not None, (
+        f"profile {profile.paths} needs MYPYPATH at the repo root; "
+        "--explicit-package-bases alone leaves the collision in place"
+    )
+
+
+def test_interpreter_wrapper_honours_the_explicit_override() -> None:
+    """``MOUSEDROID_PYTHON`` wins outright, so an operator can pin an interpreter."""
+    completed = subprocess.run(
+        ["bash", str(_INTERPRETER_WRAPPER), "-c", "import sys; print(sys.executable)"],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            **os.environ,
+            "CLAUDE_PROJECT_DIR": str(_REPO_ROOT),
+            "MOUSEDROID_PYTHON": sys.executable,
+        },
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == sys.executable
 
 
 # ---------------------------------------------------------------------------

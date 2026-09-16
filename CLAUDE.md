@@ -63,7 +63,9 @@ file's own comments (`grep "# Stage" .github/workflows/ci.yml`), not a separate 
 with a promotion window. There is no separate `skills`/`secret-scan`/`test-fast`/`validate`/
 `regression`/`package` job — those checks are steps inside the jobs above.
 
-Run locally: `make gates` (fast lint/typecheck/validate), `make test` (coverage), or `bash scripts/ci.sh` (superset).
+Run locally: `make gates` (lint/format/typecheck/skills/validate + boundary, doc-budget, ratchet
+and workforce-hook-coverage gates), `make test` (all 4 pytest steps of the blocking `test` job),
+or `bash scripts/ci.sh` (superset).
 
 ## Surface Map
 
@@ -93,8 +95,9 @@ Detailed operational guidelines and subsystem contracts live in partitioned surf
 
 ```bash
 make help               # List all developer targets
-make gates              # Fast lint, format, typecheck, skills, and validation gates
-make test               # Full unit + property + integration test suite with coverage gate
+make gates              # Lint, format, typecheck, skills, validation, boundary + doc-budget gates
+make test               # All 4 pytest steps of CI's blocking `test` job (cov + regression/e2e
+                        #   + smoke + behaviour); each is also a target you can run alone
 make hooks              # Dedicated workforce tooling coverage test
 bash scripts/ci.sh      # Authoritative local CI superset
 ```

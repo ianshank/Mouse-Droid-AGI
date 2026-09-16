@@ -27,9 +27,9 @@ from pathlib import Path
 from typing import IO, Any
 
 from tools.claude_hooks import hookio
-from tools.claude_hooks.config import WorkforceConfig, load_config
+from tools.claude_hooks.config import MypyProfile, WorkforceConfig, load_config
 from tools.claude_hooks.logging_setup import debug_enabled, get_logger
-from tools.claude_hooks.paths import resolve_repo_root, to_repo_relative
+from tools.claude_hooks.paths import path_matches_any, resolve_repo_root, to_repo_relative
 
 _logger = get_logger(__name__)
 
@@ -62,16 +62,50 @@ def _checker_base_argv(name: str) -> list[str] | None:
     return [sys.executable, "-m", name]
 
 
-def _checker_argv(name: str, cfg: WorkforceConfig, target: Path) -> list[str] | None:
-    """Build the full argv for checker ``name``, or ``None`` when unavailable.
+def _mypy_profile(cfg: WorkforceConfig, rel_path: str | None) -> MypyProfile | None:
+    """Return the first ``post_edit.mypy_profiles`` entry matching ``rel_path``.
+
+    Args:
+        cfg: Workforce configuration.
+        rel_path: Repo-relative POSIX path of the edited file, or ``None`` when
+            the file lies outside the repository.
+
+    Returns:
+        The matching profile, or ``None`` when nothing matches and the default
+        :attr:`PostEditConfig.mypy_args` should be used as-is.
+    """
+    if rel_path is None:
+        return None
+    for profile in cfg.post_edit.mypy_profiles:
+        if path_matches_any(rel_path, profile.paths) is not None:
+            return profile
+    return None
+
+
+def _checker_invocation(
+    name: str,
+    cfg: WorkforceConfig,
+    target: Path,
+    *,
+    rel_path: str | None,
+    repo_root: Path,
+) -> tuple[list[str], dict[str, str]] | None:
+    """Build the argv and environment overlay for checker ``name``.
 
     Args:
         name: Checker name from ``post_edit.checks``.
         cfg: Workforce configuration.
         target: Absolute path of the file to check.
+        rel_path: Repo-relative POSIX path of ``target``, used to select a
+            :class:`MypyProfile`.
+        repo_root: Repository root, used to resolve a profile's repo-relative
+            ``mypy_path`` into the absolute value mypy receives.
 
     Returns:
-        The argv list, or ``None`` when the checker is unknown or not installed.
+        A ``(argv, env_overlay)`` pair, or ``None`` when the checker is unknown
+        or not installed. ``env_overlay`` is empty for every checker except a
+        profile-matched mypy, which needs ``MYPYPATH`` set — see
+        :class:`MypyProfile` for why the flags alone are not enough.
     """
     extra_args = _KNOWN_CHECKERS.get(name)
     if extra_args is None:
@@ -80,7 +114,19 @@ def _checker_argv(name: str, cfg: WorkforceConfig, target: Path) -> list[str] | 
     base = _checker_base_argv(name)
     if base is None:
         return None
-    return [*base, *extra_args(cfg), str(target)]
+
+    args = extra_args(cfg)
+    overlay: dict[str, str] = {}
+    if name == "mypy":
+        profile = _mypy_profile(cfg, rel_path)
+        if profile is not None:
+            args = profile.args
+            if profile.mypy_path is not None:
+                # Absolutised rather than passed through: the config value stays
+                # repo-relative (and so portable), while mypy gets a path that
+                # does not depend on the subprocess's working directory.
+                overlay["MYPYPATH"] = str(repo_root / profile.mypy_path)
+    return [*base, *args, str(target)], overlay
 
 
 def run_checks(
@@ -102,17 +148,19 @@ def run_checks(
         findings. An empty list means everything the hook could run was clean.
     """
     findings: list[tuple[str, str]] = []
+    rel_path = to_repo_relative(target, repo_root)
     for name in cfg.post_edit.checks:
-        argv = _checker_argv(name, cfg, target)
-        if argv is None:
+        invocation = _checker_invocation(name, cfg, target, rel_path=rel_path, repo_root=repo_root)
+        if invocation is None:
             if name not in _KNOWN_CHECKERS:
                 # Config names a checker this hook cannot ever run.
                 _logger.warning("post_edit_checker_unknown", checker=name)
             else:
                 _logger.debug("post_edit_checker_unavailable", checker=name)
             continue
+        argv, env_overlay = invocation
         if debug_enabled():
-            _logger.debug("post_edit_invoking", checker=name, argv=argv)
+            _logger.debug("post_edit_invoking", checker=name, argv=argv, env=env_overlay)
         try:
             # S603: argv[0] is sys.executable and every arg is a list element
             # (no shell), so the call carries no injection surface.
@@ -123,6 +171,7 @@ def run_checks(
                 timeout=cfg.post_edit.timeout_s,
                 check=False,
                 cwd=str(repo_root),
+                env={**os.environ, **env_overlay} if env_overlay else None,
             )
         except subprocess.TimeoutExpired:
             _logger.warning("post_edit_check_timeout", checker=name)

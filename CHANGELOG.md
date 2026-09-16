@@ -8,6 +8,93 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — every Claude Code hook was failing open (tech-debt Wave 1)
+
+`.claude/settings.json` wired its four hooks as `cd "$CLAUDE_PROJECT_DIR" &&
+python3 -m tools.claude_hooks.<mod>`. `python3` is whichever interpreter is first
+on the hook process's `PATH` — on this project's containers the *system* one,
+which has no pydantic — so `tools.claude_hooks.config` failed to import and the
+hook exited 1. Claude Code treats a non-2 exit from a `PreToolUse` hook as a
+non-blocking hook *error*, so the F-008 freeze gate and the edit-time secret scan
+were both bypassed with no visible symptom: a gate that never blocks looks
+exactly like a gate with nothing to block.
+
+Reproduced before fixing — under `python3`, an edit to `src/mousedroid/arm/**`
+returned `rc=0` with a `ModuleNotFoundError` traceback instead of the deny
+payload; under the venv interpreter the same payload produced
+`permissionDecision: deny`.
+
+New `tools/claude_hooks/run_hook.sh` is a transparent `python` shim that resolves
+an interpreter by *capability* rather than `PATH` order: it probes candidates
+until one can `import tools.claude_hooks.config` — the module every wired hook
+imports, and the one that pulls in pydantic and PyYAML. Probing beats pointing at
+a hardcoded `.venv/bin/python` because it also rejects a virtualenv that exists
+but never had the dev extra installed. `MOUSEDROID_PYTHON` overrides it outright.
+
+Two regression pins, in `test_claude_workforce_aqa.py`: no wired hook command may
+invoke an interpreter from `PATH`, and — the executable one that would actually
+have caught this — running the wrapper must yield an interpreter that can import
+the hook package.
+
+**This makes the F-008 freeze gate live.** Edits to `src/mousedroid/arm/**` are
+now denied until F-008 reaches `done`, which is the documented intent;
+`MOUSEDROID_WORKFORCE_ALLOW_FROZEN=1` is the reviewed-exception override.
+
+### Fixed — the post-edit mypy check reported a collision instead of findings
+
+With the hooks actually executing, `post_edit_check` answered every edit under
+`tools/claude_hooks/**` with `Source file found twice under different module
+names: "claude_hooks" and "tools.claude_hooks"` — mypy resolving one file to two
+module names, and so checking nothing. A wrong advisory finding is worse than
+none: it trains contributors to ignore the hook, which is how the fail-open bug
+above survived.
+
+One argument set cannot serve both trees, which is why CI already runs mypy
+twice: `src/` needs mypy's defaults, while `tools/claude_hooks/` — a package
+under a plain directory that imports itself as `tools.claude_hooks.*` — needs
+`--explicit-package-bases` with `MYPYPATH` at the repository root. New
+`post_edit.mypy_profiles` (schema: `MypyProfile`) reproduces that split in
+config, first-match-wins, with a default covering `tools/**`. Additive by
+construction: a file matching no profile uses `mypy_args` unchanged, so a
+`workforce.yaml` written before the field existed keeps its exact behaviour.
+
+### Fixed — `make validate` could not work on a virtualenv checkout
+
+`harness.spec.run_validation` runs operator-authored `validation_command` strings
+under `shell=True`, and 13 of them start with a bare `python`, which resolves
+through `PATH`. On a checkout whose dependencies live in a virtualenv, every
+command died with `ModuleNotFoundError: No module named 'pydantic'` — the same
+bug class as the hook failure above. `_validation_env()` front-loads
+`Path(sys.executable).parent` onto `PATH`, so a bare `python` in an operator
+string reaches the interpreter that launched the harness without rewriting the
+command strings or giving up the shell semantics `HARNESS_SPEC.md` §5 promises.
+
+### Fixed — `test-windows` red: a glob that was case-sensitive only on Linux
+
+`test_doc_reconciliation_aqa.py` globbed `ADR-*.md` to enumerate ADRs. `Path.glob`
+delegates case sensitivity to the filesystem, so on Windows it also matched
+`adr-log.md` — the index itself — and the test demanded that the index link to
+itself. It failed the `test-windows (3.11)` leg while passing all three Linux
+legs. Fixed with an explicit case-sensitive `_is_adr_document` predicate, pinned
+by a test asserted against the predicate rather than the glob (a glob-driven pin
+would pass on Linux no matter what the predicate does — which is how the bug
+reached CI).
+
+### Added — a gate that ran nowhere, and a sweep so the next one cannot hide
+
+`tools.claude_hooks.docs_trimmer` enforces the root `CLAUDE.md` line budget and
+ran **only** in `scripts/ci.sh`; no workflow invoked it, so a PR that blew the
+budget passed all 17 jobs. It is now a `local-gates` step.
+
+The durable half is `TestEveryCiShGateReachesCi` in
+`test_ci_gate_wiring_aqa.py`: it discovers ci.sh's gate invocations by regex and
+asserts each appears in some workflow, with a documented `_CI_EXEMPT_GATES` map
+for the deliberate exceptions (`check_branch_coverage.py`, which re-runs the
+whole suite the blocking `test` job already pays for; the pillar-dispatch
+dry-run and `mousedroid.main` startup probe, both covered by pytest). It carries
+its own anti-vacuity pin, because a regex that matches nothing would turn the
+sweep into an unconditional pass.
+
 ### Fixed — `assert` guards stripped in the shipped image (tech-debt Wave 1)
 
 `Dockerfile.jetson` sets `PYTHONOPTIMIZE=1`, which strips every `assert`, while

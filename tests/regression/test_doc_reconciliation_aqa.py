@@ -384,9 +384,37 @@ def test_live_docs_state_the_real_advisory_job_count() -> None:
 _ADR_LOG_LINK = re.compile(r"\]\((ADR-[^)]+\.md)\)")
 
 
+def _is_adr_document(name: str) -> bool:
+    """Whether ``name`` is an ADR document rather than the index itself.
+
+    The explicit, case-*sensitive* prefix check is not redundant with the glob
+    below. ``Path.glob`` delegates case sensitivity to the filesystem, so on
+    Windows (and on case-insensitive macOS volumes) ``ADR-*.md`` also matches
+    ``adr-log.md`` — the index — and the reconciliation test then demands that
+    the index link to itself. That is exactly how this failed on the
+    ``test-windows`` CI leg while passing on all three Linux legs.
+    """
+    return name.startswith("ADR-")
+
+
 def _adr_files_on_disk() -> set[str]:
     """Every ``docs/architecture/ADR-*.md`` filename."""
-    return {path.name for path in _ARCHITECTURE_DIR.glob("ADR-*.md")}
+    return {
+        path.name for path in _ARCHITECTURE_DIR.glob("ADR-*.md") if _is_adr_document(path.name)
+    }
+
+
+def test_the_adr_index_is_not_mistaken_for_an_adr() -> None:
+    """Platform-independent pin for the case-sensitivity bug above.
+
+    Asserted against the predicate rather than the glob, because on a
+    case-sensitive filesystem the glob excludes ``adr-log.md`` on its own — a
+    pin driven through the glob would pass on Linux no matter what the predicate
+    does, which is how the original bug reached CI.
+    """
+    assert not _is_adr_document("adr-log.md")
+    assert not _is_adr_document("adr-log.MD")
+    assert _is_adr_document("ADR-018-gate-severity-and-advisory-promotion.md")
 
 
 def _adr_files_linked_from_log() -> set[str]:

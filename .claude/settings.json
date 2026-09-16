@@ -25,12 +25,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && python3 -m tools.claude_hooks.secret_scan",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/tools/claude_hooks/run_hook.sh\" -m tools.claude_hooks.secret_scan",
             "timeout": 30
           },
           {
             "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && python3 -m tools.claude_hooks.freeze_gate",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/tools/claude_hooks/run_hook.sh\" -m tools.claude_hooks.freeze_gate",
             "timeout": 15
           }
         ]
@@ -42,12 +42,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && python3 -m tools.claude_hooks.post_edit_check",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/tools/claude_hooks/run_hook.sh\" -m tools.claude_hooks.post_edit_check",
             "timeout": 90
           },
           {
             "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && python3 -m tools.claude_hooks.ratchet_budget_check",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/tools/claude_hooks/run_hook.sh\" -m tools.claude_hooks.ratchet_budget_check",
             "timeout": 30
           }
         ]
