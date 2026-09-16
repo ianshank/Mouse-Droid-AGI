@@ -16,7 +16,7 @@ for the `docs/` tree.
 - [architecture/c4-overview.md](architecture/c4-overview.md) — **canonical** C4 diagram index (Context →
   Container → Component), routing to the per-area component diagrams.
 - [architecture.md](architecture.md) — single-page prose walkthrough (Levels 1–4 with all sub-diagrams).
-- [architecture/adr-log.md](architecture/adr-log.md) — Architecture Decision Log (ADR-004…015 + l4t-container);
+- [architecture/adr-log.md](architecture/adr-log.md) — Architecture Decision Log (ADR-004…018 + l4t-container);
   new ADRs use [architecture/adr/TEMPLATE.md](architecture/adr/TEMPLATE.md).
 
 ## Reference

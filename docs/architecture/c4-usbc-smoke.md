@@ -22,7 +22,7 @@ flowchart TB
 
     subgraph CI["CI surface (.github/workflows/ci.yml)"]
         UsbcGate["usbc-config-gate job\nruns test_jetson_production_overlay.py"]
-        Regression["tests/unit/test_jetson_production_overlay.py\n• YAML declares rover_esp32 + lidar_ld19\n• glob matches esp32.serial_port chip family\n• default.yaml stays disabled"]
+        Regression["tests/unit/config/test_jetson_production_overlay.py\n• YAML declares rover_esp32 + lidar_ld19\n• glob matches esp32.serial_port chip family\n• default.yaml stays disabled"]
     end
 
     subgraph SmokeWrapper["Smoke wrapper (bash)"]

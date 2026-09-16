@@ -14,7 +14,7 @@ load time instead of silently disabling a gate.
 
 from __future__ import annotations
 
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 import yaml
@@ -106,6 +106,84 @@ class SecretScanConfig(BaseModel):
         return value
 
 
+class MypyProfile(BaseModel):
+    """Per-path mypy invocation profile for the advisory post-edit check.
+
+    mypy derives a *module name* from a file's path, so a single argument set
+    cannot serve two trees that sit differently relative to their package base.
+    ``src/mousedroid/**`` resolves correctly under mypy's defaults, but
+    ``tools/claude_hooks/**`` — a package under a plain directory that imports
+    itself as ``tools.claude_hooks.*`` — needs ``--explicit-package-bases`` with
+    ``MYPYPATH`` at the repository root. Without them mypy finds the file twice
+    ("Source file found twice under different module names") and **checks
+    nothing**, reporting that collision as the only finding.
+
+    This is the same split CI already runs as two separate mypy invocations
+    (``.github/workflows/ci.yml``: ``mypy src/`` in ``typecheck``, and
+    ``MYPYPATH=. mypy tools/claude_hooks/ --explicit-package-bases`` in
+    ``local-gates``). A profile list is how the edit-time check reproduces that
+    split without hardcoding a tree name in the hook.
+    """
+
+    model_config = _STRICT
+
+    paths: list[str] = Field(
+        min_length=1,
+        description=(
+            "Repo-relative glob patterns, evaluated in order. The first profile "
+            "matching the edited file supplies that file's mypy invocation. At "
+            "least one pattern is required: a profile with no paths can never "
+            "match, so it would be silently inert -- and this schema's whole "
+            "posture (extra='forbid') is that a configuration mistake fails loudly."
+        ),
+    )
+    args: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Full mypy argument list for matching files, replacing "
+            "post_edit.mypy_args rather than extending it — a profile exists "
+            "because the default set is wrong for the tree, so appending to it "
+            "would keep the wrong flags."
+        ),
+    )
+    mypy_path: str | None = Field(
+        default=None,
+        description=(
+            "Repo-relative value exported as MYPYPATH for matching files, or "
+            "null to inherit the ambient environment. '.' means the repository "
+            "root, which is what a package under a plain directory needs."
+        ),
+    )
+
+    @field_validator("mypy_path")
+    @classmethod
+    def _reject_absolute_mypy_path(cls, value: str | None) -> str | None:
+        """Keep MYPYPATH repo-relative and inside the checkout (invariant I-3).
+
+        An absolute path here pins the config to one machine, which is what
+        ``portability.find_absolute_paths`` exists to stop -- and since the hook
+        joins this onto the repo root, a value that escapes the checkout sends
+        MYPYPATH somewhere arbitrary.
+
+        ``PurePosixPath`` alone is not enough, and an earlier version of this
+        validator that used only it was strictly weaker than the authority its
+        docstring cited: ``PurePosixPath("C:\\Users\\me").is_absolute()`` is
+        ``False``, so Windows drive-letter paths sailed through, even though
+        ``portability`` ships a dedicated ``_WINDOWS_ABSOLUTE_RE`` for exactly
+        that shape. ``~`` and ``..`` are rejected for the same reason: both
+        resolve outside the checkout.
+        """
+        if value is None:
+            return value
+        if PurePosixPath(value).is_absolute() or PureWindowsPath(value).is_absolute():
+            raise ValueError("must be repo-relative, not absolute")
+        if value.startswith("~"):
+            raise ValueError("must be repo-relative; '~' expands outside the checkout")
+        if ".." in PurePosixPath(value).parts:
+            raise ValueError("must stay inside the checkout; '..' escapes the repo root")
+        return value
+
+
 class PostEditConfig(BaseModel):
     """Advisory post-edit check settings (report-only by platform contract)."""
 
@@ -121,6 +199,25 @@ class PostEditConfig(BaseModel):
     ruff_args: list[str] = Field(default_factory=lambda: ["check", "--no-fix"])
     mypy_args: list[str] = Field(
         default_factory=lambda: ["--ignore-missing-imports", "--follow-imports=silent"]
+    )
+    mypy_profiles: list[MypyProfile] = Field(
+        default_factory=lambda: [
+            MypyProfile(
+                paths=["tools/**"],
+                args=[
+                    "--ignore-missing-imports",
+                    "--follow-imports=silent",
+                    "--explicit-package-bases",
+                ],
+                mypy_path=".",
+            )
+        ],
+        description=(
+            "Per-path mypy invocation overrides, first match wins. Files matching "
+            "no profile use mypy_args unchanged, so this field is additive: a "
+            "config written before it existed keeps its exact behaviour for "
+            "src/ and gains the correct invocation for tools/."
+        ),
     )
 
 

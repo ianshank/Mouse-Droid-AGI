@@ -20,6 +20,7 @@ that specific claim was attempted and abandoned as too fragile.
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -27,6 +28,8 @@ import yaml
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CI_YML = _REPO_ROOT / ".github" / "workflows" / "ci.yml"
 _PYPROJECT = _REPO_ROOT / "pyproject.toml"
+_ARCHITECTURE_DIR = _REPO_ROOT / "docs" / "architecture"
+_ADR_LOG = _ARCHITECTURE_DIR / "adr-log.md"
 
 # Live surfaces that state the CI job count in prose. Point-in-time records
 # (CHANGELOG.md, openspec/changes/**) are deliberately excluded -- they
@@ -215,4 +218,227 @@ def test_orchestrator_claude_md_names_only_real_symbols() -> None:
         f"orchestrator/CLAUDE.md names symbols that no longer resolve: "
         f"{missing_from_source} -- either they moved (update the map above) "
         "or the doc is drifting again"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Advisory-job count (the drift the bare-"N jobs" exclusion above made invisible)
+# ---------------------------------------------------------------------------
+#
+# ``_TOTAL_JOB_COUNT`` deliberately does NOT match a bare "N jobs", because that
+# phrasing also catches the true statement "5 jobs run *(advisory)*" -- which
+# names the advisory SUBSET, not the total. Correct as far as it goes, but it
+# left the subset count itself entirely unpinned, and it promptly drifted:
+# ``docs/claude/surfaces/ci-gates.md`` claimed six advisory jobs while the root
+# ``CLAUDE.md`` said five and ``ci.yml`` carried five, after the ``security``
+# job was promoted advisory -> blocking on 2026-09-16. Two live surfaces
+# contradicting each other, with the source of truth agreeing with neither by
+# accident. This pins the subset the same way the total is pinned.
+
+# Point-in-time records: they describe what was true when written, and several
+# QUOTE a past count verbatim while explaining an earlier drift. Rewriting them
+# to match today's tree would destroy the record. Same exclusion rationale as
+# _JOB_COUNT_DOCS above, widened to the dated planning/progress surfaces --
+# docs/planning/TECH_DEBT_REMEDIATION_PLAN.md states "6 advisory jobs" as its
+# declared baseline (dddc16c), which was true at that baseline.
+_POINT_IN_TIME_DOCS = (
+    "CHANGELOG.md",
+    "progress.md",
+    "openspec/",
+    "docs/planning/",
+    "docs/analysis/",
+)
+
+# A line only states an advisory count if it also NAMES the advisory concept --
+# otherwise "15 jobs total" reads as an advisory claim. Required on the line.
+_ADVISORY_MARKER = re.compile(r"advisory|continue-on-error", re.IGNORECASE)
+
+# The two phrasings this repo uses for the advisory SUBSET. Kept tight for the
+# same reason _TOTAL_JOB_COUNT is: "(\d+)\s+jobs?" alone matches "15 jobs
+# total, 5 advisory" (docs/analysis/...) and would read the TOTAL as the subset.
+_ADVISORY_COUNT_CLAIMS = (
+    re.compile(r"(\d+)\s+advisory\s+(?:job|stage)s?\b", re.IGNORECASE),
+    re.compile(r"(\d+)\s+jobs?\s+(?:run|carry|are)\b", re.IGNORECASE),
+)
+
+_CONTINUE_ON_ERROR_LITERAL = "continue-on-error: true"
+
+
+def _strip_comments(text: str) -> str:
+    """Drop whole-line ``#`` comments, keeping ``#`` inside a value.
+
+    Mirrors the helper of the same name in ``test_ci_gate_wiring_aqa.py``
+    (duplicated rather than imported: that module is a sibling test, not a
+    shared fixture, and importing it would drag its whole collection in).
+
+    Load-bearing here, not decorative. ``grep -c 'continue-on-error: true'``
+    over the raw ``ci.yml`` returns **6** while only **5** jobs carry it: the
+    promotion-status comment above the ``onnx-world-model-extras`` job quotes
+    the literal inside a ``#`` line. So a substring-counting derivation is
+    satisfiable by a comment -- it would have "derived" the very wrong number
+    this test exists to catch, and would keep on deriving it after a real
+    advisory job was promoted, as long as the prose comment survived.
+    """
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+
+
+def _real_advisory_job_count() -> int:
+    """How many ``ci.yml`` jobs actually carry ``continue-on-error: true``.
+
+    Derived from the parsed jobs mapping -- never hardcoded, so promoting or
+    demoting a job updates this automatically and the docs are what break.
+    """
+    data = yaml.safe_load(_CI_YML.read_text(encoding="utf-8"))
+    jobs = data.get("jobs")
+    assert isinstance(jobs, dict), "ci.yml has no jobs mapping"
+    return sum(1 for spec in jobs.values() if spec.get("continue-on-error") is True)
+
+
+def _tracked_docs() -> list[Path]:
+    """Every tracked ``*.md``, from ``git ls-files``.
+
+    Discovery rather than a hardcoded roster, following ``_tracked_docs`` in
+    ``test_ci_gate_wiring_aqa.py``: a new surface that states an advisory count
+    is covered the moment it is committed, with no list to remember to extend.
+    """
+    result = subprocess.run(
+        ["git", "ls-files", "--", "*.md"],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return [_REPO_ROOT / line for line in result.stdout.splitlines() if line.strip()]
+
+
+def _is_point_in_time(relpath: str) -> bool:
+    return any(relpath == prefix or relpath.startswith(prefix) for prefix in _POINT_IN_TIME_DOCS)
+
+
+def test_advisory_job_count_derivation_is_not_comment_satisfiable() -> None:
+    """The derivation and a comment-stripped literal count must agree.
+
+    Cross-checks the two independent ways of asking the question. They diverge
+    only if (a) a ``continue-on-error: true`` was added at STEP level rather
+    than job level -- legitimate, but then :func:`_real_advisory_job_count`
+    undercounts what a reader greps, and the docs need to say which they mean;
+    or (b) the parse and the text genuinely disagree, which is a ci.yml bug.
+    Either way it wants a human, not a silently-passing pin.
+    """
+    parsed = _real_advisory_job_count()
+    stripped = _strip_comments(_CI_YML.read_text(encoding="utf-8"))
+    literal = stripped.count(_CONTINUE_ON_ERROR_LITERAL)
+    assert literal == parsed, (
+        f"ci.yml's parsed job-level advisory count is {parsed} but the "
+        f"comment-stripped text contains {literal} occurrences of "
+        f"{_CONTINUE_ON_ERROR_LITERAL!r} -- a step-level continue-on-error, or "
+        "a real ci.yml inconsistency. Resolve it rather than relaxing this."
+    )
+    raw = _CI_YML.read_text(encoding="utf-8").count(_CONTINUE_ON_ERROR_LITERAL)
+    assert raw >= literal, "comment stripping added occurrences, which is impossible"
+
+
+def test_live_docs_state_the_real_advisory_job_count() -> None:
+    """No live surface may state an advisory-job count but the real one.
+
+    Regression target: ``docs/claude/surfaces/ci-gates.md`` said "6 jobs carry
+    ``continue-on-error: true``" after ``security`` was promoted to blocking,
+    contradicting the root ``CLAUDE.md``'s "5 jobs run *(advisory)*" on the
+    same fact. ``advisory_stages.yaml`` is machine-checked by
+    ``scripts/check_advisory_promotions.py``; this prose was not, which is why
+    the promotion could update the tracker and leave the narrative behind.
+    """
+    real_count = _real_advisory_job_count()
+    offenders: list[str] = []
+    for doc in _tracked_docs():
+        relpath = doc.relative_to(_REPO_ROOT).as_posix()
+        if _is_point_in_time(relpath):
+            continue
+        for lineno, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), start=1):
+            if not _ADVISORY_MARKER.search(line):
+                continue
+            claimed = {n for pattern in _ADVISORY_COUNT_CLAIMS for n in pattern.findall(line)}
+            wrong = sorted(n for n in claimed if int(n) != real_count)
+            if wrong:
+                offenders.append(f"{relpath}:{lineno} claims {wrong}")
+    assert not offenders, (
+        "these live lines state an advisory-job count that does not match "
+        f"ci.yml's real count ({real_count} jobs carrying continue-on-error: "
+        f"true): {offenders}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# ADR log <-> ADR files on disk (bidirectional)
+# ---------------------------------------------------------------------------
+#
+# ADR-017 (God-Files Decomposition) shipped, is referenced by name from
+# orchestrator/CLAUDE.md, telemetry/CLAUDE.md and ADR-018, and was absent from
+# adr-log.md's table entirely -- the table ran 004..016 + l4t-container. The log
+# is the index an engineer reads to find out what has already been decided, so a
+# missing row is a decision that effectively does not exist.
+
+# Markdown link targets inside adr-log.md that point at an ADR file. Matches the
+# table's own `[017](ADR-017-god-files-decomposition.md)` link form; the
+# numbering note's `[adr/TEMPLATE.md]` link does not match the ADR-* prefix.
+_ADR_LOG_LINK = re.compile(r"\]\((ADR-[^)]+\.md)\)")
+
+
+def _is_adr_document(name: str) -> bool:
+    """Whether ``name`` is an ADR document rather than the index itself.
+
+    The explicit, case-*sensitive* prefix check is not redundant with the glob
+    below. ``Path.glob`` delegates case sensitivity to the filesystem, so on
+    Windows (and on case-insensitive macOS volumes) ``ADR-*.md`` also matches
+    ``adr-log.md`` — the index — and the reconciliation test then demands that
+    the index link to itself. That is exactly how this failed on the
+    ``test-windows`` CI leg while passing on all three Linux legs.
+    """
+    return name.startswith("ADR-")
+
+
+def _adr_files_on_disk() -> set[str]:
+    """Every ``docs/architecture/ADR-*.md`` filename."""
+    return {path.name for path in _ARCHITECTURE_DIR.glob("ADR-*.md") if _is_adr_document(path.name)}
+
+
+def test_the_adr_index_is_not_mistaken_for_an_adr() -> None:
+    """Platform-independent pin for the case-sensitivity bug above.
+
+    Asserted against the predicate rather than the glob, because on a
+    case-sensitive filesystem the glob excludes ``adr-log.md`` on its own — a
+    pin driven through the glob would pass on Linux no matter what the predicate
+    does, which is how the original bug reached CI.
+    """
+    assert not _is_adr_document("adr-log.md")
+    assert not _is_adr_document("adr-log.MD")
+    assert _is_adr_document("ADR-018-gate-severity-and-advisory-promotion.md")
+
+
+def _adr_files_linked_from_log() -> set[str]:
+    return set(_ADR_LOG_LINK.findall(_ADR_LOG.read_text(encoding="utf-8")))
+
+
+def test_every_adr_on_disk_has_a_row_in_the_adr_log() -> None:
+    """An ADR nobody can find from the index is an undiscoverable decision."""
+    missing = sorted(_adr_files_on_disk() - _adr_files_linked_from_log())
+    assert not missing, (
+        f"these ADRs exist in docs/architecture/ but adr-log.md links to none "
+        f"of them: {missing} -- add a table row (ADR, Title, Status, Date, "
+        "Area). The log is the index; an unlisted ADR is a decision a future "
+        "engineer cannot find, so they will re-litigate or contradict it."
+    )
+
+
+def test_every_adr_the_log_links_to_exists_on_disk() -> None:
+    """The other direction: no row may point at a file that is not there.
+
+    A dead link in the index is worse than a missing row -- it looks like the
+    decision is recorded and reachable right up until someone clicks it.
+    """
+    dangling = sorted(_adr_files_linked_from_log() - _adr_files_on_disk())
+    assert not dangling, (
+        f"adr-log.md links to ADR files that do not exist: {dangling} -- "
+        "either the file was renamed (fix the link) or removed (an ADR is "
+        "immutable once accepted; supersede it with a new one instead)"
     )

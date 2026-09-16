@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, MutableMapping
 from typing import Any
 
+from mousedroid.constants import MILLISECONDS_PER_SECOND
 from mousedroid.logging.setup import get_logger
 
 _log = get_logger(__name__)
@@ -126,9 +127,9 @@ def seconds_to_hz(value: Any) -> float:
 
 def milliseconds_to_seconds(value: Any) -> float:
     """Convert milliseconds to seconds."""
-    return float(value) / 1000.0  # hardcoded-ok
+    return float(value) / MILLISECONDS_PER_SECOND
 
 
 def seconds_to_milliseconds(value: Any) -> float:
     """Convert seconds to milliseconds."""
-    return float(value) * 1000.0  # hardcoded-ok
+    return float(value) * MILLISECONDS_PER_SECOND

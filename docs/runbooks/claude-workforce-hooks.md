@@ -18,23 +18,42 @@ adding them here does not shadow yours.
 | `tools.claude_hooks.freeze_gate` | PreToolUse (same matcher) | Yes | Denies edits to frozen capability paths until the gate feature lands |
 | `tools.claude_hooks.post_edit_check` | PostToolUse | No | Runs `ruff`/`mypy` on the file just edited and reports findings |
 
-Each command is `cd "$CLAUDE_PROJECT_DIR" && python3 -m tools.claude_hooks.<module>`.
+Each command is `bash "$CLAUDE_PROJECT_DIR/tools/claude_hooks/run_hook.sh" -m
+tools.claude_hooks.<module>`. The wrapper resolves an interpreter that can actually
+import the hook package (probing `import tools.claude_hooks.config`) instead of
+trusting `PATH` order, and chdirs to the project root so `-m` works. Set
+`MOUSEDROID_PYTHON` to override it outright.
 The `cd` and the `-m` form are both load-bearing: running the module *file* by
 path leaves the repository root off `sys.path`, and the package import fails on
 every edit. `tests/regression/test_claude_workforce_aqa.py` pins this.
 
 ## Known limitations
 
-* **`python3` on PATH.** The hook commands invoke `python3`. On a Windows shell
-  without a `python3` alias the hook fails to start; Claude Code surfaces the
-  error and continues (only a deny decision blocks), so edits are not stuck, but
-  the gates are silently inactive. Adjust the commands in `.claude/settings.json`
-  if you work on such a host.
-* **Repository dependencies must be installed.** The hooks import `pydantic` and
-  `pyyaml` — both core dependencies, so `pip install -e .` is enough. In a fresh
-  clone without an install, each hook exits with an import error, which Claude
-  Code reports as a non-blocking warning. The gates are inactive until the
-  install completes; the AQA test in CI is the backstop.
+* **~~`python3` on PATH.~~ Fixed — and it was not hypothetical.** This bullet used
+  to say the hook commands invoke `python3`, that the gates would then be
+  "silently inactive", and that you should adjust `.claude/settings.json`
+  yourself. That is exactly what happened, on Linux rather than Windows: `python3`
+  resolved to the system interpreter, which has no `pydantic`, so every hook
+  exited 1 — a non-blocking hook *error* — and the F-008 freeze gate and the
+  edit-time secret scan were bypassed for months with no visible symptom.
+  `tools/claude_hooks/run_hook.sh` now resolves an interpreter by *capability*
+  (it probes `import tools.claude_hooks.config`) rather than by `PATH` order,
+  preferring a project virtualenv in either layout (`.venv/Scripts/python.exe`,
+  then `.venv/bin/python`) and honouring `MOUSEDROID_PYTHON` outright. Two
+  regression pins in `tests/regression/test_claude_workforce_aqa.py` keep it that
+  way: no wired command may name an interpreter from `PATH`, and the wrapper must
+  actually resolve one that can import the hook package when `PATH` is hostile.
+* **The no-capable-interpreter path still fails open, by decision.** In a fresh
+  clone with no install, the wrapper prints
+  `run_hook.sh: no interpreter could import tools.claude_hooks.config … gates
+  will fail open` on stderr and then runs the incapable interpreter anyway, so the
+  hook exits 1 and the edit proceeds ungated. Failing closed is not a one-liner —
+  a PreToolUse deny is exit 0 plus a JSON payload, and exit 2 on a PostToolUse
+  hook feeds stderr back to the model instead of blocking — so it needs the
+  wrapper to know which event it serves. `pip install -e .` is the fix; the
+  blocking `gitleaks` CI job and the F-024 review discipline are the backstop.
+  A typo'd `MOUSEDROID_PYTHON` is the one case that now fails *loudly*: the
+  wrapper checks it is executable and names the variable if it is not.
 * **Config sections `docs`, `worktree` and `evidence` are declared but not yet
   read** by any shipped code. They are the homes reserved for the later phases of
   the change bundle (skills, worktree flow, evidence audit) so thresholds land in
@@ -118,7 +137,7 @@ Drive a hook by hand with a synthetic payload:
 
 ```bash
 echo '{"tool_name":"Write","tool_input":{"file_path":"src/mousedroid/arm/x.py"}}' \
-  | python3 -m tools.claude_hooks.freeze_gate
+  | bash "$CLAUDE_PROJECT_DIR/tools/claude_hooks/run_hook.sh" -m tools.claude_hooks.freeze_gate
 ```
 
 Empty stdout means "no objection" (an explicit `allow` would bypass your normal

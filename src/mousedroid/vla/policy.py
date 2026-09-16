@@ -331,13 +331,19 @@ class DistilledVLAOnnx:
         """
         if self._session is None:
             self.warmup()
-        assert self._session is not None
+        session = self._session
+        if session is None:
+            # NOT assert: stripped under PYTHONOPTIMIZE=1 (the Jetson Docker
+            # entrypoint), which would turn a silently-failed warmup into an
+            # AttributeError on the inference path instead of a named fault.
+            msg = "warmup() returned without an ONNX session; cannot run inference"
+            raise RuntimeError(msg)
 
         start = time.perf_counter()
         with torch.no_grad():
             h_np = observation.h.detach().cpu().numpy().astype("float32", copy=False)
             z_np = observation.z.detach().cpu().numpy().astype("float32", copy=False)
-            outputs = self._session.run(
+            outputs = session.run(
                 [self._action_output_name],
                 {self._h_input_name: h_np, self._z_input_name: z_np},
             )

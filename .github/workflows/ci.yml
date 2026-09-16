@@ -180,7 +180,17 @@ jobs:
                   # telemetry/{auth,server}.py and hardware/display/expressions.py.
                   # Without them --ignore-missing-imports degrades those to Any and
                   # strict mode flags untyped-decorator / valid-type errors.
-                  pip install -e ".[dev,telemetry]"
+                  #
+                  # mlflow is here for the SAME reason, in the opposite direction:
+                  # mlflow-skinny ships real type information, so a `cast` that is
+                  # necessary when mlflow is absent (Any -> no-any-return) becomes a
+                  # `redundant-cast` error once it is present. That asymmetry was
+                  # invisible while no job ran mypy with mlflow installed. Checking
+                  # it HERE rather than in the advisory `mlflow-extras` job is
+                  # deliberate: this job is blocking and matrixed over 3.10-3.12, and
+                  # one dependency set for every mypy run is what stops the two
+                  # diverging again.
+                  pip install -e ".[dev,telemetry,mlflow]"
                   pip install typing_extensions>=4.0
 
             - name: Type check
@@ -252,9 +262,13 @@ jobs:
             # plus security. F-028 wired the directories; F-038 relabels so
             # this step is not read as production operator-path coverage.
             # Production MouseDroidOrchestrator is already in e2e/integration/
-            # smoke. These go in `test` (blocking), NOT the advisory
-            # `security` job: that job is continue-on-error and would swallow
-            # every failure.
+            # smoke. These go in `test`, NOT the `security` job. The original
+            # reason was that `security` was continue-on-error and would swallow
+            # every failure; it is blocking since 2026-09-16, so the separation
+            # now rests on purpose instead: `security` audits the dependency
+            # tree (pip-audit) and installs a different extras set, so hosting a
+            # Python test tier there would couple it to a supply-chain scan's
+            # lifecycle. Pinned by TestOrphanTierWiring.
             - name: Run parked-autonomous functional/user-journey + security tiers
               run: |
                   pytest tests/functional tests/user_journey tests/security \
@@ -396,11 +410,22 @@ jobs:
             - name: Subsystem boundary gate (Protocol-based DI, full tree)
               run: python scripts/check_subsystem_boundaries.py
 
+            - name: Docs core line budget (CLAUDE.md vs DocsConfig.core_max_lines)
+              # Was a scripts/ci.sh-only gate: no workflow ran it, so a PR that
+              # blew the budget passed all 17 jobs. The unit tests exercise the
+              # tool against synthetic fixtures only — nothing asserted the real
+              # CLAUDE.md is under its configured ceiling until this step.
+              run: python -m tools.claude_hooks.docs_trimmer
+
             - name: Doc hygiene (strict size/checkmark budget)
               run: python tools/doc_hygiene.py NEXT_STEPS.md --strict
 
             - name: Ratchet budgets (advisory early warning, exits 0 unless --strict)
-              run: python -m tools.ratchet_budgets
+              # --strict gates on a ceiling BREACH only; an approaching-budget
+              # warning still prints but exits 0. Without that split the flag
+              # would be perma-red here, since the ratchet discipline lowers each
+              # ceiling to the current count, so a healthy budget sits at it.
+              run: python -m tools.ratchet_budgets --strict
 
             - name: Workforce hook coverage (line gate + advisory branch)
               run: |
@@ -614,6 +639,18 @@ jobs:
               # log shows no versions to diff against the last green run.
               run: pip list 2>/dev/null | grep -Ei 'mlflow|sqlalchemy|alembic' || true
 
+            # NOTE: no mypy step here. A first attempt added one, and it failed —
+            # this job installs `.[dev,mlflow]` with no `telemetry` extra, so
+            # aiohttp is absent and `mypy --strict` reports three
+            # `untyped-decorator` errors on the `@web.middleware` functions in
+            # telemetry/auth.py and telemetry/server/_lifecycle.py. That is the
+            # mirror image of the bug the step was meant to catch: mypy --strict is
+            # sensitive to the whole installed dependency set, so running it under a
+            # different extras combination reports different errors rather than more
+            # of them. The mlflow typecheck now lives in the blocking, matrixed
+            # Stage 2 `typecheck` job, which installs `[dev,telemetry,mlflow]`.
+            # This job stays what it was: a runtime exercise of the mlflow extra.
+
             - name: Run mlflow-touching test suite
               run: |
                   pytest tests/unit/training/observability/test_mlflow_logger.py \
@@ -709,17 +746,25 @@ jobs:
                   if-no-files-found: ignore
 
     # -------------------------------------------------------------------------
-    # Stage 5: Security audit
+    # Stage 5: Security audit — pip-audit (F-020) — BLOCKING since 2026-09-16
     # -------------------------------------------------------------------------
-    # Advisory via continue-on-error (tracked in .github/advisory_stages.yaml)
-    # rather than the previous `|| echo ::warning::` swallow, which made the
-    # job invisible to scripts/check_advisory_promotions.py — an advisory
-    # stage with no promotion clock is a permanent soft gate.
+    # History, because the shape matters: this job spent its whole life soft-failed
+    # behind `|| echo ::warning::`, which made it invisible to
+    # scripts/check_advisory_promotions.py — an advisory stage with no promotion
+    # clock is a permanent soft gate. Converting the swallow into
+    # continue-on-error gave it a clock; that clock has now run out in its favour.
+    # Promoted advisory -> BLOCKING (tech-debt Wave 1). Its 60-day window opened
+    # 2026-07-25 and closed 2026-09-23; the promotion bar was "triage the current
+    # findings", and `pip-audit --skip-editable` reports zero vulnerabilities
+    # across the resolved [dev,telemetry,mcp] set (123 packages, incl. every
+    # network-facing one: aiohttp, cryptography, pyjwt, starlette, uvicorn, h11).
+    # The `advisory_stages.yaml` entry is removed in the same change, per the
+    # gitleaks precedent recorded there — the tracker only covers jobs that still
+    # carry continue-on-error.
     security:
         runs-on: ubuntu-latest
         timeout-minutes: 20
         needs: lint
-        continue-on-error: true
         steps:
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
             - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -751,8 +796,8 @@ jobs:
             # failed on that (not on real findings) every run; the old
             # `|| echo` swallow just hid it. Without --strict, the local
             # package warns while real dependency vulnerabilities still exit
-            # non-zero and trip this advisory job.
-            - name: Security audit (advisory via continue-on-error)
+            # non-zero and fail this job (blocking since 2026-09-16).
+            - name: Security audit (blocking since 2026-09-16)
               run: pip-audit --skip-editable
 
     # -------------------------------------------------------------------------

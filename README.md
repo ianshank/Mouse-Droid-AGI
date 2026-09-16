@@ -102,7 +102,7 @@ graph TD
 
 Full C4 diagrams (Context → Container → Component → Code) live in [`docs/architecture/c4-overview.md`](docs/architecture/c4-overview.md) and the comprehensive [Hardened Autonomous Architecture Guide](docs/architecture/autonomous-hardened-architecture.md).
 
-**Runtime / validation alignment.** `src/mousedroid/validation/runtime.py` centralises config-overlay resolution and factory-backed checks for camera, mic, speaker, and LiDAR; the smoke and validate scripts reuse that same layer. The USB-C smoke gate, the cloud/local LLM gateway with pre-egress prompt-injection filtering, and the sim-first RSSM pretraining path all sit **outside** the 30 Hz reactive loop — sense-plan-act stays deterministic and LLM-free. See [`docs/runbooks/jetson-rover-smoke.md`](docs/runbooks/jetson-rover-smoke.md), [`docs/architecture/c4-usbc-smoke.md`](docs/architecture/c4-usbc-smoke.md), and [`docs/architecture/c4-llm-gateway.md`](docs/architecture/c4-llm-gateway.md).
+**Runtime / validation alignment.** `src/mousedroid/validation/runtime/` centralises config-overlay resolution and factory-backed checks for camera, mic, speaker, and LiDAR; the smoke and validate scripts reuse that same layer. The USB-C smoke gate, the cloud/local LLM gateway with pre-egress prompt-injection filtering, and the sim-first RSSM pretraining path all sit **outside** the 30 Hz reactive loop — sense-plan-act stays deterministic and LLM-free. See [`docs/runbooks/jetson-rover-smoke.md`](docs/runbooks/jetson-rover-smoke.md), [`docs/architecture/c4-usbc-smoke.md`](docs/architecture/c4-usbc-smoke.md), and [`docs/architecture/c4-llm-gateway.md`](docs/architecture/c4-llm-gateway.md).
 
 ---
 
@@ -265,7 +265,7 @@ pytest tests/unit/ tests/integration/ tests/regression/        # by category
 The enforced gate is **90% line coverage** (`--cov-fail-under=90` repo-wide, plus
 `scripts/check_branch_coverage.py` for changed files). Branch coverage is measured and
 reported for `tools/claude_hooks/` only, where it is advisory until a baseline exists —
-so it is deliberately not claimed as enforced here. Beyond lint/type/test, CI runs the sub-10-second smoke tier, `config-compat` (schema-drift), `actionlint` (workflow lint), a cyclomatic-complexity gate (`ruff C901`, max 15; [ADR-014](docs/architecture/ADR-014-cyclomatic-complexity-gate.md)), the `local-gates` job (settings identity, workforce-hooks mypy + coverage, skill validator, doc hygiene, ratchet-budget early warning), and an advisory performance tier (`.github/advisory_stages.yaml`). Full strategy: [`docs/testing.md`](docs/testing.md).
+so it is deliberately not claimed as enforced here. Beyond lint/type/test, CI runs the sub-10-second smoke tier, `config-compat` (schema-drift), `actionlint` (workflow lint), a cyclomatic-complexity gate (`ruff C901`, max 15; [ADR-014](docs/architecture/ADR-014-cyclomatic-complexity-gate.md)), the `local-gates` job (settings identity, workforce-hooks mypy + coverage, skill validator, doc hygiene, ratchet budgets (`--strict`: a ceiling breach fails the job; an approaching-budget warning still exits 0)), and an advisory performance tier (`.github/advisory_stages.yaml`). Full strategy: [`docs/testing.md`](docs/testing.md).
 
 ```bash
 ruff check src/ tests/ tools/ && ruff format --check src/ tests/ tools/ && ruff check scripts/

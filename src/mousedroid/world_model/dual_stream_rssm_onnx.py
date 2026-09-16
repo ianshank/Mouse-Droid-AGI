@@ -222,7 +222,13 @@ class DualStreamRSSMOnnx:
         """
         if self._session is None:
             self.warmup()
-        assert self._session is not None
+        session = self._session
+        if session is None:
+            # NOT assert: stripped under PYTHONOPTIMIZE=1 (the Jetson Docker
+            # entrypoint), which would turn a silently-failed warmup into an
+            # AttributeError on the observe-step path instead of a named fault.
+            msg = "warmup() returned without an ONNX session; cannot run observe_step"
+            raise RuntimeError(msg)
 
         # ONNX consumes numpy arrays on CPU. Run the packer with
         # ``device=cpu`` regardless of where the torch tensors live so
@@ -248,7 +254,7 @@ class DualStreamRSSMOnnx:
 
         start = time.perf_counter()
         with torch.no_grad():
-            outputs = self._session.run(self._output_names, feeds)
+            outputs = session.run(self._output_names, feeds)
         elapsed = time.perf_counter() - start
 
         # ORT returns numpy arrays; convert each back to torch on the

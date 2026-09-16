@@ -236,7 +236,8 @@ class CloudExperienceExporter:
         Returns:
             True if upload succeeded.
         """
-        if self._gcs_bucket is None:
+        bucket = self._gcs_bucket
+        if bucket is None:
             return False
 
         now = datetime.now(tz=timezone.utc)
@@ -255,9 +256,15 @@ class CloudExperienceExporter:
         try:
 
             async def _do_upload() -> None:
+                # Closes over the ``bucket`` local bound above the guard, not
+                # ``self._gcs_bucket``. An ``assert`` here would narrow for mypy
+                # and then vanish under PYTHONOPTIMIZE=1 (the Jetson image
+                # default), leaving an AttributeError if a concurrent ``close()``
+                # nulled the attribute between the guard and this coroutine
+                # running. Capturing the object makes the invariant structural:
+                # the in-flight upload completes against the bucket it checked.
                 loop = asyncio.get_running_loop()
-                assert self._gcs_bucket is not None
-                blob = self._gcs_bucket.blob(blob_path)
+                blob = bucket.blob(blob_path)
                 await loop.run_in_executor(None, blob.upload_from_string, data)
 
             await self._cb.call(_do_upload)

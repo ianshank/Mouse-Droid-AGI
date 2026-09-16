@@ -8,6 +8,308 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Security — the MLflow tracking URI's password could reach ten log events
+
+`mlflow_logger.py` redacted credentials in its *initialization* event and then
+logged `error=str(exc)` verbatim in ten `except` blocks. The tracking URI is a
+plain `str`, not a `SecretStr`, and mlflow's own exceptions quote the offending
+URI back — password included. `logging/redaction.py::redact_uris_in_text` was
+written for exactly this case (its docstring names
+`UnsupportedModelRegistryStoreURIException`) and `factory/telemetry.py` already
+used it; it was simply absent from the module that holds the URI.
+
+All ten sites now go through one `_redacted_error` helper. Pinned by a test that
+raises an exception quoting a credentialed URI and asserts the password reaches
+no event while the host still does — a weaker fix that dropped the field would
+pass a password-only assertion, and the host is the diagnostic the event exists
+for. Verified the pin fails with the fix reverted: the password appears in
+plaintext in `mlflow_logger_start_run_failed`.
+
+### Fixed — a new mission could inherit another mission's replan
+
+`MissionLifecycle._handle_stall` held the mission state across the LLM
+`await submit_replan_request(...)`, and the `_require_mission` docstring asserted
+this was safe "because a lifecycle owns one mission and `tick` refuses terminal
+states". That reasoning was wrong: `start_mission` is *sync*, replaces `_mission`
+unconditionally with no in-flight or terminal-state check, and is reachable from
+the aiohttp REST handler (`_handle_mission_post` → `process_mission` →
+`_start_mission_lifecycle_if_wired`) on the same event loop as the 30 Hz tick.
+`tick`'s terminal-state guard constrains `tick`, not `start_mission`.
+
+So a mission arriving during a replan was transitioned to RUNNING with reason
+`replan_succeeded` by a replan nobody requested for it — mislabelling
+`mission_state_transitions_total` — while `replan_count` and `last_goal_vector`
+were written to the abandoned state object. `_handle_stall` now verifies mission
+identity the moment the await returns and abandons the stale replan, and the
+docstring records the false claim rather than quietly replacing it. Pinned by a
+replanner that starts a new mission from inside its own await.
+
+### Changed — review-driven hardening of the hook wrapper and its gates
+
+Peer review found five of this change's own claims false, and the fixes are
+listed here because each was a real hole rather than a wording problem: the
+`MOUSEDROID_PYTHON` override test could not distinguish "honoured" from
+"ignored" in a `.venv` checkout (now points at a sentinel); the capability test
+could not fail on a CI runner, where PATH's interpreter is already capable (now
+seeds a decoy `python3` that always fails); `MypyProfile.mypy_path` accepted
+Windows drive-letter paths because `PurePosixPath("C:\...").is_absolute()` is
+`False` (now also rejects `PureWindowsPath`, `~` and `..`); a profile with no
+`paths` loaded silently inert (now `min_length=1`); and the ci.sh gate sweep
+missed the inline `-c "from pkg.mod import ..."` form — which is how the
+workforce config is validated — while counting YAML *comments* as evidence a
+gate was wired.
+
+The wrapper also gained the repo-wide Windows venv layout
+(`.venv/Scripts/python.exe`, matching `scripts/ci.sh` and the Makefile, whose
+comment warns against exactly this divergence), an executability check on
+`MOUSEDROID_PYTHON` so a typo names itself instead of exiting 127, a guard
+against being wired with no arguments (which would hang the edit until the hook
+timeout), and pins for exit-code fidelity, stdin passthrough and the
+script-relative project-root fallback — three contracts the gates depend on that
+nothing exercised.
+
+### Fixed — `release.yml`'s type check ran a different dependency set than CI
+
+Its own comment says "Extras MUST match ci.yml's `typecheck` job", and adding
+`mlflow` to that job broke the contract without updating this one. `mypy --strict`
+is dependency-set sensitive in both directions — that asymmetry is what made the
+`mlflow-extras` job red — so the divergence is the shape of a tag build failing
+where CI was green. Not known to be load-bearing today (the
+`_resolve_or_create_experiment` annotated-local form satisfies both), which is
+stated plainly rather than claimed as a fix for a live break.
+
+### Fixed — five docs described the pre-fix hook wiring as current
+
+`docs/runbooks/claude-workforce-hooks.md` (the operator's first stop) listed
+`python3` on PATH as a *known limitation* with a manual workaround, and
+predicted the gates would be "silently inactive" — which is exactly what
+happened. `docs/architecture/c4-claude-workforce.md` asserted the old form was
+"Pinned by the AQA test" when the AQA test now pins its opposite. Also corrected:
+`SKILLS.md`, `docs/runbooks/worktrees.md`, and a `Makefile` comment claiming the
+`docs_trimmer` gate had no CI job — the change that gave it one is in this PR.
+
+### Fixed — three factual errors in landed history
+
+`security`'s promotion was recorded as "three days inside its 60-day window" in
+`CHANGELOG.md`, `ADR-018` and `.github/advisory_stages.yaml`. It is 53 days into
+that window, i.e. **seven days before** the 2026-09-23 deadline; the original
+phrasing was simply bad arithmetic. `ADR-018` also cited a historical `noqa`
+ceiling of 20 where the configured value is 19.
+
+### Fixed — two gates that could not catch what they claimed
+
+`test_package_facade_exports_aqa.py` treated any `ast.Constant` as a valid
+`__all__` entry, so `__all__ = [1]` contributed no name *and* was not flagged as
+unresolvable — a facade that raises `TypeError` on star-import passed both halves.
+`test_package_version_single_source.py` compared only `pyproject.toml` against
+`CHANGELOG.md`, leaving `CITATION.cff`, `HARNESS_SPEC.md` and three Dockerfile
+`LABEL version` literals free to drift — and they had, all four still on `0.3.0`.
+All five surfaces are now pinned, with an anti-vacuity check on the roster itself.
+`Makefile`'s `COV_MIN` joined the coverage-threshold parity test for the same
+reason: it drives both `make test-cov` and `make branch-coverage`, so a drifted
+value forks the entire local ladder from CI.
+
+### Fixed — every Claude Code hook was failing open (tech-debt Wave 1)
+
+`.claude/settings.json` wired its four hooks as `cd "$CLAUDE_PROJECT_DIR" &&
+python3 -m tools.claude_hooks.<mod>`. `python3` is whichever interpreter is first
+on the hook process's `PATH` — on this project's containers the *system* one,
+which has no pydantic — so `tools.claude_hooks.config` failed to import and the
+hook exited 1. Claude Code treats a non-2 exit from a `PreToolUse` hook as a
+non-blocking hook *error*, so the F-008 freeze gate and the edit-time secret scan
+were both bypassed with no visible symptom: a gate that never blocks looks
+exactly like a gate with nothing to block.
+
+Reproduced before fixing — under `python3`, an edit to `src/mousedroid/arm/**`
+returned `rc=0` with a `ModuleNotFoundError` traceback instead of the deny
+payload; under the venv interpreter the same payload produced
+`permissionDecision: deny`.
+
+New `tools/claude_hooks/run_hook.sh` is a transparent `python` shim that resolves
+an interpreter by *capability* rather than `PATH` order: it probes candidates
+until one can `import tools.claude_hooks.config` — the module every wired hook
+imports, and the one that pulls in pydantic and PyYAML. Probing beats pointing at
+a hardcoded `.venv/bin/python` because it also rejects a virtualenv that exists
+but never had the dev extra installed. `MOUSEDROID_PYTHON` overrides it outright.
+
+Two regression pins, in `test_claude_workforce_aqa.py`: no wired hook command may
+invoke an interpreter from `PATH`, and — the executable one that would actually
+have caught this — running the wrapper must yield an interpreter that can import
+the hook package.
+
+**This makes the F-008 freeze gate live.** Edits to `src/mousedroid/arm/**` are
+now denied until F-008 reaches `done`, which is the documented intent;
+`MOUSEDROID_WORKFORCE_ALLOW_FROZEN=1` is the reviewed-exception override.
+
+### Fixed — the post-edit mypy check reported a collision instead of findings
+
+With the hooks actually executing, `post_edit_check` answered every edit under
+`tools/claude_hooks/**` with `Source file found twice under different module
+names: "claude_hooks" and "tools.claude_hooks"` — mypy resolving one file to two
+module names, and so checking nothing. A wrong advisory finding is worse than
+none: it trains contributors to ignore the hook, which is how the fail-open bug
+above survived.
+
+One argument set cannot serve both trees, which is why CI already runs mypy
+twice: `src/` needs mypy's defaults, while `tools/claude_hooks/` — a package
+under a plain directory that imports itself as `tools.claude_hooks.*` — needs
+`--explicit-package-bases` with `MYPYPATH` at the repository root. New
+`post_edit.mypy_profiles` (schema: `MypyProfile`) reproduces that split in
+config, first-match-wins, with a default covering `tools/**`. Additive by
+construction: a file matching no profile uses `mypy_args` unchanged, so a
+`workforce.yaml` written before the field existed keeps its exact behaviour.
+
+### Fixed — `make validate` could not work on a virtualenv checkout
+
+`harness.spec.run_validation` runs operator-authored `validation_command` strings
+under `shell=True`, and 13 of them start with a bare `python`, which resolves
+through `PATH`. On a checkout whose dependencies live in a virtualenv, every
+command died with `ModuleNotFoundError: No module named 'pydantic'` — the same
+bug class as the hook failure above. `_validation_env()` front-loads
+`Path(sys.executable).parent` onto `PATH`, so a bare `python` in an operator
+string reaches the interpreter that launched the harness without rewriting the
+command strings or giving up the shell semantics `HARNESS_SPEC.md` §5 promises.
+
+### Fixed — `test-windows` red: a glob that was case-sensitive only on Linux
+
+`test_doc_reconciliation_aqa.py` globbed `ADR-*.md` to enumerate ADRs. `Path.glob`
+delegates case sensitivity to the filesystem, so on Windows it also matched
+`adr-log.md` — the index itself — and the test demanded that the index link to
+itself. It failed the `test-windows (3.11)` leg while passing all three Linux
+legs. Fixed with an explicit case-sensitive `_is_adr_document` predicate, pinned
+by a test asserted against the predicate rather than the glob (a glob-driven pin
+would pass on Linux no matter what the predicate does — which is how the bug
+reached CI).
+
+### Added — a gate that ran nowhere, and a sweep so the next one cannot hide
+
+`tools.claude_hooks.docs_trimmer` enforces the root `CLAUDE.md` line budget and
+ran **only** in `scripts/ci.sh`; no workflow invoked it, so a PR that blew the
+budget passed all 17 jobs. It is now a `local-gates` step.
+
+The durable half is `TestEveryCiShGateReachesCi` in
+`test_ci_gate_wiring_aqa.py`: it discovers ci.sh's gate invocations by regex and
+asserts each appears in some workflow, with a documented `_CI_EXEMPT_GATES` map
+for the deliberate exceptions (`check_branch_coverage.py`, which re-runs the
+whole suite the blocking `test` job already pays for; the pillar-dispatch
+dry-run and `mousedroid.main` startup probe, both covered by pytest). It carries
+its own anti-vacuity pin, because a regex that matches nothing would turn the
+sweep into an unconditional pass.
+
+### Fixed — `assert` guards stripped in the shipped image (tech-debt Wave 1)
+
+`Dockerfile.jetson` sets `PYTHONOPTIMIZE=1`, which strips every `assert`, while
+`pyproject.toml` globally ignored ruff's `S101` — so eight `assert` guards in
+`src/mousedroid` did not exist on the rover, and nothing flagged them.
+
+Scope, stated precisely because an earlier draft of this entry overstated it:
+every caller of the four mission-lifecycle guards already checks for an absent
+mission (`start_mission` assigns immediately beforehand; `tick` and `fail` both
+return early on `None`), so those branches are **unreachable today** and the
+asserts were narrowing hints for mypy rather than live faults. The change is
+defence in depth on the mission path plus removal of a whole class of invisible
+drift — not a rover bug being fixed.
+
+`S101` is no longer globally ignored (it stays exempt for `tests/**`, where
+`assert` is the assertion mechanism and `PYTHONOPTIMIZE` is never set). All eight
+sites are converted: `mission_lifecycle` gained a `_require_mission` narrowing
+accessor raising the new `MissionLifecycleStateError` (a `RuntimeError` subclass,
+so existing handlers still catch); `experience_exporter` and `pubsub_sink` bind
+their checked object to a local above the closure, which also makes an in-flight
+upload/publish survive a concurrent `close()`; `vla/policy` and
+`dual_stream_rssm_onnx` raise explicitly when `warmup()` yields no session.
+
+Three regression pins, each catching a different rot path: an AST sweep for new
+asserts, a pyproject check that `S101` stays enforced, and a subprocess probe
+under `-O` that first proves asserts really are stripped in that interpreter.
+
+### Added — `ratchet_budgets --strict` gates on a breach, and is wired in
+
+`--strict` existed but was never wired into CI because it failed on *any*
+warning, including "approaching budget" — and the ratchet discipline lowers each
+ceiling to the current count, so a healthy budget sits at its ceiling and
+permanently above `warn_threshold`. It is now severity-aware: the new
+`BudgetFinding` distinguishes a ceiling breach from an approaching warning, and
+`--strict` fails only on the breach. `check_budget_item` / `check_all_budgets`
+keep their `list[str]` signatures for the `PostToolUse` hook and the regression
+tests, delegating to the new classifier so the message text has one source.
+Wired into `ci.yml`'s `local-gates` and `scripts/ci.sh`.
+
+### Changed — `security` (pip-audit) promoted advisory → blocking
+
+Promoted 53 days into its 60-day window — 7 days before the deadline (opened
+2026-07-25, due 2026-09-23). An earlier draft of this entry said "three days
+inside", which was wrong arithmetic. The bar
+was triaging findings, not a green window: `pip-audit --skip-editable` reports
+zero vulnerabilities across the resolved `[dev,telemetry,mcp]` set, including
+every network-facing package. The `advisory_stages.yaml` entry is removed in the
+same change per the gitleaks precedent, leaving five advisory jobs.
+
+`SECURITY.md` was updated in the same change. This is a **recurrence class**, not
+a one-off: the same file's stale "advisory" *gitleaks* wording was corrected once
+before (see the Tier 1 entry under "Tech-debt / code-quality audit" below, after
+the 2026-08-07 gitleaks promotion). Every advisory → blocking promotion must
+sweep `SECURITY.md`, `docs/claude/surfaces/ci-gates.md`, `docs/CHARTER.md`,
+`NEXT_STEPS.md`, and the root `CLAUDE.md` advisory count — the prose lives in
+five places and only `advisory_stages.yaml` is machine-checked.
+
+### Fixed — `harness.approval` advertised a facade that did not exist
+
+`__init__.py` declared `__all__ = ["OpenClawSafetyGate", "SandboxPolicyGate"]`
+and imported nothing, so `from mousedroid.harness.approval import *` raised
+`AttributeError`. The names are now bound. A new regression test asserts every
+`__all__` entry in every `src/mousedroid/**/__init__.py` resolves, pinning the
+whole class of bug rather than this instance — statically, so it cannot be made
+flaky by which optional extras are installed.
+
+### Fixed — `mypy --strict` failed whenever the `[mlflow]` extra was installed
+
+Two `redundant-cast` errors in `mlflow_logger.py`, structurally invisible to CI
+because no job installed mlflow *and* ran mypy. Both sites now use the
+annotated-local form the file's own comment already documented.
+
+The gate took two attempts, and the first one is worth recording. A mypy step
+was added to the advisory `mlflow-extras` job, which then failed for the
+*opposite* reason: that job installs `.[dev,mlflow]` with no `telemetry` extra,
+so aiohttp is absent, `--ignore-missing-imports` degrades `web` to `Any`, and
+`mypy --strict` reports `untyped-decorator` on the three `@web.middleware`
+functions in `telemetry/auth.py` and `telemetry/server/_lifecycle.py`.
+
+`mypy --strict` is sensitive to the whole installed dependency set in both
+directions — an absent optional lib degrades to `Any`, a present one that ships
+real types can turn a required `cast` into a redundant one — so a second
+invocation under narrower extras reports *different* errors rather than more of
+them. There is now exactly one invocation, in the **blocking, matrixed**
+`typecheck` job, which installs `.[dev,telemetry,mlflow]`; `mlflow-extras` has no
+mypy step and is pinned not to grow one. That is stronger than the first attempt,
+which could not have failed the build at all.
+
+### Changed — `# hardcoded-ok` waiver ceiling 28 → 26
+
+`config/migration.py`'s two unjustified markers on `/ 1000.0` and `* 1000.0` were
+resolved by using `constants.MILLISECONDS_PER_SECOND`, which the literals already
+duplicated, and the dead `_SPEED_MAP` ClassVar in `llm_gateway/mission_parser.py`
+was deleted (grep-confirmed zero readers; its six entries were identical to the
+`MissionParserConfig.speed_map` default it shadowed, so nothing had diverged —
+the hazard was a future edit to either copy going unnoticed).
+
+Honest accounting, because this was framed as "buying headroom" and did not: the
+ceiling was ratcheted down with the count, per this budget's own down-only
+discipline, so **all three budgets remain at ceiling** (`noqa` 19/19,
+`type: ignore` 8/8, `# hardcoded-ok` 26/26) and no net slack was created. `noqa`
+and `type: ignore` received no remediation at all. With `--strict` now wired into
+two gates, the next single marker added to `src/mousedroid` fails CI rather than
+only the regression tier — so real slack still needs banking.
+
+### Added — pyproject ↔ CHANGELOG version pin
+
+`pyproject.toml` said `0.3.0` while the newest released heading here was
+`v0.4.0`; `release.yml` is tag-triggered and there are no tags, so nothing ever
+forced the bump. The version is now `0.4.0` and a regression test pins the two
+together, parsing both files rather than hardcoding either. `release.yml`'s
+extras were aligned with `ci.yml` and it gained the `concurrency` block it
+lacked, so the first tag build cannot fail on a mismatch.
+
 ### Added — Isaac Lab workstation harness (F-043–F-046, F-048)
 
 Isaac Lab is an opt-in workstation training backend behind

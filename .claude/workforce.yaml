@@ -119,8 +119,15 @@ ratchet_budgets:
           # marker -- inconsistent treatment of the same kind of value, not
           # new suppressions. A deliberate, recorded bump per this budget's
           # own down-only-except-with-reason discipline, not silent creep.
-          ceiling: 28
-          warn_threshold: 26
+          #
+          # Ratcheted 28->26 (tech-debt Wave 0): config/migration.py's two
+          # unjustified markers on `/ 1000.0` and `* 1000.0` were resolved by
+          # using `constants.MILLISECONDS_PER_SECOND`, which the value already
+          # duplicated. A genuine reduction -- the literals are gone, not
+          # re-suppressed elsewhere -- so the ceiling follows the count down
+          # per this budget's own discipline rather than banking the slack.
+          ceiling: 26
+          warn_threshold: 24
 
 # Subagent asset contract enforced by tests/regression/test_claude_workforce_aqa.py.
 agents:

@@ -56,13 +56,16 @@ file's own comments (`grep "# Stage" .github/workflows/ci.yml`), not a separate 
 - **Stage 4-4d**: `prometheus-check`, `vla-extras`, `onnx-world-model-extras`
   *(advisory)*, `mlflow-extras` *(advisory)*, `gitleaks` (blocking since 2026-08-07),
   `vulture-audit` *(advisory)*.
-- **Stage 5-6**: `security` (pip-audit) *(advisory)*, `docker` (needs `test` + `typecheck`).
+- **Stage 5-6**: `security` (pip-audit, blocking since 2026-09-16),
+  `docker` (needs `test` + `typecheck`).
 
-6 jobs run *(advisory)* — `continue-on-error: true`, tracked in `.github/advisory_stages.yaml`
+5 jobs run *(advisory)* — `continue-on-error: true`, tracked in `.github/advisory_stages.yaml`
 with a promotion window. There is no separate `skills`/`secret-scan`/`test-fast`/`validate`/
 `regression`/`package` job — those checks are steps inside the jobs above.
 
-Run locally: `make gates` (fast lint/typecheck/validate), `make test` (coverage), or `bash scripts/ci.sh` (superset).
+Run locally: `make gates` (lint/format/typecheck/skills/validate + boundary, doc-budget, ratchet
+and workforce-hook-coverage gates), `make test` (all 4 pytest steps of the blocking `test` job),
+or `bash scripts/ci.sh` (superset).
 
 ## Surface Map
 
@@ -92,8 +95,9 @@ Detailed operational guidelines and subsystem contracts live in partitioned surf
 
 ```bash
 make help               # List all developer targets
-make gates              # Fast lint, format, typecheck, skills, and validation gates
-make test               # Full unit + property + integration test suite with coverage gate
+make gates              # Lint, format, typecheck, skills, validation, boundary + doc-budget gates
+make test               # All 4 pytest steps of CI's blocking `test` job (cov + regression/e2e
+                        #   + smoke + behaviour); each is also a target you can run alone
 make hooks              # Dedicated workforce tooling coverage test
 bash scripts/ci.sh      # Authoritative local CI superset
 ```
@@ -103,6 +107,8 @@ bash scripts/ci.sh      # Authoritative local CI superset
 - **Hardcoded Values**: Never hardcode ports, pins, paths, or thresholds — use Pydantic schema config.
 - **Leaked Secrets**: Never put credentials in code or YAML defaults; use `SecretStr` and environment vars.
 - **Blocking Syscalls**: Never call blocking I/O in async routines — use `asyncio.to_thread`.
-- **`assert` under Optimization**: Never use `assert` in runtime code paths running under `PYTHONOPTIMIZE=1`.
+- **`assert` in `src/`**: Never use `assert` in `src/` — ruff `S101` is blocking there
+  (`tests/**` exempt); `PYTHONOPTIMIZE=1` in `Dockerfile.jetson` strips asserts, so a guard
+  becomes no guard on the rover. Raise a named exception instead.
 - **Untracked `.claude/` Assets**: New shared workforce files must have `.gitignore` negation (`!.claude/<path>`).
 - **Sysfs File Encoding**: Always open sysfs files with `encoding="utf-8", errors="replace"`.

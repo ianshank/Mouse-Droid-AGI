@@ -6,7 +6,11 @@ type: software
 authors:
   - family-names: Cruickshank
     given-names: Ian
-version: 0.3.0
+# Mirrors [project] version in pyproject.toml. Nothing pins the two together,
+# so this went stale at the 0.3.0 -> 0.4.0 bump; the same literal also lives in
+# Dockerfile.dev, Dockerfile.jetson and docker/Dockerfile.cloud LABELs, and all
+# four must move with pyproject in one change.
+version: 0.4.0
 license: MIT
 repository-code: "https://github.com/ianshank/mouse-droid-agi"
 keywords:

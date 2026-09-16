@@ -554,3 +554,48 @@ def test_mlflow_allow_file_store_set_on_import() -> None:
     # The module has already been imported (top of this file), so the
     # setdefault has already fired.
     assert os.environ.get("MLFLOW_ALLOW_FILE_STORE") == "true"
+
+
+# ---------------------------------------------------------------------------
+# Credential redaction on the exception paths (F-034)
+# ---------------------------------------------------------------------------
+#: A credentialed tracking URI. The password is distinctive so a leak is
+#: unambiguous in the assertion output.
+_CREDENTIALED_URI = "https://svc:s3cr3t-pw@mlflow.internal.example/api"
+_SECRET = "s3cr3t-pw"  # noqa: S105 - test fixture, not a real credential
+
+
+def test_backend_failure_does_not_leak_the_tracking_uri_password(
+    tracking_uri: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every ``except`` branch here logs exception text, and mlflow quotes URIs.
+
+    ``tracking_uri`` is a plain ``str``, not a ``SecretStr``, and mlflow's own
+    exceptions echo the offending URI verbatim — password included. Redacting
+    only the initialization event (which is all this module did) leaves ten
+    ``error=`` fields able to reintroduce the leak, and a backend failure is
+    exactly the event an operator pastes into a ticket.
+
+    ``tests/integration/test_experiment_logger_redaction.py`` covers the
+    *factory* path; this covers the logger's own runtime methods, which is where
+    the URI actually lives.
+    """
+    logger = _build_logger(tracking_uri)
+
+    def _explode_quoting_the_uri(*_args: object, **_kwargs: object) -> None:
+        # Mirrors mlflow's UnsupportedModelRegistryStoreURIException, which
+        # quotes the tracking URI it was given.
+        raise RuntimeError(f"unsupported URI '{_CREDENTIALED_URI}' for store")
+
+    monkeypatch.setattr(logger._client, "create_run", _explode_quoting_the_uri)
+
+    with structlog.testing.capture_logs() as events:
+        run_id = logger.start_run(run_name="leaky", params={}, tags={})
+
+    assert run_id == "", "start_run must degrade to an empty id, never raise"
+    assert events, "no log events captured — the pin would be vacuous"
+    haystack = " ".join(f"{k}={v!r}" for event in events for k, v in event.items())
+    assert _SECRET not in haystack, f"tracking-URI password leaked into a log event: {haystack}"
+    # The host must survive, or a weaker fix (dropping the field entirely) would
+    # pass this while destroying the diagnostic the event exists for.
+    assert "mlflow.internal.example" in haystack

@@ -18,14 +18,19 @@ Contracts pinned here:
   names — permission patterns like ``Bash(git diff*)`` are silently ignored by
   the platform, so they must fail here instead;
 * wired hook commands point at files that exist;
+* wired hook commands resolve an interpreter that can actually import the hook
+  package — a bare ``python3`` silently disabled every gate (see
+  :func:`test_wired_hook_commands_do_not_invoke_a_bare_interpreter`);
 * the legacy ``.claude/commands/`` layout stays deleted;
 * pre-existing settings survive the hooks block being added.
 """
 
 from __future__ import annotations
 
+import ast
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -33,6 +38,7 @@ from typing import Any
 import pytest
 import yaml
 from tools.claude_hooks.config import DEFAULT_CONFIG_RELPATH, WorkforceConfig, load_config
+from tools.claude_hooks.paths import path_matches_any
 from tools.claude_hooks.portability import find_absolute_paths
 from tools.validate_skill_commands import find_hardcoded_hosts
 
@@ -393,8 +399,10 @@ def test_wired_hook_commands_run_from_the_project_directory() -> None:
     """Hook commands stay portable and importable.
 
     ``python -m tools.claude_hooks.<mod>`` needs the repository root on
-    ``sys.path``; running the module file by path does not provide that, so the
-    command must ``cd`` to ``$CLAUDE_PROJECT_DIR`` first.
+    ``sys.path``; running the module file by path does not provide that. Claude
+    Code does not guarantee the hook's working directory, so the command must
+    locate the project through ``$CLAUDE_PROJECT_DIR`` — today by handing that
+    path to :data:`_INTERPRETER_WRAPPER`, which chdirs before exec.
     """
     for command in _hook_commands():
         assert "$CLAUDE_PROJECT_DIR" in command, (
@@ -404,6 +412,352 @@ def test_wired_hook_commands_run_from_the_project_directory() -> None:
             "hook must use 'python -m package.module' so the repo root is importable; "
             f"got: {command}"
         )
+
+
+#: Wrapper that resolves a capable interpreter for every wired hook.
+_INTERPRETER_WRAPPER_RELPATH = "tools/claude_hooks/run_hook.sh"
+_INTERPRETER_WRAPPER = _REPO_ROOT / _INTERPRETER_WRAPPER_RELPATH
+
+#: Skip for every test that shells out to the wrapper.
+#:
+#: ``run_hook.sh`` is a POSIX shell script, and on the ``test-windows`` runner
+#: ``bash`` resolves to WSL's ``bash.exe`` with **no distribution installed** — it
+#: exits 1 printing "Windows Subsystem for Linux has no installed distributions"
+#: as UTF-16, so every one of these tests fails for a reason that has nothing to
+#: do with the wrapper. That is not a hypothetical: three of them went red on the
+#: ``test-windows (3.11)`` leg exactly this way.
+#:
+#: The hooks themselves are unaffected — Claude Code runs the command it is given,
+#: and a Windows host needs a different wrapper invocation anyway (which is why
+#: ``_resolve_interpreter`` carries the ``.venv/Scripts/python.exe`` candidate).
+#: The two-part form is the house guard, taken byte-for-byte from
+#: ``tests/unit/scripts/test_repin_tags.py`` (itself copied from
+#: ``test_archive_stale_branches.py``), whose comment documents this exact
+#: failure: ``os.name == "nt"`` is NOT redundant with ``shutil.which("bash")``,
+#: because on the Windows runner ``which()`` *finds* the WSL shim. This is now the
+#: third file in this repo to learn that the hard way.
+_REQUIRES_POSIX_SHELL = pytest.mark.skipif(
+    os.name == "nt" or shutil.which("bash") is None,
+    reason="run_hook.sh is a POSIX script; the Windows runner's bash is a WSL shim with no distro",
+)
+
+#: Interpreter spellings that resolve through ``PATH`` rather than by capability.
+_BARE_INTERPRETERS = ("python", "python3", "python3.10", "python3.11", "python3.12", "py")
+
+
+def test_wired_hook_commands_do_not_invoke_a_bare_interpreter() -> None:
+    """The highest-value pin in this file: a bare ``python3`` disables every gate.
+
+    This is not hypothetical. The hooks shipped as ``cd "$CLAUDE_PROJECT_DIR" &&
+    python3 -m tools.claude_hooks.<mod>``. ``python3`` is whatever is first on the
+    hook process's ``PATH`` — the *system* interpreter in this project's
+    containers, which has no pydantic — so :mod:`tools.claude_hooks.config` failed
+    to import, the hook exited 1, and Claude Code treats a non-2 exit from a
+    ``PreToolUse`` hook as a non-blocking hook *error*. The F-008 freeze gate and
+    the edit-time secret scan both failed open, and nothing was visible: a gate
+    that never blocks looks exactly like a gate with nothing to block.
+
+    The command must therefore go through the wrapper, which picks an interpreter
+    that can actually import the hook package.
+    """
+    for command in _hook_commands():
+        tokens = command.split()
+        if "-m" not in tokens:
+            # Without this, tokens.index below raises ValueError and the failure
+            # reads as a broken test rather than a broken hook command.
+            pytest.fail(f"hook command is not a 'python -m' invocation: {command}")
+        offenders = [
+            token
+            for token in tokens[: tokens.index("-m")]
+            if Path(token.strip('"')).name in _BARE_INTERPRETERS
+        ]
+        assert not offenders, (
+            f"hook command invokes {offenders} from PATH, which is not guaranteed to "
+            f"have the hook package's dependencies — route it through "
+            f"{_INTERPRETER_WRAPPER_RELPATH} instead. Command: {command}"
+        )
+        assert _INTERPRETER_WRAPPER_RELPATH in command, (
+            f"hook command must resolve its interpreter through "
+            f"{_INTERPRETER_WRAPPER_RELPATH}, got: {command}"
+        )
+
+
+def test_interpreter_wrapper_is_tracked_and_executable() -> None:
+    """The wrapper is only useful if it ships and can run.
+
+    ``.gitignore`` does not cover ``tools/``, so tracking is the weaker risk
+    here; a wrapper that lost its executable bit would still work under the
+    wired ``bash <path>`` form, so this pins the stronger contract of both.
+    """
+    assert _INTERPRETER_WRAPPER.is_file()
+    assert _git_tracked(_INTERPRETER_WRAPPER_RELPATH), (
+        f"{_INTERPRETER_WRAPPER_RELPATH} is untracked — every hook would fail in CI "
+        "and in every fresh clone."
+    )
+    assert os.access(_INTERPRETER_WRAPPER, os.X_OK), (
+        f"{_INTERPRETER_WRAPPER_RELPATH} is not executable"
+    )
+
+
+def _decoy_interpreter_dir(tmp_path: Path, name: str) -> Path:
+    """A directory holding an executable ``name`` that always fails.
+
+    Stands in for the *incapable* interpreter the wrapper must refuse. Without a
+    decoy, a capability test is environment-dependent theatre: on a CI runner
+    ``pip install -e .`` goes into ``setup-python``'s interpreter with no
+    virtualenv, so ``python3`` on PATH is already capable and a wrapper degraded
+    to ``exec python3 "$@"`` would pass. The decoy makes PATH hostile everywhere,
+    which is what makes the pin fire on the runner as well as locally.
+    """
+    decoy_dir = tmp_path / "decoy"
+    decoy_dir.mkdir()
+    decoy = decoy_dir / name
+    decoy.write_text("#!/bin/sh\nexit 9\n", encoding="utf-8")
+    decoy.chmod(0o755)
+    return decoy_dir
+
+
+@_REQUIRES_POSIX_SHELL
+@pytest.mark.parametrize("decoy_name", ["python3", "python"])
+def test_interpreter_wrapper_resolves_an_interpreter_that_can_import_the_hooks(
+    tmp_path: Path, decoy_name: str
+) -> None:
+    """An executable pin: the wrapper's *output* must be a capable interpreter.
+
+    Asserting on the wrapper's text would pass for a wrapper that resolves the
+    wrong interpreter. Running it is what proves the gates can execute.
+
+    PATH is replaced by a directory whose only ``python3``/``python`` exits 9, so
+    the wrapper can only succeed by preferring the project virtualenv over PATH.
+    An earlier version of this test left the ambient PATH in place; peer review
+    showed it passed on CI regardless of the wrapper's behaviour, because CI has
+    no virtualenv and its PATH interpreter is already capable.
+    """
+    decoy_dir = _decoy_interpreter_dir(tmp_path, decoy_name)
+    completed = subprocess.run(
+        [
+            "bash",
+            str(_INTERPRETER_WRAPPER),
+            "-c",
+            "import tools.claude_hooks.config; print('ok')",
+        ],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            **os.environ,
+            "CLAUDE_PROJECT_DIR": str(_REPO_ROOT),
+            # Prepended, not replacing: the decoy must shadow python3/python
+            # while `bash`, `cd` and `command -v` stay resolvable. Replacing PATH
+            # outright made this test die with FileNotFoundError on `bash`.
+            "PATH": os.pathsep.join([str(decoy_dir), os.environ.get("PATH", "")]),
+        },
+    )
+    if completed.returncode == 9:
+        pytest.fail(
+            f"the wrapper exec'd the incapable {decoy_name} decoy from PATH instead of "
+            "probing for one that can import the hook package — every gate fails open"
+        )
+    assert completed.returncode == 0, (
+        f"the wrapper resolved an interpreter that cannot import the hook package — "
+        f"every gate would fail open.\nstdout: {completed.stdout}\nstderr: {completed.stderr}"
+    )
+    assert "ok" in completed.stdout
+
+
+@_REQUIRES_POSIX_SHELL
+def test_interpreter_wrapper_fails_fast_with_no_arguments() -> None:
+    """An argument-less wiring must error, not hang.
+
+    Without a guard the wrapper would ``exec`` a bare interpreter, which reads
+    the hook payload on stdin as a REPL script and blocks until Claude Code's
+    hook timeout. A hang mid-edit is worse than a visible error, and the timeout
+    is 15-90s depending on the hook.
+    """
+    completed = subprocess.run(
+        ["bash", str(_INTERPRETER_WRAPPER)],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=15,
+        env={**os.environ, "CLAUDE_PROJECT_DIR": str(_REPO_ROOT)},
+        stdin=subprocess.DEVNULL,
+    )
+    assert completed.returncode != 0
+    assert "no arguments" in completed.stderr
+
+
+def test_post_edit_mypy_profile_covers_the_hook_package_itself() -> None:
+    """The shipped config must cover the tree whose module resolution collides.
+
+    ``tools/claude_hooks`` is a package under a plain directory that imports
+    itself as ``tools.claude_hooks.*``. Under mypy's defaults every file there
+    resolves to two module names, so mypy reports that collision and checks
+    nothing — the post-edit hook then answers every edit to the workforce tooling
+    with a finding that is not about the edit. A wrong advisory finding is worse
+    than none: it trains contributors to ignore the hook, which is how the
+    fail-open bug above survived unnoticed.
+    """
+    profiles = _config().post_edit.mypy_profiles
+    matched = [
+        profile
+        for profile in profiles
+        if path_matches_any("tools/claude_hooks/config.py", profile.paths) is not None
+    ]
+    assert matched, (
+        "no post_edit.mypy_profiles entry matches tools/claude_hooks/**; the "
+        "edit-time mypy check reports a module-name collision instead of real findings"
+    )
+    profile = matched[0]
+    assert "--explicit-package-bases" in profile.args, (
+        f"profile {profile.paths} matches the hook package but omits "
+        "--explicit-package-bases, so mypy still resolves each file twice"
+    )
+    assert profile.mypy_path is not None, (
+        f"profile {profile.paths} needs MYPYPATH at the repo root; "
+        "--explicit-package-bases alone leaves the collision in place"
+    )
+
+
+@_REQUIRES_POSIX_SHELL
+def test_interpreter_wrapper_honours_the_explicit_override(tmp_path: Path) -> None:
+    """``MOUSEDROID_PYTHON`` wins outright, so an operator can pin an interpreter.
+
+    Pointed at a *sentinel* rather than at ``sys.executable``. An earlier version
+    set ``MOUSEDROID_PYTHON=sys.executable`` and asserted the wrapper printed
+    ``sys.executable`` — which in a ``.venv`` checkout is exactly what
+    auto-resolution produces anyway, so the assertion could not distinguish
+    "override honoured" from "override ignored". Peer review caught it by deleting
+    the override branch and watching the test still pass. A sentinel that no
+    resolution path could ever pick is what makes this discriminate.
+    """
+    sentinel = tmp_path / "sentinel-python"
+    sentinel.write_text("#!/bin/sh\necho OVERRIDE_HONOURED\n", encoding="utf-8")
+    sentinel.chmod(0o755)
+
+    completed = subprocess.run(
+        ["bash", str(_INTERPRETER_WRAPPER), "-c", "import sys; print(sys.executable)"],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            **os.environ,
+            "CLAUDE_PROJECT_DIR": str(_REPO_ROOT),
+            "MOUSEDROID_PYTHON": str(sentinel),
+        },
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "OVERRIDE_HONOURED", (
+        "MOUSEDROID_PYTHON was ignored — the wrapper resolved its own interpreter "
+        f"instead of the operator's. stdout: {completed.stdout!r}"
+    )
+
+
+@_REQUIRES_POSIX_SHELL
+def test_interpreter_wrapper_rejects_a_non_executable_override(tmp_path: Path) -> None:
+    """A typo'd override must name itself, not die as a bare shell error.
+
+    Used verbatim without an executability check, ``MOUSEDROID_PYTHON=/no/such/py``
+    reaches ``exec`` and exits 127 with only bash's "No such file or directory" —
+    a message that never mentions hooks or gates, so an operator reads it as
+    unrelated noise while every gate is silently bypassed.
+    """
+    completed = subprocess.run(
+        ["bash", str(_INTERPRETER_WRAPPER), "-c", "pass"],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        stdin=subprocess.DEVNULL,
+        env={
+            **os.environ,
+            "CLAUDE_PROJECT_DIR": str(_REPO_ROOT),
+            "MOUSEDROID_PYTHON": str(tmp_path / "does-not-exist"),
+        },
+    )
+    assert completed.returncode != 0
+    assert "MOUSEDROID_PYTHON" in completed.stderr
+    assert "gates cannot run" in completed.stderr
+
+
+@_REQUIRES_POSIX_SHELL
+@pytest.mark.parametrize("exit_code", [0, 1, 2, 42])
+def test_interpreter_wrapper_preserves_the_exit_code(exit_code: int) -> None:
+    """Exit-code fidelity is the whole contract Claude Code reads.
+
+    A PreToolUse deny is exit 0 plus a JSON payload; exit 2 blocks; anything else
+    non-zero is a non-blocking hook *error* — which is precisely how the original
+    bug hid. A future edit replacing ``exec`` with a call plus post-processing
+    would silently convert every deny into an error, so the pass-through is
+    pinned rather than assumed.
+    """
+    completed = subprocess.run(
+        ["bash", str(_INTERPRETER_WRAPPER), "-c", f"import sys; sys.exit({exit_code})"],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        stdin=subprocess.DEVNULL,
+        env={**os.environ, "CLAUDE_PROJECT_DIR": str(_REPO_ROOT)},
+    )
+    assert completed.returncode == exit_code, (
+        f"the wrapper rewrote exit {exit_code} as {completed.returncode}; a deny or a "
+        "block would be delivered as the wrong decision"
+    )
+
+
+@_REQUIRES_POSIX_SHELL
+def test_interpreter_wrapper_passes_stdin_through_unread() -> None:
+    """The hook payload arrives on stdin and must reach the hook intact.
+
+    The capability probe runs a real interpreter, so anything it read from stdin
+    would be consumed before the hook saw it — the payload would vanish and every
+    hook would no-op on an empty document. ``</dev/null`` on the probe is what
+    prevents that, and this is what proves it.
+    """
+    payload = '{"tool_name":"Edit","tool_input":{"file_path":"README.md"}}'
+    completed = subprocess.run(
+        ["bash", str(_INTERPRETER_WRAPPER), "-c", "import sys; sys.stdout.write(sys.stdin.read())"],
+        cwd=_REPO_ROOT,
+        input=payload,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "CLAUDE_PROJECT_DIR": str(_REPO_ROOT)},
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout == payload, (
+        f"stdin did not survive the wrapper: {completed.stdout!r} != {payload!r}"
+    )
+
+
+@_REQUIRES_POSIX_SHELL
+def test_interpreter_wrapper_falls_back_to_its_own_location() -> None:
+    """With ``CLAUDE_PROJECT_DIR`` unset the wrapper must still find the repo.
+
+    Its own header advertises this as "what makes this runnable by hand and from
+    the test suite", but every other test here sets the variable, so the branch
+    had no coverage at all. Run from a directory that is not the repo root, so a
+    wrapper relying on the ambient cwd fails.
+    """
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
+    completed = subprocess.run(
+        ["bash", str(_INTERPRETER_WRAPPER), "-c", "import tools.claude_hooks.config; print('ok')"],
+        cwd=_REPO_ROOT.parent,
+        capture_output=True,
+        text=True,
+        check=False,
+        stdin=subprocess.DEVNULL,
+        env=env,
+    )
+    assert completed.returncode == 0, (
+        f"the script-relative fallback did not resolve the project root.\n"
+        f"stdout: {completed.stdout}\nstderr: {completed.stderr}"
+    )
+    assert "ok" in completed.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -535,3 +889,80 @@ def test_mcp_next_steps_checkbox_ticked() -> None:
     """docs/MCP_NEXT_STEPS.md must have the Claude Code .mcp.json checkbox ticked."""
     content = _MCP_NEXT_STEPS.read_text(encoding="utf-8")
     assert "- [x] Same for **Claude Code** (`.mcp.json` template)." in content
+
+
+def _launches_the_wrapper(node: ast.FunctionDef) -> bool:
+    """Whether ``node`` contains a ``subprocess.run(["bash", <wrapper>, ...])`` call.
+
+    Matched structurally rather than by substring. A substring check on ``"bash"``
+    and ``_INTERPRETER_WRAPPER`` is what the first version of this sweep used, and
+    it matched the sweep functions *themselves* — they mention both names in order
+    to look for them. Self-matching made every run red regardless of the code
+    under test, which is the same class of mistake as a vacuous pin: the assertion
+    stopped describing the tree.
+    """
+    for call in (n for n in ast.walk(node) if isinstance(n, ast.Call)):
+        if not (
+            isinstance(call.func, ast.Attribute)
+            and call.func.attr == "run"
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id == "subprocess"
+        ):
+            continue
+        if not call.args or not isinstance(call.args[0], ast.List):
+            continue
+        argv = call.args[0].elts
+        starts_with_bash = (
+            bool(argv) and isinstance(argv[0], ast.Constant) and argv[0].value == "bash"
+        )
+        names_wrapper = any(
+            isinstance(inner, ast.Name) and inner.id == "_INTERPRETER_WRAPPER"
+            for element in argv
+            for inner in ast.walk(element)
+        )
+        if starts_with_bash and names_wrapper:
+            return True
+    return False
+
+
+def _wrapper_subprocess_tests() -> list[ast.FunctionDef]:
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    return [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name.startswith("test_")
+        and _launches_the_wrapper(node)
+    ]
+
+
+def test_every_wrapper_subprocess_test_is_marked_posix_only() -> None:
+    """The durable half of the Windows fix: no such test may forget the marker.
+
+    Three of these went red on the ``test-windows (3.11)`` leg because they shell
+    out to ``bash``, which on that runner is WSL with no distribution installed.
+    Adding the marker one test at a time is how the *fourth* one gets forgotten,
+    so this discovers them from the source instead.
+
+    Asserted against the AST rather than by running anything, so it names the
+    offending test on every platform — including the Linux legs, where a missing
+    marker is otherwise invisible until Windows goes red.
+    """
+    offenders = [
+        node.name
+        for node in _wrapper_subprocess_tests()
+        if not any(
+            isinstance(dec, ast.Name) and dec.id == "_REQUIRES_POSIX_SHELL"
+            for dec in node.decorator_list
+        )
+    ]
+    assert not offenders, (
+        f"these tests shell out to run_hook.sh without @_REQUIRES_POSIX_SHELL and "
+        f"will fail on the test-windows leg: {offenders}"
+    )
+
+
+def test_the_wrapper_subprocess_sweep_actually_finds_tests() -> None:
+    """Anti-vacuity: a sweep that matches nothing passes unconditionally."""
+    found = [node.name for node in _wrapper_subprocess_tests()]
+    assert len(found) >= 5, f"the wrapper-subprocess sweep found only {found}"

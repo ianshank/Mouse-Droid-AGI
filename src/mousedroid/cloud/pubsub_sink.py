@@ -194,12 +194,40 @@ class CloudTelemetrySink:
             category: ``"telemetry"`` or ``"experience"`` — selects which
                 metric family the publish outcome is recorded under.
         """
+        # Bound once, above the closure, rather than narrowed with an ``assert``
+        # inside it: PYTHONOPTIMIZE=1 (the Jetson image default) strips asserts,
+        # so a publisher nulled by a concurrent ``close()`` between a caller's
+        # guard and this coroutine running would surface as an AttributeError
+        # inside the circuit breaker instead of a clean drop. Both callers
+        # (``publish_telemetry``, ``publish_experience``) already guard; this
+        # keeps ``_publish`` correct on its own terms too.
+        publisher = self._publisher
+        if publisher is None:
+            # Unreachable through either caller (``publish_telemetry`` and
+            # ``publish_experience`` both guard), but ``_publish`` must be right
+            # on its own terms. The outcome is still counted, so promoting the
+            # stripped assert into a real branch does not trade a crash for a
+            # telemetry blind spot.
+            #
+            # Two deliberate differences from the old assert path, stated rather
+            # than glossed as equivalence:
+            #   * The assert raised INSIDE ``self._cb.call(_do_publish)``, so the
+            #     circuit breaker recorded a failure and advanced toward OPEN.
+            #     This branch returns before the breaker is reached, so repeated
+            #     no-publisher calls no longer trip it. That is correct — an
+            #     unstarted sink is not a failing remote — but it is a change.
+            #   * Latency is 0.0 rather than a real (tiny) elapsed, so the
+            #     histogram gets a 0.0 observation. Pinned by
+            #     ``test_publish_without_publisher_still_counts_the_outcome``,
+            #     so it is contract, not accident.
+            _log.warning("cloud_pubsub_publish_skipped_no_publisher", topic=topic)
+            self._record_publish_outcome(category, _RESULT_ERROR, 0.0)
+            return
 
         async def _do_publish() -> None:
-            assert self._publisher is not None
             loop = asyncio.get_running_loop()
             timeout = self._pubsub_cfg.publish_timeout_s
-            future = self._publisher.publish(topic, data=data, **attrs)
+            future = publisher.publish(topic, data=data, **attrs)
             await loop.run_in_executor(None, future.result, timeout)
 
         start = time.perf_counter()
@@ -223,10 +251,26 @@ class CloudTelemetrySink:
             result = _RESULT_ERROR
 
         elapsed_ms = (time.perf_counter() - start) * 1000.0
-        if self._metrics is not None:
-            if category == _CATEGORY_TELEMETRY:
-                self._metrics.inc_cloud_telemetry_publish(result)
-                self._metrics.observe_cloud_telemetry_publish_latency_ms(elapsed_ms)
-            else:
-                self._metrics.inc_cloud_experience_publish(result)
-                self._metrics.observe_cloud_experience_publish_latency_ms(elapsed_ms)
+        self._record_publish_outcome(category, result, elapsed_ms)
+
+    def _record_publish_outcome(self, category: str, result: str, elapsed_ms: float) -> None:
+        """Record one publish outcome under the category's metric family.
+
+        Extracted so the no-publisher guard and the normal circuit-breaker path
+        record through one implementation — a second inline copy is how the two
+        drift into reporting different label sets for the same event.
+
+        Args:
+            category: ``"telemetry"`` or ``"experience"``; selects the family.
+            result: Outcome label, one of the module's ``_RESULT_*`` constants.
+            elapsed_ms: Observed publish latency. Zero when no publish was
+                attempted.
+        """
+        if self._metrics is None:
+            return
+        if category == _CATEGORY_TELEMETRY:
+            self._metrics.inc_cloud_telemetry_publish(result)
+            self._metrics.observe_cloud_telemetry_publish_latency_ms(elapsed_ms)
+        else:
+            self._metrics.inc_cloud_experience_publish(result)
+            self._metrics.observe_cloud_experience_publish_latency_ms(elapsed_ms)

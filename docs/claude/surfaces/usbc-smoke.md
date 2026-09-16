@@ -14,5 +14,5 @@ When adding a new hardware peripheral (e.g. secondary LiDAR, IMU bridge):
    `PRESENT`, `MISSING`, and `WARN` status transitions.
 4. **Hardware Enumeration Test**: Add a hardware test under `tests/hardware/test_usbc_enumeration.py`
    (gated by `tests._jetson_hardware.is_jetson_host`).
-5. **Config Overlay Assertion**: Add a regression check in `tests/unit/test_jetson_production_overlay.py`
+5. **Config Overlay Assertion**: Add a regression check in `tests/unit/config/test_jetson_production_overlay.py`
    to ensure CI `usbc-config-gate` catches schema-to-driver drift.

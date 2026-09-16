@@ -7,18 +7,33 @@
 .git/
 .gitignore
 
-# Python caches
+# Python caches.
+#
+# ``**/`` is load-bearing on every slash-free pattern here, for the same reason
+# the mlflow.db block below spells it out: Docker matches each pattern against
+# the whole context-relative path with Go's filepath.Match, so a bare
+# ``__pycache__/`` covers ONLY the context root. It therefore excluded nothing
+# at all in practice — this repo's byte-compiled output lives in ~100
+# ``src/mousedroid/**/__pycache__`` directories and every one of them was being
+# sent to the daemon and baked into a layer. The root-level spellings are kept
+# alongside so a root-level artefact stays covered too.
 __pycache__/
+**/__pycache__/
 *.pyc
+**/*.pyc
 *.pyo
+**/*.pyo
 *.egg-info/
+**/*.egg-info/
 dist/
 build/
 *.egg
 
-# Virtual environments
+# Virtual environments (``env/`` mirrors .gitignore; the 6 GB ./.venv here is
+# the single biggest thing this file keeps out of the build context)
 .venv/
 venv/
+env/
 
 # IDE
 .vscode/
@@ -93,18 +108,53 @@ htmlcov/
 .ruff_cache/
 .hypothesis/
 
-# Secrets / env (never bake into an image layer)
+# Secrets / env (never bake into an image layer).
+#
+# Every pattern needs its ``**/`` twin — see the Python-caches note above. This
+# section had the root-only spellings only, so a developer's ``config/.env`` or
+# ``deployments/gcp_credentials/`` was NOT excluded, which is the one category
+# here where a miss is a credential in a published layer rather than a slow
+# build. (``config/.env.jetson.example`` is deliberately still included: it ends
+# in ``.example``, matches neither pattern, and is a tracked placeholder.)
 .env
+**/.env
 .env.local
+**/.env.local
 *.env
+**/*.env
 secrets.yaml
+**/secrets.yaml
 gcp_credentials/
+**/gcp_credentials/
 *.credentials.json
+**/*.credentials.json
+
+# Host-local config sidecars that would otherwise ride in through `COPY config/`
+# (Dockerfile.dev) and `COPY config ./config` (docker/Dockerfile.cloud).
+# config/prometheus/runtime/ is where runtime-only Prometheus SECRETS live on
+# the Jetson host — its own .gitkeep says so — and it is gitignored, so it is
+# exactly the local-only content that must not enter a layer. The .gitkeep is
+# negated back in so the directory still exists in the image.
+config/prometheus/runtime/*
+!config/prometheus/runtime/.gitkeep
+config/local_dual_stream_training.yaml
+dev_dashboard.yaml
+# Timestamped backups from operators editing YAML in place (gitignored for the
+# same reason); *.bak.<stamp> needs the second pattern.
+*.bak
+**/*.bak
+*.bak.*
+**/*.bak.*
 
 # Host-only runtime artefacts (LMDB experience, reports, training output,
-# harness journal + validation trend store, MLflow tracking store)
+# harness journal + validation trend store, MLflow tracking store).
+# The LMDB patterns get the same ``**/`` twin the mlflow.db block below already
+# documents — an experience store is one of the largest things on a rover host
+# and was only excluded at the context root.
 *.mdb
+**/*.mdb
 *_experience/
+**/*_experience/
 reports/
 runs/
 checkpoints/

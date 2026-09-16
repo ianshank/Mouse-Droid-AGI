@@ -19,8 +19,14 @@
 #     the full-history scan (fetch-depth: 0). No edit at HEAD can clear it, so
 #     a regex waiver is the only remedy short of a history purge.
 #
-# Promotion protocol: the CI job runs advisory (continue-on-error) until 7
-# consecutive green runs, then it is promoted to blocking. See
+# PROMOTION STATUS: the CI `gitleaks` job is BLOCKING. It was promoted from
+# advisory on 2026-08-07, at 34 days against its 30-day window — the criterion
+# was that window elapsing green, not "7 consecutive green runs", which this
+# comment described as a still-pending future step for a month after the
+# promotion had already landed. scripts/ci.sh's local stage is blocking too
+# whenever the binary is on PATH, and skips loudly when it is not (only CI scans
+# the full history, fetch-depth: 0). tests/regression/test_secret_scan_gate.py
+# pins the blocking state; re-demoting needs a recorded reason. See
 # docs/runbooks/secret-scanning.md.
 
 [extend]

@@ -72,7 +72,7 @@ echo "=== Ratchet Budgets (advisory early warning) ==="
 # -m (not a direct script path, unlike doc_hygiene.py) because it imports
 # tools.claude_hooks.config, which needs the repo root importable as a
 # package on sys.path.
-"$PYTHON_BIN" -m tools.ratchet_budgets
+"$PYTHON_BIN" -m tools.ratchet_budgets --strict
 
 echo "=== Type Check ==="
 "$PYTHON_BIN" -m mypy src/ --strict --ignore-missing-imports
@@ -230,7 +230,7 @@ echo "=== CI jobs NOT reproduced locally ==="
 echo "    actionlint      - workflow lint; run the pinned container instead:"
 echo "                      docker run --rm -v \"\$PWD:/repo\" -w /repo rhysd/actionlint:1.7.12 -color"
 echo "    config-validate - scripts/validate_configs.py"
-echo "    security        - pip-audit --skip-editable (advisory in CI)"
+echo "    security        - pip-audit --skip-editable (blocking in CI since 2026-09-16)"
 echo "    docker          - Dockerfile.jetson / docker-compose.jetson.yml validation"
 echo "    prometheus      - only 'promtool check rules' runs here; CI also"
 echo "                      validates the generated metrics-sample format"

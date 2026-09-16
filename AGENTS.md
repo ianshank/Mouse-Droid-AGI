@@ -222,7 +222,7 @@ path:
    (skip-gated by `tests/_jetson_hardware.is_jetson_host`) asserting
    the endpoint resolves on a live Jetson.
 5. Add the regression assertion to
-   `tests/unit/test_jetson_production_overlay.py` so the CI
+   `tests/unit/config/test_jetson_production_overlay.py` so the CI
    `usbc-config-gate` job (`.github/workflows/ci.yml`) catches any
    YAML-vs-driver drift before merge.
 

@@ -111,7 +111,7 @@ The fusion panel reads `TelemetryFrame.fused` (`n_valid`/`n_modalities`/
   `capture_raw_jpeg` + `_frame_to_rgb_for_snapshot`
 - `src/mousedroid/config/schema/` — `CameraConfig.v4l2_grayscale_extract`
   field docstring (background on the IMX708 Bayer-misinterpretation)
-- `tests/unit/test_jetson_csi.py` — the test surface that pins the per-
+- `tests/unit/hardware/test_jetson_csi.py` — the test surface that pins the per-
   backend colour-conversion paths.
 
 **Run:**
@@ -174,9 +174,9 @@ python -m mousedroid.cli.validate_pillars --config config/default.yaml
   two-condition override (only fires when discovery enabled AND literal
   path missing).
 - `scripts/check_usbc_devices.py` — standalone operator probe.
-- `tests/unit/diagnostics/test_usbc.py` + `tests/unit/test_factory_esp32_discovery.py`
+- `tests/unit/diagnostics/test_usbc.py` + `tests/unit/factory/test_factory_esp32_discovery.py`
   — unit coverage including boot-race missing-`by_id_root` guard.
-- `tests/unit/test_jetson_production_overlay.py` — CI regression
+- `tests/unit/config/test_jetson_production_overlay.py` — CI regression
   invariant: YAML glob must match `esp32.serial_port` chip family.
 - `docs/runbooks/jetson-rover-smoke.md` — operator workflow.
 - `docs/architecture/c4-usbc-smoke.md` — C4 component diagram.
@@ -637,7 +637,7 @@ Then delegate to subagents in parallel:
   issues.
 
 When all three return green, push + open the PR with the body template
-from `.github/pull_request_template.md` (or PR #104 as a worked example).
+from `.github/PULL_REQUEST_TEMPLATE.md` (or PR #104 as a worked example).
 
 ### ci-deploy-gates
 
@@ -740,10 +740,10 @@ so a misspelled key fails loudly instead of silently disabling a gate.
 ```bash
 # Drive a hook by hand with a synthetic payload (empty stdout == allow):
 echo '{"tool_name":"Write","tool_input":{"file_path":"src/mousedroid/arm/x.py"}}' \
-    | python3 -m tools.claude_hooks.freeze_gate
+    | bash "$CLAUDE_PROJECT_DIR/tools/claude_hooks/run_hook.sh" -m tools.claude_hooks.freeze_gate
 
 # Verbose diagnostics (logs go to stderr — stdout is the decision channel):
-MOUSEDROID_WORKFORCE_DEBUG=1 python3 -m tools.claude_hooks.secret_scan
+MOUSEDROID_WORKFORCE_DEBUG=1 bash "$CLAUDE_PROJECT_DIR/tools/claude_hooks/run_hook.sh" -m tools.claude_hooks.secret_scan
 
 # Gates:
 python3 -m pytest tests/regression/test_claude_workforce_aqa.py \
@@ -751,7 +751,8 @@ python3 -m pytest tests/regression/test_claude_workforce_aqa.py \
 ```
 
 **Gotcha:** hook commands must be
-`cd "$CLAUDE_PROJECT_DIR" && python3 -m tools.claude_hooks.<module>`. Running the
+`bash "$CLAUDE_PROJECT_DIR/tools/claude_hooks/run_hook.sh" -m
+tools.claude_hooks.<module>`. Running the
 module file by path leaves the repo root off `sys.path`, so every hook dies with
 `ModuleNotFoundError` — and a PreToolUse crash is a non-blocking warning, so the
 gates would be silently inactive rather than obviously broken. Details:
@@ -769,6 +770,7 @@ repeated here.
 
 | Skill | Status | Use when |
 |-------|--------|----------|
+| `advisory-promotion` | active | Promoting a `continue-on-error` CI job to blocking (or extending its window with a recorded reason) across all eight coupled surfaces — `scripts/check_advisory_promotions.py` reports overdue, a window is closing, or a green-run bar is met |
 | `autonomous-mission-probe` | active | Validating the `AutonomousOrchestrator` 30 Hz loop, safety interlocks, or Prometheus telemetry |
 | `charter-carveout` | active | Deciding whether a change needs a ratified `docs/CHARTER.md` Section 3 carve-out, and shaping one in the house format |
 | `coverage-gate` | active | Running the dedicated `tools/claude_hooks` coverage gate and reporting the delta |

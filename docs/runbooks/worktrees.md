@@ -139,7 +139,7 @@ git worktree prune
 Workforce governance hooks configured in `.claude/settings.json` execute via:
 
 ```bash
-cd "$CLAUDE_PROJECT_DIR" && python3 -m tools.claude_hooks.<module>
+bash "$CLAUDE_PROJECT_DIR/tools/claude_hooks/run_hook.sh" -m tools.claude_hooks.<module>
 ```
 
 In a worktree session, Claude Code sets `$CLAUDE_PROJECT_DIR` to the root of the active worktree.

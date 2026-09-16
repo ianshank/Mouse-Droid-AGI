@@ -9,6 +9,8 @@ command execution, tier-gated orchestration, and DAG-aware selection.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -190,6 +192,97 @@ def test_run_validation_timeout() -> None:
     err = spec.run_validation(_feat("F-001", validation_command=cmd), timeout=0.5)
     assert err is not None
     assert "timed out" in err
+
+
+# --------------------------------------------------------------------------- #
+# _validation_env — interpreter resolution for shell=True commands
+# --------------------------------------------------------------------------- #
+def test_validation_env_front_loads_the_running_interpreter() -> None:
+    """A bare ``python`` in a catalog command must hit *this* interpreter.
+
+    Catalog commands are operator-authored shell strings, and most start with a
+    bare ``python``. Under ``shell=True`` that resolves through ``PATH``, so in a
+    checkout whose dependencies live in a virtualenv the command fails with
+    ``ModuleNotFoundError`` unless the interpreter's directory comes first.
+    """
+    env = spec._validation_env()
+    first = env["PATH"].split(os.pathsep)[0]
+    assert first == str(Path(sys.executable).parent)
+
+
+def test_validation_env_preserves_the_rest_of_the_path() -> None:
+    """Front-loading, not replacing: ``git`` and friends must stay reachable."""
+    env = spec._validation_env()
+    assert os.environ.get("PATH", "") in env["PATH"]
+
+
+def test_validation_env_passes_other_variables_through() -> None:
+    """A command that needs ``MOUSEDROID_*`` settings must still see them."""
+    env = spec._validation_env()
+    assert all(env[key] == value for key, value in os.environ.items() if key != "PATH")
+
+
+#: Interpreter spelling the catalog actually uses in its ``validation_command``
+#: strings, so the shim test exercises the real resolution path.
+_CATALOG_INTERPRETER = "python"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shim script; cmd.exe differs")
+def test_run_validation_prefers_the_running_interpreter_over_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The behavioural proof, made hermetic with a deliberately wrong shim.
+
+    Reproduces the reported ``make validate`` failure — every command dying with
+    ``ModuleNotFoundError: No module named 'pydantic'`` — without depending on
+    what the ambient system interpreter happens to have installed. ``PATH``
+    contains *only* a shim named ``python`` that always fails, so the command can
+    only succeed if the running interpreter's directory is front-loaded.
+
+    An earlier version of this test set ``PATH`` to the system directories and
+    ran ``python -c "import sys; sys.exit(0)"``. It passed with the fix reverted:
+    the system interpreter exists and needs no third-party import to exit 0. A
+    pin that cannot fail is decoration.
+    """
+    real_interpreter = Path(sys.executable).parent / _CATALOG_INTERPRETER
+    if not real_interpreter.exists():  # pragma: no cover - layout-dependent
+        pytest.skip(f"no {_CATALOG_INTERPRETER} beside {sys.executable}")
+
+    shim_dir = tmp_path / "shim"
+    shim_dir.mkdir()
+    shim = shim_dir / _CATALOG_INTERPRETER
+    shim.write_text("#!/bin/sh\nexit 7\n", encoding="utf-8")
+    shim.chmod(0o755)
+    monkeypatch.setenv("PATH", str(shim_dir))
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+
+    cmd = f'{_CATALOG_INTERPRETER} -c "import sys; sys.exit(0)"'
+    assert spec.run_validation(_feat("F-001", validation_command=cmd)) is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shim script; cmd.exe differs")
+def test_shim_is_reachable_when_the_interpreter_dir_is_not_front_loaded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The control: the shim really does shadow ``python`` and really does fail.
+
+    Without this, the test above could pass because the shim was never findable,
+    rather than because the fix works.
+    """
+    shim_dir = tmp_path / "shim"
+    shim_dir.mkdir()
+    shim = shim_dir / _CATALOG_INTERPRETER
+    shim.write_text("#!/bin/sh\nexit 7\n", encoding="utf-8")
+    shim.chmod(0o755)
+    monkeypatch.setenv("PATH", str(shim_dir))
+
+    completed = subprocess.run(  # noqa: S602 - fixed literal command, test control
+        f'{_CATALOG_INTERPRETER} -c "import sys; sys.exit(0)"',
+        shell=True,
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 7
 
 
 # --------------------------------------------------------------------------- #

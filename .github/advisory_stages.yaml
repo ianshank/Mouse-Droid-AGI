@@ -46,16 +46,15 @@ stages:
       the tier lands advisory. Promotion decision at window end: make
       blocking if consistently green, or keep advisory + record the runner
       variance in an ADR.
-  - job: security
-    workflow: ci.yml
-    since: 2026-07-25
-    promote_after_days: 60
-    reason: >-
-      pip-audit was previously soft-failed via `|| echo ::warning::`, which
-      hid it from this tracker entirely. Converted to continue-on-error so
-      the promotion clock exists. Promotion requires triaging the current
-      vulnerability findings (upstream-dependent) rather than a green
-      window alone.
+  # security: promoted advisory -> blocking 2026-09-16 (tech-debt Wave 1), 53 days
+  # into its 60-day window -- 7 days BEFORE the deadline, not 'three days inside',
+  # which was simply bad arithmetic (opened 2026-07-25, due 2026-09-23). The bar
+  # was "triage the current vulnerability findings", not a green window alone:
+  # `pip-audit --skip-editable` over the resolved [dev,telemetry,mcp] set reports
+  # zero vulnerabilities across 123 packages, including every network-facing one
+  # (aiohttp, cryptography, pyjwt, starlette, uvicorn, h11). Entry removed rather
+  # than marked done because this tracker only covers jobs still carrying
+  # continue-on-error — same handling as the gitleaks promotion above.
   - job: test-windows
     workflow: ci.yml
     since: 2026-08-20

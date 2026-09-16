@@ -18,6 +18,13 @@ on:
         tags:
             - "v*.*.*"
 
+# Supersede in-flight runs for the same ref, matching every other workflow.
+# `github.ref` is the tag ref here, so the group is unique per release and this
+# can only cancel a re-run of the *same* tag, never a concurrent release.
+concurrency:
+    group: release-${{ github.ref }}
+    cancel-in-progress: true
+
 permissions:
     contents: read
 
@@ -64,9 +71,30 @@ jobs:
                   cache: pip
                   cache-dependency-path: pyproject.toml
 
+            # Extras MUST match ci.yml's `typecheck` job (currently
+            # "[dev,telemetry,mlflow]") -- mypy --strict is dependency-set
+            # sensitive in BOTH directions, so a divergence here means a tag
+            # build can fail where CI was green, or pass where CI was red.
+            #
+            # telemetry brings aiohttp + Pillow so mypy sees the REAL types
+            # behind the optional-lib annotations in telemetry/{auth,server}.py
+            # and hardware/display/expressions.py; without them
+            # --ignore-missing-imports degrades those to Any and strict mode
+            # flags untyped-decorator / valid-type errors. Installing only
+            # "[dev]" here meant a tag build could fail where CI was green.
+            #
+            # mlflow is the other direction: with it installed, mlflow is typed,
+            # so a `cast` on its return values is flagged redundant-cast, while
+            # without it the same expression is Any and returning it trips
+            # no-any-return. training/observability/mlflow_logger.py uses an
+            # annotated-local form that satisfies both (see its comment at
+            # _resolve_or_create_experiment), so this alignment is not known to
+            # be load-bearing *today* -- it is here because the divergence is the
+            # exact shape that made the mlflow-extras job red, and the next
+            # annotation added under an optional import will not be so careful.
             - name: Install dependencies
               run: |
-                  pip install -e ".[dev]"
+                  pip install -e ".[dev,telemetry,mlflow]"
                   pip install "typing_extensions>=4.0"
 
             - name: Type check
@@ -87,8 +115,11 @@ jobs:
                   cache: pip
                   cache-dependency-path: pyproject.toml
 
+            # Extras MUST match ci.yml's `test` job. The mcp extra is required
+            # by the MCP suites collected under tests/unit and tests/integration;
+            # omitting it here meant a tag build could fail where CI was green.
             - name: Install dependencies
-              run: pip install -e ".[dev,telemetry]"
+              run: pip install -e ".[dev,telemetry,mcp]"
 
             # Mirrors the coverage invocation in ci.yml's `test` job — keep the
             # two in sync (flags AND the MINIMUM_COVERAGE env, which must match

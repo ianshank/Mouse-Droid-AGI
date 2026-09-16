@@ -57,7 +57,7 @@ bench work, not a coding sprint. Opt-in workstation Isaac Lab training
    `config/prometheus/alerts.yml` on the rover Prometheus.
 10. **[Ops leftover of F-020] Review `scripts/dead_code_audit.py` output** and
     promote advisory CI stages when due (`.github/advisory_stages.yaml`).
-    Promote `test-windows` and `security` (pip-audit) when their windows close.
+    Promote `test-windows` when its window closes.
 11. **[Docs — P2] Reconcile hardware docs with chassis (audit R9).** WAVE ROVER
     is 4WD skid-steer, encoder-less, IMX708 camera, 3S 18650 UPS.
 12. **[Ops leftover of F-023] Distillation spike** per
@@ -122,8 +122,8 @@ Dependency direction is strictly **Phase 1 → 2 → 3 → 4**; Phase 6 is defer
    the next hardware validation pass.
 
 5. **Workforce (F-024) is catalog-done.** Remaining hook/config work on a live
-   Jetson is operator leftover, not a coding sprint. `performance` / `security`
-   keep their advisory windows in `.github/advisory_stages.yaml`.
+   Jetson is operator leftover, not a coding sprint. `performance` keeps its
+   advisory window in `.github/advisory_stages.yaml`.
 
 ### Pending follow-up (deferred to a separate PR)
 
