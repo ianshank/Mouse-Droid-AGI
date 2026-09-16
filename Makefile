@@ -131,11 +131,13 @@ skills: ## Validate .claude/skills/<name>/SKILL.md
 boundaries: ## Protocol-based DI subsystem boundary gate, full tree (local-gates parity)
 	$(PYTHON) scripts/check_subsystem_boundaries.py
 
-# The first of the three is the one gate in this file that NO CI job runs: only
-# scripts/ci.sh checks root CLAUDE.md against DocsConfig.core_max_lines, and
-# test_docs_trimmer.py exercises the tool against synthetic fixtures rather than
-# the real file. Running it from `make gates` is the best a Makefile can do; the
-# durable fix is a `local-gates` step, which is a ci.yml change.
+# The first of the three used to be the one gate in this file that NO CI job ran:
+# only scripts/ci.sh checked root CLAUDE.md against DocsConfig.core_max_lines,
+# and test_docs_trimmer.py exercises the tool against synthetic fixtures rather
+# than the real file. It is now a real `local-gates` step in ci.yml, and
+# tests/regression/test_ci_gate_wiring_aqa.py::TestEveryCiShGateReachesCi sweeps
+# for the next gate that tries to live here alone. Kept in `make gates` so the
+# local ladder still matches CI rather than deferring to it.
 doc-budgets: ## CLAUDE.md size + doc hygiene + ratchet budgets, all strict
 	$(PYTHON) -m tools.claude_hooks.docs_trimmer
 	$(PYTHON) tools/doc_hygiene.py NEXT_STEPS.md --strict

@@ -44,7 +44,8 @@ new classifier, so the message text has exactly one source. `--strict` is now wi
 The severity split is not a refinement of the flag; it is the precondition for the flag
 existing usefully at all. Without it there is no wiring, and the budgets stay decorative.
 
-**(b) We will promote `security` from advisory to blocking, three days inside its window,
+**(b) We will promote `security` from advisory to blocking, 53 days into its 60-day
+window (7 days before the 2026-09-23 deadline),
 on a findings-triage bar rather than a green-run count.**
 
 `pip-audit --skip-editable` reports zero vulnerabilities across the resolved
@@ -87,7 +88,7 @@ severity flags is a worse API than one flag with correct semantics: every caller
 to know which of the two it wants, and the documented meaning of `--strict` stays wrong.
 The compatibility argument for it was also empty — no existing test depended on the old
 behaviour, because every `--strict` exit-1 test already used a real breach (25 occurrences
-against a ceiling of 20). Fixing `--strict` in place broke nothing.
+against a ceiling of 19). Fixing `--strict` in place broke nothing.
 
 **Letting the `security` window run to 2026-09-23 and promoting then.** Rejected. The bar
 is findings, not calendar days, and the findings were already triaged to zero. Waiting

@@ -28,7 +28,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from mousedroid.logging.redaction import redact_uri_credentials
+from mousedroid.logging.redaction import redact_uri_credentials, redact_uris_in_text
 from mousedroid.logging.setup import get_logger
 from mousedroid.training.observability.protocol import (
     PhaseContext,
@@ -36,6 +36,31 @@ from mousedroid.training.observability.protocol import (
 )
 
 _log = get_logger(__name__)
+
+
+def _redacted_error(exc: BaseException) -> str:
+    """Return ``exc``'s message with any embedded URI credentials masked.
+
+    Every ``except`` block in this module logs the exception text, and this
+    module is the one holding the tracking URI -- which is a plain ``str``, not a
+    ``SecretStr``, and may carry inline credentials
+    (``https://user:pw@host/path``). mlflow's own exceptions quote the offending
+    URI verbatim, password included (see
+    :func:`~mousedroid.logging.redaction.redact_uris_in_text`, whose docstring
+    names the case), so logging ``str(exc)`` raw would defeat the redaction
+    already applied to the initialization event.
+
+    ``factory/telemetry.py:146,160`` already wraps its exception text this way;
+    this is the same rule applied where the URI actually lives.
+
+    Args:
+        exc: The caught exception.
+
+    Returns:
+        The message text with every embedded URI's userinfo component masked.
+    """
+    return redact_uris_in_text(str(exc))
+
 
 # mlflow 3.x rejects the local file-store backend unless this env var is
 # set.  ``setdefault`` is idempotent — it never overwrites an operator's
@@ -154,7 +179,7 @@ class MlflowExperimentLogger:
             _log.warning(
                 "mlflow_logger_start_run_failed",
                 error_type=type(exc).__name__,
-                error=str(exc),
+                error=_redacted_error(exc),
             )
             return ""
         active_run_id: str = run.info.run_id  # annotated-local (see _resolve note)
@@ -180,7 +205,7 @@ class MlflowExperimentLogger:
                     "mlflow_logger_log_param_failed",
                     key=key,
                     error_type=type(exc).__name__,
-                    error=str(exc),
+                    error=_redacted_error(exc),
                 )
 
     def log_metric(self, key: str, value: Any, step: int | None = None) -> None:
@@ -204,7 +229,7 @@ class MlflowExperimentLogger:
                 "mlflow_logger_log_metric_failed",
                 key=key,
                 error_type=type(exc).__name__,
-                error=str(exc),
+                error=_redacted_error(exc),
             )
 
     def log_artifact(self, local_path: str) -> None:
@@ -226,7 +251,7 @@ class MlflowExperimentLogger:
                 "mlflow_logger_log_artifact_failed",
                 path=local_path,
                 error_type=type(exc).__name__,
-                error=str(exc),
+                error=_redacted_error(exc),
             )
 
     def end_run(self, *, status: str = "FINISHED") -> None:
@@ -252,7 +277,7 @@ class MlflowExperimentLogger:
             _log.warning(
                 "mlflow_logger_end_run_failed",
                 error_type=type(exc).__name__,
-                error=str(exc),
+                error=_redacted_error(exc),
             )
         finally:
             self._active_run_id = None
@@ -295,7 +320,7 @@ class MlflowExperimentLogger:
                 "mlflow_logger_start_phase_failed",
                 phase=phase,
                 error_type=type(exc).__name__,
-                error=str(exc),
+                error=_redacted_error(exc),
             )
             return PhaseContext(run_id="", phase=phase)
         if params:
@@ -308,7 +333,7 @@ class MlflowExperimentLogger:
                         phase=phase,
                         key=key,
                         error_type=type(exc).__name__,
-                        error=str(exc),
+                        error=_redacted_error(exc),
                     )
         return PhaseContext(run_id=run.info.run_id, phase=phase)
 
@@ -340,7 +365,7 @@ class MlflowExperimentLogger:
                 phase=ctx.phase,
                 key=key,
                 error_type=type(exc).__name__,
-                error=str(exc),
+                error=_redacted_error(exc),
             )
 
     def log_phase_artifact(self, ctx: PhaseContext, local_path: str) -> None:
@@ -362,7 +387,7 @@ class MlflowExperimentLogger:
                 "mlflow_logger_log_phase_artifact_failed",
                 phase=ctx.phase,
                 error_type=type(exc).__name__,
-                error=str(exc),
+                error=_redacted_error(exc),
             )
 
     def end_phase(self, ctx: PhaseContext, *, status: str = "FINISHED") -> None:
@@ -390,7 +415,7 @@ class MlflowExperimentLogger:
                 "mlflow_logger_end_phase_failed",
                 phase=ctx.phase,
                 error_type=type(exc).__name__,
-                error=str(exc),
+                error=_redacted_error(exc),
             )
 
 

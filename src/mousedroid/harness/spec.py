@@ -198,24 +198,39 @@ def git_rev_ok(ref: str | None, *, cwd: str | Path | None = None) -> bool:
 def _validation_env() -> dict[str, str]:
     """Return the environment a ``validation_command`` runs under.
 
-    Most catalog commands start with a bare ``python``/``python3``, and under
-    ``shell=True`` that resolves through ``PATH`` — whichever interpreter the
-    shell finds first, which is not necessarily the one running this harness.
-    In a checkout whose dependencies live in a virtualenv, ``make validate``
-    then fails every command with ``ModuleNotFoundError: No module named
-    'pydantic'`` while the same command works when typed by hand inside the
-    activated environment.
+    Of the 40 catalog commands, **19 start with a bare ``python``** and 21 with
+    ``bash`` — and 16 of those 21 shell scripts invoke python themselves (via
+    ``PY_BIN="${MOUSEDROID_PYTHON:-python}"``), so roughly 35 of 40 end up
+    resolving an interpreter through ``PATH`` under ``shell=True``: whichever one
+    the shell finds first, not necessarily the one running this harness. In a
+    checkout whose dependencies live in a virtualenv, ``make validate`` then fails
+    every command with ``ModuleNotFoundError: No module named 'pydantic'`` while
+    the same command works when typed by hand inside the activated environment.
+
+    (An earlier version of this docstring said "most commands start with a bare
+    ``python``". That was wrong — ``bash`` is the plurality — and the accurate
+    count is the stronger argument anyway.)
 
     Prepending this interpreter's directory to ``PATH`` makes a bare ``python``
     inside an operator-authored string resolve to the interpreter that launched
     the harness, without rewriting the command strings or giving up the shell
     semantics ``HARNESS_SPEC.md`` §5 promises operators.
 
+    The inverse hazard is real but narrow: launching the harness with a *system*
+    interpreter from inside an activated virtualenv demotes that venv on ``PATH``.
+    ``make validate`` cannot hit it (the Makefile's ``PYTHON`` prefers ``.venv``);
+    a direct ``/usr/bin/python3 scripts/validate.py`` can.
+
     Returns:
         A copy of the current environment with ``PATH`` front-loaded. Every
         other variable is passed through untouched, so a command that needs
         ``MOUSEDROID_*`` settings still sees them.
     """
+    if not sys.executable:
+        # Embedded/frozen interpreters report "" here, and Path("").parent is
+        # ".", which would front-load the *current directory* onto PATH for a
+        # shell=True command. Leave the environment alone instead.
+        return dict(os.environ)
     interpreter_dir = str(Path(sys.executable).parent)
     path = os.environ.get("PATH", "")
     return {

@@ -21,10 +21,13 @@ catching, and ``__all__`` only grew.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 import torch
 
 from mousedroid.config.schema import ExperienceConfig, MissionConfig
+from mousedroid.interfaces.protocols import GoalVector
 from mousedroid.orchestrator.mission_lifecycle import (
     MissionLifecycle,
     MissionLifecycleState,
@@ -282,3 +285,61 @@ class TestOnnxWarmupGuardsRaiseByName:
                 h=torch.zeros(1, 8),
                 z=torch.zeros(1, 4),
             )
+
+
+# ---------------------------------------------------------------------------
+# Mid-await mission swap (found by review of the _require_mission hold)
+# ---------------------------------------------------------------------------
+class _SwappingReplanner:
+    """A replanner that starts a *new* mission while the old one awaits it.
+
+    This is not a contrived race. ``submit_replan_request`` is an LLM call that
+    can take seconds; ``start_mission`` is sync, replaces ``_mission``
+    unconditionally, and is reachable from the aiohttp REST handler
+    (``_handle_mission_post`` -> ``process_mission`` ->
+    ``_start_mission_lifecycle_if_wired``) on the same event loop as the 30 Hz
+    tick. Doing the swap inside the await is the deterministic way to land the
+    interleaving a real REST request would land nondeterministically.
+    """
+
+    def __init__(self, lifecycle: MissionLifecycle, new_id: str) -> None:
+        self._lifecycle = lifecycle
+        self._new_id = new_id
+        self.calls = 0
+
+    async def submit_replan_request(
+        self, *, mission_id: str, goal_text: str, last_progress: float
+    ) -> GoalVector:
+        del mission_id, goal_text, last_progress
+        self.calls += 1
+        await asyncio.sleep(0)
+        self._lifecycle.start_mission(self._new_id, "a different goal")
+        return GoalVector()
+
+
+@pytest.mark.asyncio
+async def test_replan_abandons_when_the_mission_is_swapped_mid_await() -> None:
+    """A mission that arrives mid-replan must not inherit the replan.
+
+    Two properties, and the second is the one that bites: the new mission must
+    not be transitioned by a replan nobody requested for it (which would also
+    mislabel ``mission_state_transitions_total``), and the abandoned mission's
+    ``replan_count`` must not be incremented on a result that was discarded.
+    """
+    lifecycle = MissionLifecycle(_cfg())
+    lifecycle.start_mission("m-old", "original goal")
+    replanner = _SwappingReplanner(lifecycle, "m-new")
+    lifecycle._replanner = replanner
+
+    result = await lifecycle._handle_stall()
+
+    assert replanner.calls == 1, "the replan must actually have been awaited"
+    assert result.transitioned is False
+    assert result.reason == "replan_abandoned_mission_changed"
+    # The new mission is left exactly where start_mission put it: RUNNING, with
+    # no replan attributed to it.
+    current = lifecycle._mission
+    assert current is not None
+    assert current.mission_id == "m-new"
+    assert current.replan_count == 0
+    assert current.last_goal_vector is None

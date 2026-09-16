@@ -1,7 +1,14 @@
 """Regression: the declared package version has one source of truth.
 
 The version is declared in ``[project] version`` (pyproject.toml) and restated
-as a release heading in ``CHANGELOG.md``. ``src/mousedroid/__init__.py``
+in five other places: a release heading in ``CHANGELOG.md``, ``CITATION.cff``,
+``HARNESS_SPEC.md``, and a ``LABEL version`` in each of the three Dockerfiles.
+``CITATION.cff``'s own comment documents that set. Every one of them is pinned
+here — an earlier version of this file compared only pyproject against the
+changelog, so the other four could drift freely while this test stayed green
+(and they had: all three Dockerfiles and CITATION.cff were still on 0.3.0).
+
+``src/mousedroid/__init__.py``
 derives ``__version__`` from *installed distribution metadata*, so the
 pyproject value is what the runtime — and every telemetry sample, build label,
 and PyPI artefact carrying it — actually reports.
@@ -39,6 +46,8 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+
+import pytest
 
 from tests._pyproject import load_pyproject
 
@@ -102,3 +111,57 @@ def test_marker_headings_are_not_parsed_as_releases() -> None:
             f"{marker} parses as a release version; the newest-release lookup "
             f"would pin a section marker instead of a release"
         )
+
+
+# ---------------------------------------------------------------------------
+# The other four restatement surfaces
+# ---------------------------------------------------------------------------
+#: Every file that restates ``[project] version``, and how to find it. Kept as
+#: data so adding a surface is one row, not a new test -- and so the failure
+#: message can name the file an author has to edit.
+_VERSION_RESTATEMENTS: tuple[tuple[str, str], ...] = (
+    ("CITATION.cff", r"^version:\s*(?P<version>[0-9][^\s]*)\s*$"),
+    ("HARNESS_SPEC.md", r"^\s*version:\s*\"(?P<version>[0-9][^\"]*)\"\s*$"),
+    ("Dockerfile.dev", r'^LABEL version="(?P<version>[0-9][^"]*)"'),
+    ("Dockerfile.jetson", r'^LABEL version="(?P<version>[0-9][^"]*)"'),
+    ("docker/Dockerfile.cloud", r'^LABEL version="(?P<version>[0-9][^"]*)"'),
+)
+
+
+@pytest.mark.parametrize(("relpath", "pattern"), _VERSION_RESTATEMENTS)
+def test_restated_version_matches_pyproject(relpath: str, pattern: str) -> None:
+    """Each restatement must equal ``[project] version``.
+
+    These are the surfaces a release actually ships: the citation metadata, the
+    harness spec, and the image labels. Nothing derives them, so only a test
+    keeps them honest -- and the drift this catches is not hypothetical, it is
+    what this change had to repair by hand.
+    """
+    path = _REPO_ROOT / relpath
+    assert path.is_file(), f"{relpath} is missing — update _VERSION_RESTATEMENTS"
+    found = re.search(pattern, path.read_text(encoding="utf-8"), flags=re.MULTILINE)
+    assert found is not None, (
+        f"no version literal matched in {relpath}; the file's format changed, so "
+        "this pin is no longer reading what it thinks it is"
+    )
+    assert found.group("version") == _pyproject_version(), (
+        f"{relpath} declares version {found.group('version')!r} but pyproject.toml "
+        f"declares {_pyproject_version()!r}. Bump both, or derive one from the other."
+    )
+
+
+def test_every_restatement_surface_is_covered() -> None:
+    """Anti-vacuity: the roster must not silently shrink.
+
+    A parametrised test over an empty (or truncated) tuple passes by collecting
+    nothing, which is exactly the failure mode this file already suffered once.
+    """
+    assert len(_VERSION_RESTATEMENTS) == 5
+    covered = {relpath for relpath, _ in _VERSION_RESTATEMENTS}
+    assert covered == {
+        "CITATION.cff",
+        "HARNESS_SPEC.md",
+        "Dockerfile.dev",
+        "Dockerfile.jetson",
+        "docker/Dockerfile.cloud",
+    }

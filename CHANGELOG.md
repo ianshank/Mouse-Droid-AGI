@@ -8,6 +8,107 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Security — the MLflow tracking URI's password could reach ten log events
+
+`mlflow_logger.py` redacted credentials in its *initialization* event and then
+logged `error=str(exc)` verbatim in ten `except` blocks. The tracking URI is a
+plain `str`, not a `SecretStr`, and mlflow's own exceptions quote the offending
+URI back — password included. `logging/redaction.py::redact_uris_in_text` was
+written for exactly this case (its docstring names
+`UnsupportedModelRegistryStoreURIException`) and `factory/telemetry.py` already
+used it; it was simply absent from the module that holds the URI.
+
+All ten sites now go through one `_redacted_error` helper. Pinned by a test that
+raises an exception quoting a credentialed URI and asserts the password reaches
+no event while the host still does — a weaker fix that dropped the field would
+pass a password-only assertion, and the host is the diagnostic the event exists
+for. Verified the pin fails with the fix reverted: the password appears in
+plaintext in `mlflow_logger_start_run_failed`.
+
+### Fixed — a new mission could inherit another mission's replan
+
+`MissionLifecycle._handle_stall` held the mission state across the LLM
+`await submit_replan_request(...)`, and the `_require_mission` docstring asserted
+this was safe "because a lifecycle owns one mission and `tick` refuses terminal
+states". That reasoning was wrong: `start_mission` is *sync*, replaces `_mission`
+unconditionally with no in-flight or terminal-state check, and is reachable from
+the aiohttp REST handler (`_handle_mission_post` → `process_mission` →
+`_start_mission_lifecycle_if_wired`) on the same event loop as the 30 Hz tick.
+`tick`'s terminal-state guard constrains `tick`, not `start_mission`.
+
+So a mission arriving during a replan was transitioned to RUNNING with reason
+`replan_succeeded` by a replan nobody requested for it — mislabelling
+`mission_state_transitions_total` — while `replan_count` and `last_goal_vector`
+were written to the abandoned state object. `_handle_stall` now verifies mission
+identity the moment the await returns and abandons the stale replan, and the
+docstring records the false claim rather than quietly replacing it. Pinned by a
+replanner that starts a new mission from inside its own await.
+
+### Changed — review-driven hardening of the hook wrapper and its gates
+
+Peer review found five of this change's own claims false, and the fixes are
+listed here because each was a real hole rather than a wording problem: the
+`MOUSEDROID_PYTHON` override test could not distinguish "honoured" from
+"ignored" in a `.venv` checkout (now points at a sentinel); the capability test
+could not fail on a CI runner, where PATH's interpreter is already capable (now
+seeds a decoy `python3` that always fails); `MypyProfile.mypy_path` accepted
+Windows drive-letter paths because `PurePosixPath("C:\...").is_absolute()` is
+`False` (now also rejects `PureWindowsPath`, `~` and `..`); a profile with no
+`paths` loaded silently inert (now `min_length=1`); and the ci.sh gate sweep
+missed the inline `-c "from pkg.mod import ..."` form — which is how the
+workforce config is validated — while counting YAML *comments* as evidence a
+gate was wired.
+
+The wrapper also gained the repo-wide Windows venv layout
+(`.venv/Scripts/python.exe`, matching `scripts/ci.sh` and the Makefile, whose
+comment warns against exactly this divergence), an executability check on
+`MOUSEDROID_PYTHON` so a typo names itself instead of exiting 127, a guard
+against being wired with no arguments (which would hang the edit until the hook
+timeout), and pins for exit-code fidelity, stdin passthrough and the
+script-relative project-root fallback — three contracts the gates depend on that
+nothing exercised.
+
+### Fixed — `release.yml`'s type check ran a different dependency set than CI
+
+Its own comment says "Extras MUST match ci.yml's `typecheck` job", and adding
+`mlflow` to that job broke the contract without updating this one. `mypy --strict`
+is dependency-set sensitive in both directions — that asymmetry is what made the
+`mlflow-extras` job red — so the divergence is the shape of a tag build failing
+where CI was green. Not known to be load-bearing today (the
+`_resolve_or_create_experiment` annotated-local form satisfies both), which is
+stated plainly rather than claimed as a fix for a live break.
+
+### Fixed — five docs described the pre-fix hook wiring as current
+
+`docs/runbooks/claude-workforce-hooks.md` (the operator's first stop) listed
+`python3` on PATH as a *known limitation* with a manual workaround, and
+predicted the gates would be "silently inactive" — which is exactly what
+happened. `docs/architecture/c4-claude-workforce.md` asserted the old form was
+"Pinned by the AQA test" when the AQA test now pins its opposite. Also corrected:
+`SKILLS.md`, `docs/runbooks/worktrees.md`, and a `Makefile` comment claiming the
+`docs_trimmer` gate had no CI job — the change that gave it one is in this PR.
+
+### Fixed — three factual errors in landed history
+
+`security`'s promotion was recorded as "three days inside its 60-day window" in
+`CHANGELOG.md`, `ADR-018` and `.github/advisory_stages.yaml`. It is 53 days into
+that window, i.e. **seven days before** the 2026-09-23 deadline; the original
+phrasing was simply bad arithmetic. `ADR-018` also cited a historical `noqa`
+ceiling of 20 where the configured value is 19.
+
+### Fixed — two gates that could not catch what they claimed
+
+`test_package_facade_exports_aqa.py` treated any `ast.Constant` as a valid
+`__all__` entry, so `__all__ = [1]` contributed no name *and* was not flagged as
+unresolvable — a facade that raises `TypeError` on star-import passed both halves.
+`test_package_version_single_source.py` compared only `pyproject.toml` against
+`CHANGELOG.md`, leaving `CITATION.cff`, `HARNESS_SPEC.md` and three Dockerfile
+`LABEL version` literals free to drift — and they had, all four still on `0.3.0`.
+All five surfaces are now pinned, with an anti-vacuity check on the roster itself.
+`Makefile`'s `COV_MIN` joined the coverage-threshold parity test for the same
+reason: it drives both `make test-cov` and `make branch-coverage`, so a drifted
+value forks the entire local ladder from CI.
+
 ### Fixed — every Claude Code hook was failing open (tech-debt Wave 1)
 
 `.claude/settings.json` wired its four hooks as `cd "$CLAUDE_PROJECT_DIR" &&
@@ -136,7 +237,9 @@ Wired into `ci.yml`'s `local-gates` and `scripts/ci.sh`.
 
 ### Changed — `security` (pip-audit) promoted advisory → blocking
 
-Three days inside its 60-day window (opened 2026-07-25, due 2026-09-23). The bar
+Promoted 53 days into its 60-day window — 7 days before the deadline (opened
+2026-07-25, due 2026-09-23). An earlier draft of this entry said "three days
+inside", which was wrong arithmetic. The bar
 was triaging findings, not a green window: `pip-audit --skip-editable` reports
 zero vulnerabilities across the resolved `[dev,telemetry,mcp]` set, including
 every network-facing package. The `advisory_stages.yaml` entry is removed in the

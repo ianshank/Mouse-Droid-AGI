@@ -155,9 +155,18 @@ def test_profile_is_selected_by_repo_relative_glob() -> None:
 def test_unmatched_file_keeps_the_default_mypy_args(tmp_path: Path) -> None:
     """A non-matching path must not inherit another tree's flags.
 
-    ``--explicit-package-bases`` is wrong for ``src/``: it makes mypy resolve the
-    same file as both ``src.mousedroid`` and ``mousedroid`` and report nothing
-    else, which is the exact failure the profiles exist to avoid.
+    ``--explicit-package-bases`` is wrong for ``src/``, and the mechanism is a
+    module *rename*, not always an error: with it, mypy resolves
+    ``src/mousedroid/harness/spec.py`` as ``src.mousedroid.harness.spec`` instead
+    of ``mousedroid.harness.spec`` (confirmed with ``mypy --verbose``), which
+    detaches the ``[[tool.mypy.overrides]]`` entries in ``pyproject.toml`` that
+    target ``mousedroid.*``. On some files it is louder -- checking
+    ``orchestrator/mission_lifecycle.py`` that way does produce a "Source file
+    found twice" error -- but the rename is the part that holds for every file.
+
+    An earlier version of this docstring claimed the collision was universal.
+    Peer review measured ``Success`` on ``harness/spec.py``, and re-measuring
+    showed both of us had generalised from a single file.
     """
     repo = _repo(tmp_path)
     cfg = _profile_config(paths=["tools/**"], args=["--explicit-package-bases"], mypy_path=".")

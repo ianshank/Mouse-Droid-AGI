@@ -259,13 +259,49 @@ def test_mypy_profile_without_mypy_path_inherits_the_environment(tmp_path: Path)
     assert load_config(repo_root=tmp_path).post_edit.mypy_profiles[0].mypy_path is None
 
 
-@pytest.mark.parametrize("mypy_path", ["/home/someone/repo", "/etc"])
+@pytest.mark.parametrize(
+    "mypy_path",
+    [
+        "/home/someone/repo",
+        "/etc",
+        # Windows drive-letter forms. PurePosixPath(...).is_absolute() is False
+        # for both, so a POSIX-only validator accepted them -- and on Windows
+        # `repo_root / "C:\\Users\\me"` IS "C:\\Users\\me", so MYPYPATH landed
+        # off-checkout. Caught by peer review; these two are the pin.
+        "C:\\Users\\me\\repo",
+        "C:/Users/me/repo",
+        # Both escape the checkout the value is joined onto.
+        "~/elsewhere",
+        "../../..",
+    ],
+)
 def test_absolute_mypy_path_is_rejected(tmp_path: Path, mypy_path: str) -> None:
     """Invariant I-3: an absolute MYPYPATH pins the config to one checkout."""
     _write_config(
         tmp_path,
         f"post_edit:\n    mypy_profiles:\n        - paths:\n              - x/**\n"
         f"          mypy_path: '{mypy_path}'\n",
+    )
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+def test_mypy_profile_without_paths_is_rejected(tmp_path: Path) -> None:
+    """A profile with no paths can never match, so it must not load quietly.
+
+    ``extra="forbid"`` already makes a mistyped *key* loud; an omitted ``paths``
+    was silent, which is the same class of mistake with the opposite outcome.
+    """
+    _write_config(tmp_path, "post_edit:\n    mypy_profiles:\n        - args: [--strict]\n")
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+def test_mypy_profile_with_empty_paths_list_is_rejected(tmp_path: Path) -> None:
+    """Explicitly empty is the same inert profile, spelled differently."""
+    _write_config(
+        tmp_path,
+        "post_edit:\n    mypy_profiles:\n        - paths: []\n          args: [--strict]\n",
     )
     with pytest.raises(ConfigError):
         load_config(repo_root=tmp_path)

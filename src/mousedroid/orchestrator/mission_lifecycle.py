@@ -415,13 +415,20 @@ class MissionLifecycle:
         :class:`MissionLifecycleStateError` for why that distinction is
         load-bearing on the rover.
 
-        Callers must not hold the returned state across an ``await``. Every other
-        guarded method re-derives it, so a mission swapped mid-await would leave a
-        holder writing to the old state while its callees transitioned the new
-        one. ``_handle_stall`` does hold it across
-        ``submit_replan_request``; that is safe only because a lifecycle owns one
-        mission and ``tick`` refuses terminal states, so no concurrent
-        ``start_mission`` can land. Preserve that or re-derive.
+        Callers must not hold the returned state across an ``await`` without
+        re-checking it. A mission swapped mid-await would otherwise leave the
+        holder writing to the abandoned state while its callees transitioned the
+        new one. ``_handle_stall`` does hold it across
+        ``submit_replan_request``, so it verifies identity against
+        ``self._mission`` the moment the await returns and abandons the replan if
+        they differ — see the comment at that check.
+
+        An earlier version of this docstring claimed the hold was safe because a
+        lifecycle owns one mission and ``tick`` refuses terminal states. That was
+        wrong: ``start_mission`` is sync, replaces ``_mission`` unconditionally
+        with no in-flight or terminal-state check, and is reachable from the
+        aiohttp REST handler while the tick task is suspended. ``tick``'s
+        terminal-state guard constrains ``tick``, not ``start_mission``.
 
         Args:
             operation: Short name of the calling operation, surfaced in the log
@@ -474,6 +481,36 @@ class MissionLifecycle:
                 error=type(exc).__name__,
             )
             new_goal = None
+
+        # Re-derive after the await. ``submit_replan_request`` is an LLM call that
+        # can take seconds, and ``start_mission`` is reachable concurrently: it is
+        # sync, replaces ``_mission`` unconditionally with no in-flight or
+        # terminal-state check, and runs from the aiohttp REST handler
+        # (``telemetry/server/_rest_handlers.py::_handle_mission_post`` ->
+        # ``_mission_mixin.process_mission`` ->
+        # ``_start_mission_lifecycle_if_wired``) on the same event loop as the
+        # 30 Hz tick. Without this check a mission that arrived mid-replan would
+        # be transitioned to RUNNING with reason "replan_succeeded" by a replan
+        # nobody requested for it, its ``mission_state_transitions_total`` label
+        # attributed to the wrong mission, while ``replan_count`` and
+        # ``last_goal_vector`` were written to the abandoned state object.
+        #
+        # This check is also what makes the ``_require_mission`` contract true
+        # rather than merely asserted: every guarded method either re-derives or,
+        # here, verifies identity.
+        current = self._mission
+        if current is not mission:
+            _log.warning(
+                "mission_replan_abandoned_mission_changed",
+                replanned_mission_id=mission.mission_id,
+                current_mission_id=None if current is None else current.mission_id,
+            )
+            return MissionTickResult(
+                state=MissionLifecycleState.PENDING if current is None else current.state,
+                progress=0.0 if current is None else current.last_progress,
+                transitioned=False,
+                reason="replan_abandoned_mission_changed",
+            )
 
         if new_goal is None:
             return self._transition_to_failed(reason="llm_replan_unavailable")

@@ -46,8 +46,9 @@ stages:
       the tier lands advisory. Promotion decision at window end: make
       blocking if consistently green, or keep advisory + record the runner
       variance in an ADR.
-  # security: promoted advisory -> blocking 2026-09-16 (tech-debt Wave 1), three
-  # days inside its 60-day window (opened 2026-07-25, due 2026-09-23). The bar
+  # security: promoted advisory -> blocking 2026-09-16 (tech-debt Wave 1), 53 days
+  # into its 60-day window -- 7 days BEFORE the deadline, not 'three days inside',
+  # which was simply bad arithmetic (opened 2026-07-25, due 2026-09-23). The bar
   # was "triage the current vulnerability findings", not a green window alone:
   # `pip-audit --skip-editable` over the resolved [dev,telemetry,mcp] set reports
   # zero vulnerabilities across 123 packages, including every network-facing one

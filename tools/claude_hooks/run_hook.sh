@@ -49,6 +49,15 @@ _can_import() {
 
 _resolve_interpreter() {
 	if [ -n "${MOUSEDROID_PYTHON:-}" ]; then
+		# Used verbatim -- an operator naming an interpreter is an instruction,
+		# not a hint -- but checked for executability first. Without this a typo
+		# reaches `exec` and dies with bash's bare "No such file or directory"
+		# (rc=127), which never mentions hooks or gates and so reads as a random
+		# shell error rather than a bypassed freeze gate.
+		if [ ! -x "${MOUSEDROID_PYTHON}" ]; then
+			_warn "MOUSEDROID_PYTHON=${MOUSEDROID_PYTHON} is not an executable file; gates cannot run"
+			return 1
+		fi
 		printf '%s\n' "${MOUSEDROID_PYTHON}"
 		return 0
 	fi
@@ -60,7 +69,18 @@ _resolve_interpreter() {
 	if [ -n "${VIRTUAL_ENV:-}" ]; then
 		candidates+=("${VIRTUAL_ENV}/bin/python")
 	fi
-	candidates+=("${PROJECT_DIR}/.venv/bin/python" "${PROJECT_DIR}/venv/bin/python")
+	# Windows layout first, then POSIX -- the same order (and for the same
+	# reason) as `scripts/ci.sh` and the Makefile's `PYTHON ?=`, whose comment
+	# warns that diverging lets different tools run different interpreters on one
+	# checkout. Omitting `.venv/Scripts/python.exe` would make a Windows checkout
+	# with a project venv fall through to PATH, reproducing the very bug this
+	# wrapper exists to fix.
+	candidates+=(
+		"${PROJECT_DIR}/.venv/Scripts/python.exe"
+		"${PROJECT_DIR}/.venv/bin/python"
+		"${PROJECT_DIR}/venv/Scripts/python.exe"
+		"${PROJECT_DIR}/venv/bin/python"
+	)
 	local on_path
 	for on_path in python3 python; do
 		if command -v "${on_path}" >/dev/null 2>&1; then
@@ -81,8 +101,18 @@ _resolve_interpreter() {
 	done
 
 	if [ -n "${first_executable}" ]; then
-		# Preserves the pre-existing behaviour (the hook runs, fails to import,
-		# and the gate fails open) but says so out loud instead of silently.
+		# A deliberate trade-off, recorded rather than presented as a fix: this
+		# path still FAILS OPEN. The hook runs, fails to import, exits 1, and
+		# Claude Code treats that as a non-blocking error -- so the edit proceeds
+		# with the freeze gate and secret scan bypassed, exactly as before. What
+		# changed is only that it now says so on stderr instead of silently.
+		#
+		# Failing closed here is not a drop-in: a PreToolUse deny must be exit 0
+		# plus a JSON decision payload, and a bare exit 2 on a PostToolUse hook
+		# feeds stderr back to the model instead of blocking. Doing it properly
+		# means the wrapper knowing which event it serves, which is a larger
+		# change than this fix; the blocking `gitleaks` CI job and the F-024
+		# review discipline are the backstop until then.
 		_warn "no interpreter could import tools.claude_hooks.config; falling back to ${first_executable} -- gates will fail open. Install the dev extra into a virtualenv, or set MOUSEDROID_PYTHON."
 		printf '%s\n' "${first_executable}"
 		return 0

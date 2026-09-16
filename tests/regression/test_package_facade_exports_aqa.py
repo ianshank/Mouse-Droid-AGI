@@ -96,7 +96,14 @@ def _has_unresolvable_all_entries(tree: ast.Module) -> bool:
         return False
     return any(
         not isinstance(value, ast.List | ast.Tuple)
-        or any(not isinstance(el, ast.Constant) for el in value.elts)
+        # A non-string constant must count as unresolvable, not as a benign
+        # entry: ``__all__ = [1]`` makes Python raise TypeError on a star-import,
+        # but ``isinstance(el, ast.Constant)`` alone is satisfied by it, so the
+        # element contributed no name AND was not flagged — the malformed facade
+        # passed both halves of this check.
+        or any(
+            not isinstance(el, ast.Constant) or not isinstance(el.value, str) for el in value.elts
+        )
         for value in value_nodes
     )
 
@@ -312,3 +319,18 @@ def test_approval_facade_specifically_binds_both_gates() -> None:
     assert _declared_exports(tree) == ["OpenClawSafetyGate", "SandboxPolicyGate"]
     assert {"OpenClawSafetyGate", "SandboxPolicyGate"} <= _module_level_bound_names(tree)
     assert not _defines_module_getattr(tree), "these are eager imports, not lazy"
+
+
+def test_a_non_string_all_entry_counts_as_unresolvable() -> None:
+    """``__all__ = [1]`` must not sail through as a benign entry.
+
+    Python raises ``TypeError: attribute name must be string`` when expanding
+    such an ``__all__``, so a facade declaring one is broken. The earlier check
+    accepted any ``ast.Constant``: the element yielded no name for the export
+    sweep and was not flagged as unresolvable either, so the malformed facade
+    satisfied both halves. Found by review, not by the suite.
+    """
+    assert _has_unresolvable_all_entries(ast.parse("__all__ = [1]\n"))
+    assert _has_unresolvable_all_entries(ast.parse("__all__ = ['ok', 2]\n"))
+    # The well-formed case must stay unflagged, or the guard is just always-true.
+    assert not _has_unresolvable_all_entries(ast.parse("__all__ = ['ok', 'fine']\n"))

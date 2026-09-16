@@ -516,11 +516,15 @@ class TestEveryTierReachesCi:
             assert reason.strip(), f"exemption for {tier!r} has no documented reason"
 
 
-#: Regex for the deterministic gate invocations in scripts/ci.sh: a module run
-#: as ``-m pkg.mod`` or a script run as ``tools/x.py`` / ``scripts/x.py``.
+#: Regex for the deterministic gate invocations in scripts/ci.sh. Three forms:
+#: a module run as ``-m pkg.mod``; a script run as ``tools/x.py`` /
+#: ``scripts/x.py``; and an inline ``-c "from pkg.mod import ..."``, which is how
+#: the workforce-config validation runs and which an earlier version of this
+#: regex missed entirely (found by peer review).
 _CI_SH_GATE_RE = re.compile(
     r"(?:-m\s+(?P<module>[a-z_][a-z0-9_.]*)"
-    r'|"?\$PYTHON_BIN"?\s+(?P<script>(?:tools|scripts)/[\w/]+\.py))'
+    r'|"?\$PYTHON_BIN"?\s+(?P<script>(?:tools|scripts)/[\w/]+\.py)'
+    r'|-c\s+"?(?:from|import)\s+(?P<inline>[a-z_][a-z0-9_.]*))'
 )
 
 #: Generic tooling that is a *runner*, not a gate — matching these would assert
@@ -552,34 +556,58 @@ _CI_EXEMPT_GATES: dict[str, str] = {
 
 
 def _discover_ci_sh_gates() -> set[str]:
-    """Every deterministic gate scripts/ci.sh invokes.
+    """Every deterministic gate scripts/ci.sh invokes *in one of three forms*.
 
     Discovered by regex rather than listed, for the same reason
     :func:`_discover_test_tiers` is: a hardcoded roster would let the *next*
     ci.sh-only gate slip through exactly as ``tools.claude_hooks.docs_trimmer``
     did — it guarded the root CLAUDE.md line budget and no workflow ran it, so a
     PR that blew the budget passed all 17 jobs.
+
+    **Scope, stated because the first version of this docstring overstated it.**
+    This covers ``-m pkg.mod``, ``$PYTHON_BIN path/to/x.py``, and inline
+    ``-c "from pkg.mod import ..."``. A gate added as a heredoc, as
+    ``bash scripts/foo.sh``, or as a direct binary is still invisible, so this
+    narrows the window rather than closing it. Widen the regex when a fourth form
+    appears; do not read the sweep as exhaustive.
     """
     text = _CI_SH.read_text(encoding="utf-8")
     gates: set[str] = set()
     for match in _CI_SH_GATE_RE.finditer(text):
-        module, script = match.group("module"), match.group("script")
-        if module and module not in _CI_SH_RUNNERS:
-            gates.add(module)
-        elif script:
-            gates.add(script)
+        for group in ("module", "script", "inline"):
+            value = match.group(group)
+            if not value:
+                continue
+            if group == "script":
+                gates.add(value)
+            elif value not in _CI_SH_RUNNERS:
+                # An inline `-c "from pkg.mod import ..."` is credited to the
+                # module it imports: `tools.claude_hooks.config` is the gate.
+                gates.add(value)
     return gates
 
 
 def _all_workflow_text() -> str:
-    """The raw text of every workflow, comments included.
+    """The text of every workflow, with YAML comments stripped.
 
-    Raw rather than parsed: a gate may be invoked from any workflow (``validate.py``
-    lives in harness.yml, not ci.yml), and this only ever asks whether a gate is
-    mentioned *somewhere*, which the enumerated per-job pins above then sharpen.
+    Text rather than parsed structure: a gate may be invoked from any workflow
+    (``validate.py`` lives in harness.yml, not ci.yml), and this only ever asks
+    whether a gate is mentioned *somewhere*, which the enumerated per-job pins
+    above then sharpen.
+
+    Comments are stripped because counting them let a gate named only in prose
+    satisfy the sweep — delete the ``run:`` line, keep a comment mentioning the
+    module, and the gate is unwired while this test stays green. The new
+    ``docs_trimmer`` step ships exactly such a comment, so it is not theoretical.
     """
     workflows = _REPO_ROOT / ".github" / "workflows"
-    return "\n".join(path.read_text(encoding="utf-8") for path in sorted(workflows.glob("*.yml")))
+    lines: list[str] = []
+    for path in sorted(workflows.glob("*.yml")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.lstrip().startswith("#"):
+                continue
+            lines.append(line.split(" #", 1)[0] if " #" in line else line)
+    return "\n".join(lines)
 
 
 class TestEveryCiShGateReachesCi:
@@ -611,8 +639,14 @@ class TestEveryCiShGateReachesCi:
         """
         discovered = _discover_ci_sh_gates()
         assert len(discovered) >= 10, f"the ci.sh gate sweep found only {discovered}"
+        # One per recognised form, so losing a branch of the regex fails here
+        # rather than silently shrinking what the sweep can see.
         assert "scripts/check_subsystem_boundaries.py" in discovered
         assert "tools.claude_hooks.docs_trimmer" in discovered
+        assert "tools.claude_hooks.config" in discovered, (
+            "the inline -c form is not being discovered — ci.sh validates the "
+            "workforce config that way, and it was invisible until peer review"
+        )
 
     def test_exemptions_are_not_stale(self) -> None:
         """An exemption for a gate ci.sh no longer runs is dead policy."""

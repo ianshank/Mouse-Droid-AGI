@@ -14,7 +14,7 @@ load time instead of silently disabling a gate.
 
 from __future__ import annotations
 
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 import yaml
@@ -128,10 +128,13 @@ class MypyProfile(BaseModel):
     model_config = _STRICT
 
     paths: list[str] = Field(
-        default_factory=list,
+        min_length=1,
         description=(
             "Repo-relative glob patterns, evaluated in order. The first profile "
-            "matching the edited file supplies that file's mypy invocation."
+            "matching the edited file supplies that file's mypy invocation. At "
+            "least one pattern is required: a profile with no paths can never "
+            "match, so it would be silently inert -- and this schema's whole "
+            "posture (extra='forbid') is that a configuration mistake fails loudly."
         ),
     )
     args: list[str] = Field(
@@ -155,13 +158,29 @@ class MypyProfile(BaseModel):
     @field_validator("mypy_path")
     @classmethod
     def _reject_absolute_mypy_path(cls, value: str | None) -> str | None:
-        """Keep MYPYPATH repo-relative (invariant I-3, portability).
+        """Keep MYPYPATH repo-relative and inside the checkout (invariant I-3).
 
-        An absolute path here would pin the config to one machine's checkout,
-        which is exactly what ``portability.find_absolute_paths`` exists to stop.
+        An absolute path here pins the config to one machine, which is what
+        ``portability.find_absolute_paths`` exists to stop -- and since the hook
+        joins this onto the repo root, a value that escapes the checkout sends
+        MYPYPATH somewhere arbitrary.
+
+        ``PurePosixPath`` alone is not enough, and an earlier version of this
+        validator that used only it was strictly weaker than the authority its
+        docstring cited: ``PurePosixPath("C:\\Users\\me").is_absolute()`` is
+        ``False``, so Windows drive-letter paths sailed through, even though
+        ``portability`` ships a dedicated ``_WINDOWS_ABSOLUTE_RE`` for exactly
+        that shape. ``~`` and ``..`` are rejected for the same reason: both
+        resolve outside the checkout.
         """
-        if value is not None and PurePosixPath(value).is_absolute():
+        if value is None:
+            return value
+        if PurePosixPath(value).is_absolute() or PureWindowsPath(value).is_absolute():
             raise ValueError("must be repo-relative, not absolute")
+        if value.startswith("~"):
+            raise ValueError("must be repo-relative; '~' expands outside the checkout")
+        if ".." in PurePosixPath(value).parts:
+            raise ValueError("must stay inside the checkout; '..' escapes the repo root")
         return value
 
 

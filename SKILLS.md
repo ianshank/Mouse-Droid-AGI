@@ -740,10 +740,10 @@ so a misspelled key fails loudly instead of silently disabling a gate.
 ```bash
 # Drive a hook by hand with a synthetic payload (empty stdout == allow):
 echo '{"tool_name":"Write","tool_input":{"file_path":"src/mousedroid/arm/x.py"}}' \
-    | python3 -m tools.claude_hooks.freeze_gate
+    | bash "$CLAUDE_PROJECT_DIR/tools/claude_hooks/run_hook.sh" -m tools.claude_hooks.freeze_gate
 
 # Verbose diagnostics (logs go to stderr — stdout is the decision channel):
-MOUSEDROID_WORKFORCE_DEBUG=1 python3 -m tools.claude_hooks.secret_scan
+MOUSEDROID_WORKFORCE_DEBUG=1 bash "$CLAUDE_PROJECT_DIR/tools/claude_hooks/run_hook.sh" -m tools.claude_hooks.secret_scan
 
 # Gates:
 python3 -m pytest tests/regression/test_claude_workforce_aqa.py \
@@ -751,7 +751,8 @@ python3 -m pytest tests/regression/test_claude_workforce_aqa.py \
 ```
 
 **Gotcha:** hook commands must be
-`cd "$CLAUDE_PROJECT_DIR" && python3 -m tools.claude_hooks.<module>`. Running the
+`bash "$CLAUDE_PROJECT_DIR/tools/claude_hooks/run_hook.sh" -m
+tools.claude_hooks.<module>`. Running the
 module file by path leaves the repo root off `sys.path`, so every hook dies with
 `ModuleNotFoundError` — and a PreToolUse crash is a non-blocking warning, so the
 gates would be silently inactive rather than obviously broken. Details:

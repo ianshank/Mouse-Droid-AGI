@@ -438,6 +438,10 @@ def test_wired_hook_commands_do_not_invoke_a_bare_interpreter() -> None:
     """
     for command in _hook_commands():
         tokens = command.split()
+        if "-m" not in tokens:
+            # Without this, tokens.index below raises ValueError and the failure
+            # reads as a broken test rather than a broken hook command.
+            pytest.fail(f"hook command is not a 'python -m' invocation: {command}")
         offenders = [
             token
             for token in tokens[: tokens.index("-m")]
@@ -471,13 +475,41 @@ def test_interpreter_wrapper_is_tracked_and_executable() -> None:
     )
 
 
-def test_interpreter_wrapper_resolves_an_interpreter_that_can_import_the_hooks() -> None:
+def _decoy_interpreter_dir(tmp_path: Path, name: str) -> Path:
+    """A directory holding an executable ``name`` that always fails.
+
+    Stands in for the *incapable* interpreter the wrapper must refuse. Without a
+    decoy, a capability test is environment-dependent theatre: on a CI runner
+    ``pip install -e .`` goes into ``setup-python``'s interpreter with no
+    virtualenv, so ``python3`` on PATH is already capable and a wrapper degraded
+    to ``exec python3 "$@"`` would pass. The decoy makes PATH hostile everywhere,
+    which is what makes the pin fire on the runner as well as locally.
+    """
+    decoy_dir = tmp_path / "decoy"
+    decoy_dir.mkdir()
+    decoy = decoy_dir / name
+    decoy.write_text("#!/bin/sh\nexit 9\n", encoding="utf-8")
+    decoy.chmod(0o755)
+    return decoy_dir
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shim script; cmd.exe differs")
+@pytest.mark.parametrize("decoy_name", ["python3", "python"])
+def test_interpreter_wrapper_resolves_an_interpreter_that_can_import_the_hooks(
+    tmp_path: Path, decoy_name: str
+) -> None:
     """An executable pin: the wrapper's *output* must be a capable interpreter.
 
     Asserting on the wrapper's text would pass for a wrapper that resolves the
-    wrong interpreter. Running it is what proves the gates can execute, and is
-    the assertion that would have caught the original bug.
+    wrong interpreter. Running it is what proves the gates can execute.
+
+    PATH is replaced by a directory whose only ``python3``/``python`` exits 9, so
+    the wrapper can only succeed by preferring the project virtualenv over PATH.
+    An earlier version of this test left the ambient PATH in place; peer review
+    showed it passed on CI regardless of the wrapper's behaviour, because CI has
+    no virtualenv and its PATH interpreter is already capable.
     """
+    decoy_dir = _decoy_interpreter_dir(tmp_path, decoy_name)
     completed = subprocess.run(
         [
             "bash",
@@ -489,8 +521,20 @@ def test_interpreter_wrapper_resolves_an_interpreter_that_can_import_the_hooks()
         capture_output=True,
         text=True,
         check=False,
-        env={**os.environ, "CLAUDE_PROJECT_DIR": str(_REPO_ROOT)},
+        env={
+            **os.environ,
+            "CLAUDE_PROJECT_DIR": str(_REPO_ROOT),
+            # Prepended, not replacing: the decoy must shadow python3/python
+            # while `bash`, `cd` and `command -v` stay resolvable. Replacing PATH
+            # outright made this test die with FileNotFoundError on `bash`.
+            "PATH": os.pathsep.join([str(decoy_dir), os.environ.get("PATH", "")]),
+        },
     )
+    if completed.returncode == 9:
+        pytest.fail(
+            f"the wrapper exec'd the incapable {decoy_name} decoy from PATH instead of "
+            "probing for one that can import the hook package — every gate fails open"
+        )
     assert completed.returncode == 0, (
         f"the wrapper resolved an interpreter that cannot import the hook package — "
         f"every gate would fail open.\nstdout: {completed.stdout}\nstderr: {completed.stderr}"
@@ -552,8 +596,22 @@ def test_post_edit_mypy_profile_covers_the_hook_package_itself() -> None:
     )
 
 
-def test_interpreter_wrapper_honours_the_explicit_override() -> None:
-    """``MOUSEDROID_PYTHON`` wins outright, so an operator can pin an interpreter."""
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shim script; cmd.exe differs")
+def test_interpreter_wrapper_honours_the_explicit_override(tmp_path: Path) -> None:
+    """``MOUSEDROID_PYTHON`` wins outright, so an operator can pin an interpreter.
+
+    Pointed at a *sentinel* rather than at ``sys.executable``. An earlier version
+    set ``MOUSEDROID_PYTHON=sys.executable`` and asserted the wrapper printed
+    ``sys.executable`` — which in a ``.venv`` checkout is exactly what
+    auto-resolution produces anyway, so the assertion could not distinguish
+    "override honoured" from "override ignored". Peer review caught it by deleting
+    the override branch and watching the test still pass. A sentinel that no
+    resolution path could ever pick is what makes this discriminate.
+    """
+    sentinel = tmp_path / "sentinel-python"
+    sentinel.write_text("#!/bin/sh\necho OVERRIDE_HONOURED\n", encoding="utf-8")
+    sentinel.chmod(0o755)
+
     completed = subprocess.run(
         ["bash", str(_INTERPRETER_WRAPPER), "-c", "import sys; print(sys.executable)"],
         cwd=_REPO_ROOT,
@@ -563,11 +621,118 @@ def test_interpreter_wrapper_honours_the_explicit_override() -> None:
         env={
             **os.environ,
             "CLAUDE_PROJECT_DIR": str(_REPO_ROOT),
-            "MOUSEDROID_PYTHON": sys.executable,
+            "MOUSEDROID_PYTHON": str(sentinel),
         },
     )
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout.strip() == sys.executable
+    assert completed.stdout.strip() == "OVERRIDE_HONOURED", (
+        "MOUSEDROID_PYTHON was ignored — the wrapper resolved its own interpreter "
+        f"instead of the operator's. stdout: {completed.stdout!r}"
+    )
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shim script; cmd.exe differs")
+def test_interpreter_wrapper_rejects_a_non_executable_override(tmp_path: Path) -> None:
+    """A typo'd override must name itself, not die as a bare shell error.
+
+    Used verbatim without an executability check, ``MOUSEDROID_PYTHON=/no/such/py``
+    reaches ``exec`` and exits 127 with only bash's "No such file or directory" —
+    a message that never mentions hooks or gates, so an operator reads it as
+    unrelated noise while every gate is silently bypassed.
+    """
+    completed = subprocess.run(
+        ["bash", str(_INTERPRETER_WRAPPER), "-c", "pass"],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        stdin=subprocess.DEVNULL,
+        env={
+            **os.environ,
+            "CLAUDE_PROJECT_DIR": str(_REPO_ROOT),
+            "MOUSEDROID_PYTHON": str(tmp_path / "does-not-exist"),
+        },
+    )
+    assert completed.returncode != 0
+    assert "MOUSEDROID_PYTHON" in completed.stderr
+    assert "gates cannot run" in completed.stderr
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shim script; cmd.exe differs")
+@pytest.mark.parametrize("exit_code", [0, 1, 2, 42])
+def test_interpreter_wrapper_preserves_the_exit_code(exit_code: int) -> None:
+    """Exit-code fidelity is the whole contract Claude Code reads.
+
+    A PreToolUse deny is exit 0 plus a JSON payload; exit 2 blocks; anything else
+    non-zero is a non-blocking hook *error* — which is precisely how the original
+    bug hid. A future edit replacing ``exec`` with a call plus post-processing
+    would silently convert every deny into an error, so the pass-through is
+    pinned rather than assumed.
+    """
+    completed = subprocess.run(
+        ["bash", str(_INTERPRETER_WRAPPER), "-c", f"import sys; sys.exit({exit_code})"],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        stdin=subprocess.DEVNULL,
+        env={**os.environ, "CLAUDE_PROJECT_DIR": str(_REPO_ROOT)},
+    )
+    assert completed.returncode == exit_code, (
+        f"the wrapper rewrote exit {exit_code} as {completed.returncode}; a deny or a "
+        "block would be delivered as the wrong decision"
+    )
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shim script; cmd.exe differs")
+def test_interpreter_wrapper_passes_stdin_through_unread() -> None:
+    """The hook payload arrives on stdin and must reach the hook intact.
+
+    The capability probe runs a real interpreter, so anything it read from stdin
+    would be consumed before the hook saw it — the payload would vanish and every
+    hook would no-op on an empty document. ``</dev/null`` on the probe is what
+    prevents that, and this is what proves it.
+    """
+    payload = '{"tool_name":"Edit","tool_input":{"file_path":"README.md"}}'
+    completed = subprocess.run(
+        ["bash", str(_INTERPRETER_WRAPPER), "-c", "import sys; sys.stdout.write(sys.stdin.read())"],
+        cwd=_REPO_ROOT,
+        input=payload,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "CLAUDE_PROJECT_DIR": str(_REPO_ROOT)},
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout == payload, (
+        f"stdin did not survive the wrapper: {completed.stdout!r} != {payload!r}"
+    )
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shim script; cmd.exe differs")
+def test_interpreter_wrapper_falls_back_to_its_own_location() -> None:
+    """With ``CLAUDE_PROJECT_DIR`` unset the wrapper must still find the repo.
+
+    Its own header advertises this as "what makes this runnable by hand and from
+    the test suite", but every other test here sets the variable, so the branch
+    had no coverage at all. Run from a directory that is not the repo root, so a
+    wrapper relying on the ambient cwd fails.
+    """
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
+    completed = subprocess.run(
+        ["bash", str(_INTERPRETER_WRAPPER), "-c", "import tools.claude_hooks.config; print('ok')"],
+        cwd=_REPO_ROOT.parent,
+        capture_output=True,
+        text=True,
+        check=False,
+        stdin=subprocess.DEVNULL,
+        env=env,
+    )
+    assert completed.returncode == 0, (
+        f"the script-relative fallback did not resolve the project root.\n"
+        f"stdout: {completed.stdout}\nstderr: {completed.stderr}"
+    )
+    assert "ok" in completed.stdout
 
 
 # ---------------------------------------------------------------------------
