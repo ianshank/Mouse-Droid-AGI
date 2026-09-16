@@ -38,8 +38,12 @@ So this plan is not a rescue. It targets six specific weaknesses:
    shipped Jetson image, and 8 `assert` statements in `src/` — 4 of them in the
    mission-lifecycle / e-stop path — are silently stripped there. The lint rule
    that would catch this is globally disabled.
-2. **CI is green but not *reproducibly* green.** 23 matrix legs resolve a fresh
-   dependency tree on every run, with no lockfile.
+2. **CI is green, and that greenness is not load-bearing.** All 17 jobs were
+   reproduced locally and pass; PR #224 was 24/24. But 23 matrix legs resolve a
+   fresh dependency tree with no lockfile; there are **five** paths where a gate
+   goes green without checking anything; `push` CI has been dead since
+   2026-09-01 because it triggers on a `main` that does not exist; and a red
+   `lint` skips 14 of 17 jobs.
 3. **Config has three parallel roots**, and the gate meant to prevent that has a
    blind spot that exempts the codebase's own dominant naming convention.
 4. **God-file reduction stopped at the method boundary.** ADR-017 split the
@@ -76,7 +80,12 @@ Recorded so later waves can be judged against it rather than against impressions
 | `noqa` / `type: ignore` in `src/` | 19 / 8 (both at ratchet ceiling) | `grep -c` |
 | `TODO`/`FIXME`/`HACK`/`XXX` in `src/` | **1** | `grep -rnE` |
 | CI jobs / matrix legs per run | 17 / 23 | `.github/workflows/ci.yml` |
+| CI jobs reproduced locally, failures | 11 run / **0 failures** | isolated venv at CI's pinned tool versions |
+| Latest merged PR check result | **24/24 green** (#224 = HEAD) | GitHub REST |
 | CI jobs missing `timeout-minutes` | **0** | parsed from ci.yml |
+| Jobs blocked by a red `lint` | **14 of 17** | `needs:` graph |
+| Checkouts with `persist-credentials: false` | **2 of 17** | `grep` on ci.yml |
+| `pip install -e ".[dev,telemetry,mcp]"` repetitions | 6 | ci.yml lines 212, 297, 340, 385, 441, 746 |
 | Advisory (`continue-on-error`) jobs | 6, all tracked | `.github/advisory_stages.yaml` |
 | `Protocol` classes defined | 91 across 60 files | `grep -c 'class .*(Protocol)'` |
 | Dependency lockfile | **none** | `ls *.lock requirements*.txt constraints*.txt` |
@@ -143,11 +152,37 @@ type-narrowing.
 
 ---
 
-### WS-2 — Reproducible CI
+### WS-2 — CI: green today, fragile by construction
 
-CI's structure is sound: all 17 jobs carry `timeout-minutes`, pip caching is
-present wherever deps are installed, `concurrency` cancels superseded runs, and
-`permissions:` is minimal (`contents: read`). The problem is not structure.
+**Start from the good news, because it bounds the work.** Every one of the 17
+jobs was reproduced locally at `dddc16c` (isolated venv, CI's pinned tool
+versions: `actionlint 1.7.12`, `promtool 2.51.0`, `gitleaks 8.24.3`,
+`ruff 0.16.2`, `mypy 2.3.1`). **Zero fast-gate failures.**
+
+| Job | Result at HEAD |
+|---|---|
+| `actionlint` | PASS — clean across all 5 workflows |
+| `lint` | PASS — `All checks passed!`, `1265 files already formatted` |
+| `config-validate` | PASS — `failed=0 passed=16 total=16` |
+| `usbc-config-gate` | PASS — `3 passed` |
+| `typecheck` | PASS — `Success: no issues found in 416 source files` |
+| `local-gates` | PASS — 8/8 steps |
+| `prometheus-check` | PASS — `SUCCESS: 22 rules found` |
+| `vla-extras` | PASS — `63 passed` |
+| `performance` *(advisory)* | PASS — `12 passed, 1 skipped` |
+| `onnx-world-model-extras` *(advisory)* | PASS — `250 passed, 1 skipped` |
+| `mlflow-extras` *(advisory)* | PASS — `62 passed` |
+
+And the real history agrees: **PR #224 (= HEAD) was 24/24 green**, #222 was
+25/25. Nothing is failing on the default-branch tree.
+
+So "get CI green" is not the task. CI *is* green. The task is that this
+greenness is not load-bearing: it is unreproducible, it can be reached without
+checking anything in five places, and there is no trunk signal at all. Also,
+structure is **not** the problem, and three things worth not re-auditing: all 17
+jobs carry `timeout-minutes`; every `setup-python` sets `cache: pip` with
+`cache-dependency-path`; all four main workflows have `concurrency` +
+`cancel-in-progress`, and all actions are SHA-pinned.
 
 **WS-2a — No lockfile (root cause of recurring CI redness).** Core dependencies
 are floating lower bounds (`pyproject.toml`), and 23 matrix legs each resolve
@@ -220,9 +255,171 @@ extra they install. Collapse to one job matrixed over
 `[vla, onnx_world_model, mlflow]`: same coverage, one job definition instead of
 three, and their advisory states become per-matrix-entry rather than per-job.
 
-**Effort:** M (2a), S (2b, 2c, 2d). **Risk:** 2a is the only one with real
-surface — a lockfile can surface a pin conflict the floating resolution was
-papering over. That is the gate working, not the gate failing, but budget for it.
+**WS-2e — `push` CI is dead, because there is no `main`.** `ci.yml:31-32`:
+
+```yaml
+    push:
+        branches: [main]
+```
+
+`GET /branches/main` → **HTTP 404**. The narrowing landed deliberately in
+`fa5570b` (PR #219) with the comment *"`push` is narrowed to the trunk so
+post-merge runs are kept and the duplicate is dropped"* — and it silently
+stopped working, because the trunk it names does not exist. The last
+push-event `ci.yml` run was **2026-09-01**. `harness.yml` has the same trigger.
+
+Three things therefore never run against a merged tree:
+
+- the `gitleaks` full-history scan (`fetch-depth: 0`) — PR runs scan the PR
+  ref, so no merged-history scan has happened since 2026-09-01;
+- the `docker` build (`needs: [test, typecheck]`);
+- any post-merge regression signal whatsoever.
+
+This makes WS-9e a **CI correctness** item, not hygiene: the missing trunk is
+the cause, and no amount of PR-level gating substitutes for it.
+
+**WS-2f — `needs: lint` is a single point of failure for 14 of 17 jobs.**
+13 jobs declare `needs: lint` directly; `usbc-config-gate` reaches it through
+`needs: config-validate`. Only `actionlint` and `lint` itself are independent.
+Measured over the last 14 `ci.yml` runs: **6 had `lint` red, and every
+downstream job reported `skipped`** — zero signal from typecheck, test,
+security or any extras job on those runs. A formatting slip therefore buys the
+same information as a passing build: none.
+
+Fan `typecheck` and `test` out from `lint` (they do not consume its output), or
+keep the dependency and accept that a lint failure blinds the entire pipeline.
+The current arrangement optimises runner minutes at the cost of the thing the
+pipeline exists to produce.
+
+**WS-2g — Five places a gate can go green without checking anything.** Ranked
+by whether a human would notice:
+
+1. **`prometheus-check` is blocking and can no-op.** The promtool download ends
+   `echo "available=true" >> $GITHUB_OUTPUT || echo "available=false"`, and both
+   validation steps are `if: steps.promtool.outputs.available == 'true'`. A
+   GitHub-releases blip turns a blocking job into a green no-op. *Partially
+   mitigated, and credit where due:* there is an `if: … != 'true'` step emitting
+   `::warning::promtool not available — Prometheus metrics validation was
+   SKIPPED, not passed`. **Not** mitigated: the inner sample-generation path
+   swallows `except (ImportError, AttributeError): sys.exit(0)` and then falls to
+   `else echo "No metrics sample generated — skipping validation"` with **no**
+   annotation. Rename `generate_metrics_sample` and the format check passes
+   silently. (Today it genuinely emits 20,953 bytes.)
+2. **`ratchet_budgets` runs without `--strict`.** `ci.yml:403` and
+   `scripts/ci.sh:75` both invoke `python -m tools.ratchet_budgets` bare, so a
+   WARN exits 0. It currently WARNs on **all three** budgets, because all three
+   are at ceiling. The next suppression anyone adds will fail the regression
+   tier — and this step, whose entire job is to warn first, will not say so.
+   Adding `--strict` is a one-word fix.
+3. **`config-compat.yml` can never be a required check.** It is `paths:`-filtered
+   *and* carries a "Skip when no config YAML changed" branch, and it appeared in
+   **none** of the check-runs for PRs #222, #223 or #224. The gate itself is
+   excellent (WS-9 credits it); it just cannot be enforced as written.
+4. **`vulture-audit` exits 0 asserting nothing** — `dead-code audit: 406
+   finding(s) -> reports/dead_code/…json`. Flipping it to blocking as-is is a
+   no-op, which is the real answer to its 2026-10-01 promotion question: it needs
+   strict mode over a curated allowlist (WS-6) *before* the flip means anything.
+5. **The hardcoded-value gate is `if: github.event_name == 'pull_request'`** and
+   exits 0 on "No changed src/mousedroid Python files detected". Harmless only
+   because push CI is already dead (WS-2e).
+
+**WS-2h — Local/CI parity has drifted in five measurable ways.** This matters
+because `CLAUDE.md` advertises `make gates` / `make test` as the pre-push story.
+
+| # | Divergence | Consequence |
+|---|---|---|
+| 1 | **`make gates` fails out of the box on a venv checkout.** `scripts/validate.py` runs each feature's `validation_command` through `subprocess.run(..., shell=True)`, and those commands say bare `python` — so it resolves **PATH's** interpreter, not the `MOUSEDROID_PYTHON` / `./.venv/bin/python` the Makefile and `ci.sh` carefully compute. Observed: 26 features fail with `/usr/local/bin/python: No module named pytest`, `make: *** [Makefile:85: validate] Error 1`. With the venv on `PATH`: `OK: 39 done; ran 36`, RC=0. | A contributor's first `make gates` fails for reasons unrelated to their change. Fix: substitute `sys.executable` before `shell=True`. |
+| 2 | **`make test` runs 1 of the blocking `test` job's 5 pytest steps.** It omits `tests/regression tests/e2e`, `tests/smoke`, and `tests/functional tests/user_journey tests/security`, and omits CI's `-x`. | **This is exactly how PR #223 passes locally and fails CI** — the failing step is "Run regression + e2e tiers", which `make test` never executes. `CLAUDE.md` calling `make test` the coverage gate is misleading as written. |
+| 3 | **`make gates` ≠ `local-gates`, in both directions.** `local-gates` additionally runs `check_subsystem_boundaries.py`, `doc_hygiene.py --strict`, `ratchet_budgets`, and the workforce-hook coverage gate; `make validate` runs `validate.py --tier fast`, which is a **`harness.yml`** job, not `local-gates`. | Neither side is a superset of the other, so neither is a safe pre-push proxy. |
+| 4 | **`make hooks` enforces 90%, CI enforces 85%.** CI passes `--cov-fail-under=$WORKFORCE_COV_MIN` (85, from `workforce.yaml`); the Makefile passes none, so `fail_under = 90` applies. `make hooks` also drops CI's `-m "not hardware"`. | Local is stricter here — harmless, but the two should agree on purpose rather than by accident. |
+| 5 | **Two gates run in `ci.sh` and in no CI job**: `tools.claude_hooks.docs_trimmer` (root `CLAUDE.md` line budget) and the `workforce.yaml` parse check. | `ci.yml:365-368`'s comment claims the only local-only leftovers are `check_branch_coverage.py`, the pillar dry-run and `--health-check`. **That comment is incomplete** — the same comment WS-2b already contradicts. |
+
+Keep `scripts/ci.sh`'s best habit: it prints an explicit "CI jobs NOT reproduced
+locally" epilogue and *announces* its gitleaks/promtool/vulture skips rather than
+passing silently. Extend that pattern to the Makefile.
+
+**WS-2i — A latent `mypy --strict` failure CI structurally cannot see.**
+Installing the `[mlflow]` extra turns `mypy --strict` red:
+
+```
+src/mousedroid/training/observability/mlflow_logger.py:105: error: Redundant cast to "str"  [redundant-cast]
+src/mousedroid/training/observability/mlflow_logger.py:122: error: Redundant cast to "str"  [redundant-cast]
+```
+
+Proven by isolation in one venv: errors present with `mlflow-skinny 3.16.0`
+installed, `Success: no issues found in 416 source files` after uninstalling it,
+errors back after reinstalling — same tree throughout.
+
+CI cannot see it: `typecheck` installs `.[dev,telemetry]` (`ci.yml:183`), and
+`mlflow-extras` installs `.[dev,mlflow]` (`:609`) but runs **pytest only**. No
+job installs mlflow *and* runs mypy.
+
+The striking part is that the code predicted this exactly. The comment at
+`mlflow_logger.py:106-110` reads:
+
+> *"Bind to an annotated local rather than returning directly: under CI's
+> `--ignore-missing-imports` mlflow is untyped, so create_experiment is `Any`
+> and returning it trips `no-any-return`; the annotation narrows it. **A `cast`
+> would instead be flagged `redundant-cast` when mlflow IS typed** (e.g. a newer
+> mlflow installed locally) — this form passes both."*
+
+The remedy was applied to the middle call site (`:112`,
+`new_experiment_id: str = …`) and **not** to the two `cast(str, …)` calls at
+`:105` and `:122` — which are precisely the form the comment says will be
+flagged. Fix: the same annotated-local pattern at both sites, then add a mypy
+step to `mlflow-extras` so it cannot regress.
+
+**WS-2j — Two open dependabot PRs are red, both correctly.** Neither is a bug
+to fix in this plan; both need a decision:
+
+- **#223** (`ruff==0.16.2` → `0.16.6`, +1/−1 one file) fails `test` on all three
+  Python legs. `tests/regression/test_ruff_version_single_source.py` requires the
+  pyproject pin to equal the standalone literals at `ci.yml:101`, `ci.yml:344`
+  and `release.yml:44`. The gate is working as designed; the fix is to move all
+  four literals in one commit. That the pin is duplicated in four places is
+  itself the finding — WS-2a's lockfile and a single-source pin would retire it.
+- **#218** (`mcp>=1.0,<2` → `>=1,<3`) fails `test` and harness `validate-fast`,
+  matching the two breaks pyproject already documents (`Tool.inputSchema` became
+  an alias; `Resource.uri` changed `AnyUrl`→`str`). Decline it; lifting `<2` is
+  a deliberate migration.
+
+**WS-2k — Checkout credential hygiene, and `release.yml`.** Only **2 of 17**
+`actions/checkout` steps set `persist-credentials: false` (`gitleaks`,
+`vulture-audit`). The other 15 leave `GITHUB_TOKEN` in `.git/config` — including
+`actionlint`, which mounts the workspace into a **third-party container**, and
+`docker`, which uses the workspace as build context. Top-level
+`permissions: contents: read` is correct and no job writes, so this is
+defence-in-depth rather than an open hole — but it is a one-line-per-job fix.
+
+`release.yml` is the one workflow with **no `concurrency` block**, and it
+re-implements lint/typecheck/test with *different* extras (`[dev]` for typecheck
+vs `ci.yml`'s `[dev,telemetry]`; `[dev,telemetry]` for test vs
+`[dev,telemetry,mcp]`) — so a tag build can fail where CI was green. Given
+WS-9a will make `release.yml` fire for the first time, align it before tagging,
+not after.
+
+**Could the advisory jobs actually be promoted?** All four testable ones pass,
+and two have quietly met their real bar:
+
+| Job | Verdict |
+|---|---|
+| `performance` | **Yes** — passes with CI's `MOUSEDROID_INSTRUMENTATION_OVERHEAD_BUDGET=2.0`; 8/8 green in CI |
+| `onnx-world-model-extras` | **Yes** — its stated bar is 7 consecutive green runs, never re-derived. It is **8/8** across the last 8 runs where it ran. The bar is met. |
+| `mlflow-extras` | **Yes** — same 7-green convention, also **8/8** |
+| `security` | **Conditionally** — green *with* CI's `pip install --upgrade pip setuptools` first; without it, `2 known vulnerabilities in setuptools 79.0.1 (PYSEC-2026-3447)`. Greenness depends on the runner image, not this repo — which is another argument for WS-2a |
+| `test-windows` | Unknown locally (no Windows host). CI: 7/8 green, the 1 red being #223's ruff pin |
+| `vulture-audit` | **No** — see WS-2g(4); flipping it is currently a no-op |
+
+**Effort:** M (2a, 2h-1, 2h-2), S (everything else). **Risk:** 2a is the only one
+with real surface — a lockfile can expose a pin conflict the floating resolution
+was papering over. That is the gate working, not failing, but budget for it.
+2f changes the CI dependency graph and will raise runner-minute cost; that is
+the price of getting signal from a red-lint run.
+
+**One item needs a human, not a plan.** `GET /branches/.../protection` returns
+`403 Resource not accessible by integration`, so **which checks are required at
+merge could not be determined**. With 6 advisory jobs, 5 vacuous-green paths and
+no trunk CI, it is worth confirming directly that "green" is actually enforced.
 
 ---
 
@@ -360,9 +557,14 @@ But it split *methods*. What remains in `src/mousedroid/orchestrator/orchestrato
 class MouseDroidOrchestrator(_LifecycleMixin, _MissionMixin, _WorldModelStateMixin,
                              _ActionMixin, _TelemetryExperienceMixin,
                              _VoiceFaceMixin, _BackgroundCadenceMixin)
-    __init__   381 lines,  46 parameters  (22 positional + 24 keyword-only)
+    __init__   381 lines,  45 parameters  (21 positional-or-keyword + 24 keyword-only)
     tick       208 lines   ← the 30 Hz hot loop
 ```
+
+Only **6** of the 45 are required (`world_model`, `agents`, `safety_monitor`,
+`esp32`, `sensor_manager`, `cfg`); the other 39 default to `None`. That ratio is
+the shape of the problem — the class is one small orchestrator wearing 39 optional
+collaborators.
 
 The constructor's own comments show it accreting one block per feature:
 `# Tier C1 / C1.2 — OTA weight-update wiring` (`:374`), `# Tier C2 / C2.1 —
@@ -382,14 +584,63 @@ tree is `sim/isaaclab/rover_env.py::RoverIsaacLabEnv` — **678 lines, 24
 methods**, in the repo's largest file (804 LOC). Hand-decomposition is a
 one-time event; without a mechanical ceiling it regresses.
 
+**The obvious grouping does not work — checked before proposing it.** The
+tempting move is to bundle parameters by the mixin that consumes them, since the
+mixins already define seams. An AST map of every `self._<param>` read across
+`orchestrator.py`, `_state.py` and all 7 mixins says otherwise:
+
+- **18 of 45 parameters are read by two or more mixins.** `cfg` is read by all
+  7; `clock` by 4; `metrics`, `sensor_manager`, `memory_tier` and
+  `cognitive_core` by 3 each.
+- **`_lifecycle` alone reads 24 of the 45** — inherent, since start/stop
+  orchestration must touch everything it owns the lifetime of.
+
+That is not a flaw in ADR-017; it is what `_OrchestratorState` and the diamond
+MRO exist for. But it means **mixin-shaped bundles would cut across shared
+state** and make the wiring worse, not better. Bundles must be grouped by the
+*dependency's own subsystem*, not by its consumer:
+
+| Bundle | Parameters |
+|---|---|
+| *(required, stays positional)* | `world_model`, `agents`, `safety_monitor`, `esp32`, `sensor_manager`, `cfg` |
+| `CognitionWiring` | `cognitive_core`, `curiosity_module`, `memory_tier`, `latent_context` |
+| `TelemetryWiring` | `telemetry_publisher`, `telemetry_server`, `metrics`, `liveness_tracker`, `failure_recorder`, `mock_telemetry_source` |
+| `CloudWiring` | `cloud_sink`, `cloud_experience_exporter`, `cloud_metrics_exporter`, `cloud_firestore_sync`, `memory_exporter` |
+| `MissionWiring` | `llm_gateway`, `mission_parser`, `mission_dispatcher`, `mission_lifecycle` |
+| `HarnessWiring` | `tool_registry`, `mcp_server`, `hook_registry`, `task_tracker`, `journal`, `skill_delegator` |
+| `LearningWiring` | `vla_policy`, `weight_update_pollers`, `weight_update_loader`, `on_device_coordinator`, `growth_coordinator` |
+| `HMIWiring` | `voice_engine`, `face_controller`, `greeter` |
+| `PlatformWiring` | `hailo_runtime`, `watchdog`, `clock`, `experience_logger`, `safety_projector` |
+
+6 required + 8 bundles = **14 constructor parameters**, down from 45, with each
+bundle independently testable and each new subsystem landing inside an existing
+bundle instead of widening the signature.
+
+**One parameter is absent from the table on purpose, and it is a good sign.**
+`weight_update_poller` (singular) is the only parameter no mixin reads and that
+`tick()` never touches. That reads as dead — and it is not. `orchestrator.py:388-400`
+folds it into `self._weight_update_pollers[engine_type]`, and the docstring at
+`:228-235` states it plainly: *"Legacy single-poller kwarg retained for one
+minor-version window for backwards compatibility."* It is consumed as a local in
+the constructor and deliberately never stored under its own name, which is why an
+attribute-read map cannot see it.
+
+So it needs no bundle — it needs deleting when its window closes. It is also the
+exact shape WS-4's own deprecation shim should take, and worth copying rather
+than inventing.
+
+*Methodological note, since it cost a wrong conclusion here:* "no same-named
+attribute read" is not evidence of deadness. It produced a false positive for
+this audit's own AST map just as a module-path grep did for
+`telemetry/metrics_registry.py` (§9). Anything WS-6 proposes deleting needs the
+constructor body read, not just a reference count.
+
 **Change.**
-1. Group the 24 keyword-only constructor parameters into cohesive frozen
-   wiring bundles (`HarnessWiring`, `CloudWiring`, `LearningWiring`,
-   `SafetyWiring`, `VoiceWiring`), each field `Field(default=None, description=…)`.
-   Keep the existing kwargs accepted via a deprecation shim for one release so
-   `Settings`/YAML and external callers are unaffected (invariant 6).
-   `NEXT_STEPS.md:72-74` already gestures at this ("property-test orchestrator
-   kwargs vs `_OrchestratorState`").
+1. Introduce the 8 frozen wiring bundles above, each field
+   `Field(default=None, description=…)`. Keep every existing kwarg accepted via a
+   deprecation shim for one release so `Settings`/YAML and external callers are
+   unaffected (invariant 6). `NEXT_STEPS.md:72-74` already gestures at this
+   ("property-test orchestrator kwargs vs `_OrchestratorState`").
 2. Extract `tick()`'s phases into named private methods on the existing mixins,
    preserving ordering and the `_mark_phase` instrumentation (the comment at
    `:461` notes it runs 8× per tick — keep the resolved-once pattern).
@@ -954,52 +1205,84 @@ blocked until slack exists. Two free reductions:
    Wave 5: with 0 remote tags, 39 feature pins rest on surviving branches, and
    creating the tags is cheap, non-destructive, and blocks nothing. The rename
    and the branch prune stay in Wave 5.
-4. **WS-6a** — delete the dangling `__all__` (8 lines, verified `AttributeError`).
-5. **WS-8b** — widen `doc_hygiene.py`'s file list (one config change, 5 findings).
-6. **WS-9a** — tag `v0.4.0` so `release.yml` fires once, then add the
-   pyproject ↔ CHANGELOG version test.
+4. **WS-2g(2)** — add `--strict` to `ratchet_budgets` in `ci.yml:403` and
+   `scripts/ci.sh:75`. One word; it is currently WARNing on all three budgets
+   and exiting 0, so the early-warning step cannot warn. Do this **in Wave 0's
+   commit**, right after the headroom is bought.
+5. **WS-2j** — decide the two red dependabot PRs: move all four `ruff` literals
+   together (#223), decline the `mcp` bump (#218). Both are one decision each and
+   they are the only red CI in practice.
+6. **WS-6a** — delete the dangling `__all__` (8 lines, verified `AttributeError`).
+7. **WS-8b** — widen `doc_hygiene.py`'s file list (one config change, 5 findings).
+8. **WS-9a** — align `release.yml`'s extras with `ci.yml` **first** (WS-2k), then
+   tag `v0.4.0` so it fires once, then add the pyproject ↔ CHANGELOG version
+   test. Tagging before aligning means the first-ever release build fails on an
+   extras mismatch rather than on anything real.
+9. **WS-2i** — the two `redundant-cast` fixes at `mlflow_logger.py:105,122`, plus
+   a mypy step in `mlflow-extras`. Small, and it unblocks any contributor
+   working on `.[dev,mlflow]`.
 
 ### Wave 2 — Make the gates real
 
-6. **WS-2b** — changed-lines coverage gate into the `test` job.
-7. **WS-2a** — `uv.lock` + `uv lock --check`.
-8. **WS-3a** — fix the four hardcoded-value gate blind spots.
-9. **WS-7b/7c** — `pragma: no cover` ratchet; `exclude_also`.
-10. **WS-5** duplicate-Protocol-name regression test.
-11. **WS-8e** — doc link/path-resolution gate.
+10. **WS-2b** — changed-lines coverage gate into the `test` job.
+11. **WS-2a** — `uv.lock` + `uv lock --check`. This also retires the four-way
+    `ruff` pin duplication that made #223 red.
+12. **WS-2h(2)** — make `make test` run all five of the `test` job's pytest
+    steps, or rename it and correct `CLAUDE.md`. Until this lands, a green local
+    run is not evidence, which undercuts every other gate in this wave.
+13. **WS-2h(1)** — `validate.py` → `sys.executable`, so `make gates` works on a
+    fresh venv checkout.
+14. **WS-9e, trunk half** — establish `main` (current default kept as an alias
+    until CI, `deployments/*.json`, and `features.yaml`'s "SHA on main" comment
+    are re-pointed). Pulled forward out of Wave 5 because **WS-2e cannot be
+    fixed without it**: `push` CI triggers on a branch that must exist first.
+    Safe here because Wave 1 already created the protective tags.
+15. **WS-2e/2f** — now that `main` exists, `push` CI starts running again;
+    verify a post-merge run completes, then fan `typecheck`/`test` out from
+    `needs: lint` so a formatting slip stops blinding 14 jobs.
+16. **WS-2g(1,3,4,5)** — close the vacuous-green paths: annotate the
+    sample-generation skip, make `config-compat` enforceable, and leave
+    `vulture-audit` advisory until WS-6's triage gives strict mode something to
+    assert.
+17. **WS-2k** — `persist-credentials: false` on the remaining 15 checkouts;
+    `concurrency` block on `release.yml`.
+18. **WS-3a** — fix the four hardcoded-value gate blind spots.
+19. **WS-7b/7c** — `pragma: no cover` ratchet; `exclude_also`.
+20. **WS-5** duplicate-Protocol-name regression test.
+21. **WS-8e** — doc link/path-resolution gate.
 
 Wave 2 before Wave 3 deliberately: a gate landed after its cleanup only
 documents the cleanup; landed before, it holds the line.
 
 ### Wave 3 — Consolidation
 
-12. **WS-3b–3g** — collapse the three config roots; add the 5 missing schema
+22. **WS-3b–3g** — collapse the three config roots; add the 5 missing schema
     fields; kill the 9 `getattr` bypasses. Each with a paired AQA +
     backwards-compat test.
-13. **WS-6c** — sysfs + retry consolidation first (closes the two invariant
+23. **WS-6c** — sysfs + retry consolidation first (closes the two invariant
     violations); then the remaining 9 clusters.
-14. **WS-6b** — wire-or-remove decisions on `_skill_delegator`, `dla_enabled`,
+24. **WS-6b** — wire-or-remove decisions on `_skill_delegator`, `dla_enabled`,
     `bc_batch_size`, and `action_override`.
-15. **WS-5a/5b/5c** — de-duplicate the Protocols; add `tests/unit/interfaces/`.
-16. **WS-6d/6e/6f** — dependency hygiene, 2 orphan scripts, facade tidy-up.
+25. **WS-5a/5b/5c** — de-duplicate the Protocols; add `tests/unit/interfaces/`.
+26. **WS-6d/6e/6f** — dependency hygiene, 2 orphan scripts, facade tidy-up.
 
 ### Wave 4 — Structure
 
-17. **WS-4** — orchestrator constructor bundles, `tick()` extraction,
+27. **WS-4** — orchestrator constructor bundles, `tick()` extraction,
     `RoverIsaacLabEnv` split. C901 15 → 12. Sequence
     `hardware/lidar/ld19_driver.py` first (complex **and** coverage-omitted).
-18. **WS-8a/8c/8d/8f** — root-file moves, grab-bag dissolution + narrowed
+28. **WS-8a/8c/8d/8f** — root-file moves, grab-bag dissolution + narrowed
     `_SHARED_KERNEL_PREFIXES`, one per-directory doc format, `openspec` archive.
-19. **WS-9b/9c/9d** — container hardening.
-20. **WS-2d** — extras-job consolidation.
+29. **WS-9b/9c/9d** — container hardening.
+30. **WS-2d** — extras-job consolidation.
 
-### Wave 5 — Trunk
+### Wave 5 — Branch pruning (destructive, last)
 
-21. **WS-9e, remaining half** — establish `main` (old default kept as an alias
-    until CI, `deployments/*.json`, and `features.yaml`'s "SHA on main" comment
-    are re-pointed), then prune the 90 branches with
-    `archive_stale_branches.sh`. Safe only because Wave 1 created the protective
-    tags first — **do not reorder these two.**
+31. **WS-9e, prune half** — archive and delete the stale branches with
+    `archive_stale_branches.sh`, bringing 90 down to a curated set. Last on
+    purpose: it is the only destructive step, and it is safe only because Wave 1
+    created the protective tags and Wave 2 established `main`. **Do not reorder
+    these three.** Re-run `pin-reachability-audit` immediately after.
 
 **Deferred by external gate.** Everything under `src/mousedroid/arm/**` is
 blocked by the `freeze_gate.py` PreToolUse hook while F-008 is not `done`:
@@ -1019,12 +1302,17 @@ exists.
 | `S101` blocking on `src/` | `assert` stripped under `PYTHONOPTIMIZE=1` | `pyproject.toml` (existing `lint` job) |
 | `uv lock --check` | Non-reproducible CI resolution | new step |
 | Changed-lines branch coverage ≥90% | New uncovered code | existing `test` job, 3.11 leg |
+| `ratchet_budgets --strict` | A WARN-only early-warning step | `ci.yml:403`, `scripts/ci.sh:75` — **one word** |
 | `pragma: no cover` ratchet | Ungoverned coverage suppression | `.claude/workforce.yaml` |
 | Constructor-arity + class-size ratchets | God-constructor regrowth | `.claude/workforce.yaml` |
 | C901 max-complexity 15 → 12 | Complexity creep at the ceiling | `pyproject.toml` |
 | Duplicate-Protocol-name check | A third `PromptInjectionFilterProtocol` | new regression test |
+| `mypy --strict` step in `mlflow-extras` | Type errors only an extra can reveal | existing advisory job |
+| `make test` ≡ the `test` job's 5 steps | A green local run that means nothing | `Makefile` |
 | Markdown link/path resolution | Doc rot after a reorg | generalise `tools/validate_skill_commands.py` |
 | `doc_hygiene.py` over all root docs | Unbounded doc growth | widen existing invocation |
+| `persist-credentials: false` | `GITHUB_TOKEN` in third-party container contexts | 15 remaining checkouts |
+| Post-merge `push` CI actually firing | A trunk that nothing validates | re-point after `main` exists |
 
 Plus: extend `test_constants_schema_parity_aqa.py::_MIRRORED_PAIRS`; add a
 `GatewayConfig`↔`LLMConfig` parity test; extend
@@ -1060,6 +1348,22 @@ Recorded so these do not absorb effort later.
 - **`factory/cloud.py`'s 5 structurally-similar optional-SDK builders** —
   explicitness there *is* invariant 1. Do not DRY it.
 - **`agent.md` / `AGENTS.md`** — not a case collision. Redundancy only.
+- **CI structure.** All 17 jobs carry `timeout-minutes`; every `setup-python`
+  sets `cache: pip` with `cache-dependency-path`; `ci.yml`, `harness.yml`,
+  `config-compat.yml` and `jetson-nightly.yml` all have `concurrency` +
+  `cancel-in-progress`; every action is SHA-pinned and both `docker://` images
+  are exact-tagged; top-level `permissions: contents: read` is correct and no job
+  writes. The job count is exactly 17 and the advisory count exactly 6, so
+  `CLAUDE.md` is accurate. The CI problems in WS-2 are about *reproducibility and
+  vacuity*, not layout — do not rewrite the workflow.
+- **`orchestrator.py`'s `weight_update_poller` parameter** — reads as dead (no
+  mixin touches it) and is in fact a documented one-minor-version
+  backwards-compatibility shim folded into `_weight_update_pollers` at
+  `:388-400`. It is the pattern WS-4's own shim should copy.
+- **`scripts/ci.sh`'s skip announcements** — it prints an explicit "CI jobs NOT
+  reproduced locally" epilogue and names its gitleaks/promtool/vulture skips
+  instead of passing silently. This is the habit the Makefile lacks; extend it,
+  never remove it.
 - **`scripts/check_subsystem_boundaries.py`** — already enforces Factory-First
   DI whole-tree in CI with zero violations. Do not add `import-linter`; tighten
   this instead.
@@ -1078,9 +1382,14 @@ Recorded so these do not absorb effort later.
 - **The `ANTHROPIC_API_KEY` rotation** (`NEXT_STEPS.md:33-36`) — P0, operator
   action, unaffected by anything below it. It stays P0 regardless of this plan's
   sequencing.
-- **Advisory→blocking promotions beyond the two dated ones.** `vulture-audit`
-  (2026-10-01) and `performance` (2026-10-23) need a decision informed by
-  WS-6's triage and by Jetson-vs-runner timing variance respectively.
+- **The advisory ladder is no longer open-ended.** Four of the six were measured
+  (WS-2), and two — `onnx-world-model-extras` and `mlflow-extras` — have met
+  their own stated 7-consecutive-green bar at 8/8 and are promotable now rather
+  than in 2026-11 / 2027-02. `performance` passes with CI's budget env.
+  `vulture-audit` should **stay** advisory until WS-6's triage gives strict mode
+  something to assert, and that reasoning belongs in the ADR its own entry
+  anticipates. Only `test-windows` still needs a green-streak count that could
+  not be derived here.
 
 ---
 
@@ -1088,17 +1397,27 @@ Recorded so these do not absorb effort later.
 
 | Wave | Workstreams | Effort | Retires |
 |---|---|---|---|
-| 0 | Ratchet headroom | XS | Unblocks everything else |
-| 1 | WS-1, 2c, 6a, 8b, 9a, 9e (tags) | S | Production correctness hole; 2 dated deadlines; pin protection |
-| 2 | WS-2a, 2b, 3a, 5-gate, 7b, 7c, 8e | M | Makes every later wave self-enforcing |
+| 0 | Ratchet headroom + `--strict` | XS | Unblocks everything; makes the early warning warn |
+| 1 | WS-1, 2c, 2g(2), 2i, 2j, 6a, 8b, 9a, 9e (tags) | S | Production correctness hole; 2 dated deadlines; pin protection; the 2 red PRs |
+| 2 | WS-2a, 2b, 2e–2h, 2k, 3a, 5-gate, 7b, 7c, 8e, 9e (trunk) | M | Makes every later wave self-enforcing; restores post-merge CI |
 | 3 | WS-3b–3g, 5a–5c, 6b–6f | L | ~850 LOC; 3 config roots → 1 |
-| 4 | WS-4, 8a, 8c, 8d, 8f, 9b–9d | L | God-constructor; enterprise layout |
-| 5 | WS-9e (rename + prune) | S | Stable trunk; 90 branches → curated set |
+| 4 | WS-4, 8a, 8c, 8d, 8f, 9b–9d | L | 45 ctor params → 14; enterprise layout |
+| 5 | WS-9e (prune) | S | 90 branches → curated set |
 
-Waves 0–2 are the ones worth doing regardless of appetite for the rest: they are
-small, they retire the only finding that behaves differently on the rover than
-in CI, they hit two calendar deadlines this week, and they convert five
-aspirations into gates.
+**Waves 0–1 are worth doing regardless of appetite for the rest.** They are
+small, they retire the only finding that behaves differently on the rover than in
+CI, they hit two calendar deadlines this week, they clear the two red dependabot
+PRs, and `ratchet_budgets --strict` is literally one word.
+
+**Wave 2 is where the plan earns its keep, and it is the one to argue about.**
+It is the largest wave and it does no cleanup at all — it restores post-merge CI,
+makes a green local run mean something, pins the dependency tree, and converts
+eight aspirations into gates. Everything in Waves 3–5 is ordinary work once
+Wave 2 lands and mostly wasted effort before it: cleanup under a gate that
+cannot hold the line regresses, and cleanup validated by a `make test` that skips
+four of five CI steps is not validated.
+
+If appetite is limited, the correct cut is Waves 3–5, not Wave 2.
 
 ---
 
@@ -1122,6 +1441,15 @@ and are recorded because the same traps will catch the next reader:
 
 2. **`agent.md` vs `AGENTS.md` was suspected to be a case collision.** It is
    not: `git ls-files | tr A-Z a-z | sort | uniq -d` is empty. Redundancy only.
+
+3. **This plan's own first draft called `weight_update_poller` a second dead DI
+   parameter.** It is not. The AST map behind WS-4 looks for `self._<param>`
+   reads, and this parameter is consumed as a *local* in the constructor and
+   folded into `_weight_update_pollers` at `orchestrator.py:388-400` — a
+   documented deprecation shim. Recorded because it is the same failure mode as
+   finding 1 in a different disguise: **a reference count is not a liveness
+   proof.** Both times the fix was to read the constructor body. Anything WS-6
+   proposes deleting gets that treatment before the deletion lands.
 
 Severity was also corrected downward in one place: the motor angular-velocity
 divergence (WS-3d) reads as a live safety defect until you trace every
