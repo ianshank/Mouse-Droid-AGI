@@ -1,8 +1,14 @@
 """Unit tests for the ratchet-budget early-warning checker.
 
 Covers the pure counting/check helpers and the CLI contract: advisory mode
-always exits 0 (warnings are printed, never fatal); ``--strict`` flips
-warnings into exit 1; a disabled config skips checking entirely.
+always exits 0 (warnings are printed, never fatal); ``--strict`` flips a
+*ceiling breach* into exit 1 while leaving an approaching-budget warning
+advisory; a disabled config skips checking entirely.
+
+The breach/approaching split in ``--strict`` is what makes the flag wireable
+into CI at all — a ratchet-down-only budget sits at its ceiling whenever it has
+been correctly ratcheted, so failing on any warning would be red on a healthy
+repo. ``TestStrictSeveritySplit`` pins both halves.
 """
 
 from __future__ import annotations
@@ -12,8 +18,11 @@ from pathlib import Path
 import pytest
 from tools.claude_hooks.config import RatchetBudgetItem
 from tools.ratchet_budgets import (
+    BudgetFinding,
     check_all_budgets,
     check_budget_item,
+    classify_all_budgets,
+    classify_budget_item,
     count_marker_occurrences,
     main,
 )
@@ -116,6 +125,67 @@ class TestCheckBudgetItem:
 
 
 # ---------------------------------------------------------------------------
+# classify_budget_item / classify_all_budgets — the severity-aware view
+# ---------------------------------------------------------------------------
+
+
+class TestClassifyBudgetItem:
+    """The breach/approaching split ``check_budget_item`` flattens into strings."""
+
+    def test_healthy_count_classifies_as_none(self, repo: Path) -> None:
+        _write_source(repo, "src/mousedroid/a.py", occurrences=2)
+        assert classify_budget_item(repo, _item()) is None
+
+    def test_approaching_is_not_breached(self, repo: Path) -> None:
+        """Over warn_threshold, at-or-under ceiling: advisory, never fatal."""
+        _write_source(repo, "src/mousedroid/a.py", occurrences=4)
+        finding = classify_budget_item(repo, _item())
+        assert finding is not None
+        assert finding.breached is False
+        assert finding.count == 4
+        assert finding.ceiling == 5
+
+    def test_exactly_at_ceiling_is_not_breached(self, repo: Path) -> None:
+        """The condition is ``count > ceiling``, so sitting on it is healthy.
+
+        This is the case that makes ``--strict`` usable: a correctly ratcheted
+        budget lands here permanently.
+        """
+        _write_source(repo, "src/mousedroid/a.py", occurrences=5)
+        finding = classify_budget_item(repo, _item())
+        assert finding is not None
+        assert finding.breached is False
+
+    def test_over_ceiling_is_breached(self, repo: Path) -> None:
+        _write_source(repo, "src/mousedroid/a.py", occurrences=6)
+        finding = classify_budget_item(repo, _item())
+        assert finding is not None
+        assert finding.breached is True
+        assert "exceeds" in finding.message
+
+    def test_message_matches_check_budget_item_exactly(self, repo: Path) -> None:
+        """One source of truth for the text — the string API delegates here."""
+        _write_source(repo, "src/mousedroid/a.py", occurrences=6)
+        finding = classify_budget_item(repo, _item())
+        assert finding is not None
+        assert check_budget_item(repo, _item()) == [finding.message]
+
+    def test_classify_all_budgets_skips_healthy_items(self, repo: Path) -> None:
+        _write_source(repo, "src/mousedroid/a.py", occurrences=6)
+        items = [_item(), _item(name="other", marker="# other", ceiling=99)]
+        findings = classify_all_budgets(repo, items)
+        assert [finding.name for finding in findings] == ["noqa"]
+
+    def test_finding_is_frozen(self, repo: Path) -> None:
+        """Immutable so a consumer cannot rewrite a breach into a warning."""
+        _write_source(repo, "src/mousedroid/a.py", occurrences=6)
+        finding = classify_budget_item(repo, _item())
+        assert isinstance(finding, BudgetFinding)
+        with pytest.raises(AttributeError):
+            finding.breached = False  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
 # check_all_budgets
 # ---------------------------------------------------------------------------
 
@@ -151,6 +221,8 @@ class TestCli:
         assert "WARN:" in capsys.readouterr().out
 
     def test_strict_mode_exits_one_on_warnings(self, repo: Path) -> None:
+        # 25 occurrences against the default noqa ceiling of 19 is a *breach*,
+        # which is why this predates and survives the severity split below.
         _write_source(repo, "src/mousedroid/a.py", occurrences=25)
         assert main(["--repo-root", str(repo), "--strict"]) == 1
 
@@ -212,3 +284,43 @@ class TestCli:
             "ratchet_budgets:\n    unknown_key: 1\n", encoding="utf-8"
         )
         assert main(["--repo-root", str(repo), "--strict"]) == 1
+
+
+class TestStrictSeveritySplit:
+    """``--strict`` gates on a ceiling breach, not on an approaching warning.
+
+    Without this split the flag is unusable in CI: the ratchet discipline lowers
+    each ceiling to the current count whenever a waiver is resolved, so a
+    healthy budget sits *at* its ceiling and permanently above its
+    ``warn_threshold``. These tests are what allow ``--strict`` to be wired into
+    ``local-gates`` and ``scripts/ci.sh`` without turning a well-maintained repo
+    red.
+    """
+
+    def test_strict_exits_zero_when_at_ceiling_not_over(self, repo: Path) -> None:
+        # Default noqa budget: ceiling 19, warn_threshold 17. Exactly 19 is the
+        # steady state of a correctly ratcheted budget.
+        _write_source(repo, "src/mousedroid/a.py", occurrences=19)
+        assert main(["--repo-root", str(repo), "--strict"]) == 0
+
+    def test_strict_exits_zero_between_warn_threshold_and_ceiling(self, repo: Path) -> None:
+        _write_source(repo, "src/mousedroid/a.py", occurrences=18)
+        assert main(["--repo-root", str(repo), "--strict"]) == 0
+
+    def test_strict_still_prints_the_approaching_warning(
+        self, repo: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Exit 0 must not mean silence — the early warning is the whole point."""
+        _write_source(repo, "src/mousedroid/a.py", occurrences=19)
+        assert main(["--repo-root", str(repo), "--strict"]) == 0
+        assert "early-warning" in capsys.readouterr().out
+
+    def test_strict_exits_one_one_over_the_ceiling(self, repo: Path) -> None:
+        """The boundary: 20 against a ceiling of 19 is the first failing count."""
+        _write_source(repo, "src/mousedroid/a.py", occurrences=20)
+        assert main(["--repo-root", str(repo), "--strict"]) == 1
+
+    def test_advisory_mode_exits_zero_even_on_a_breach(self, repo: Path) -> None:
+        """Default stays advisory — the severity split changes only --strict."""
+        _write_source(repo, "src/mousedroid/a.py", occurrences=20)
+        assert main(["--repo-root", str(repo)]) == 0

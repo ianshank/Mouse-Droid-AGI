@@ -3,13 +3,64 @@
 > **Date:** 2026-09-16
 > **Branch:** `claude/code-quality-tech-debt-plan-36irdi`
 > **Baseline:** `dddc16c` (`feat(sim): Isaac Lab workstation harness (F-043–F-046, F-048)`)
-> **Status:** Proposal — awaiting review. No code changes in this PR.
+> **Status:** Waves 0–1 **implemented** (see §0); Waves 2–5 remain proposals.
 > **Scope:** Whole tree. Optimisation, tech-debt reduction, hardening, god-file
 > reduction, CI/CD greenness, hardcoded-value elimination, dead/redundant code,
 > enterprise organisation, coverage integrity.
 > **Method:** Six parallel evidence-gathering audits (config, security, dead code,
 > tests, CI, docs) plus direct measurement. Every finding below cites `file:line`.
 > Claims that failed independent re-verification were dropped — see §9.
+
+---
+
+## 0. Implementation status
+
+Waves 0–1 have landed. What changed, and what implementation proved wrong about
+this plan, which matters more than the tick-list:
+
+| Item | State | Note |
+|---|---|---|
+| Wave 0 — ratchet headroom | **Done** | `# hardcoded-ok` 28 → 26 via `constants.MILLISECONDS_PER_SECOND`; dead `_SPEED_MAP` deleted; ceiling ratcheted down to 26 rather than banking the slack |
+| WS-1 — `S101` + 8 asserts | **Done** | `S101` un-ignored for `src/`; all 8 converted. New `_require_mission` accessor + `MissionLifecycleStateError`; two closure sites bind above the guard; two ONNX sites raise explicitly |
+| WS-2g(2) — `ratchet_budgets --strict` | **Done, not as planned** | See correction 1 below |
+| WS-2c — promote `security` | **Done** | advisory → blocking; 5 coupled files updated |
+| WS-2i — mlflow `redundant-cast` | **Done** | Both sites use the annotated-local form; `mlflow-extras` gained a mypy step |
+| WS-6a — dangling `__all__` | **Done** | Names bound; new sweep pins every `__all__` entry in every package |
+| WS-9a — version pin | **Done** | `0.3.0` → `0.4.0`; regression test parses both files; `release.yml` extras aligned + `concurrency` added |
+| WS-8b — widen `doc_hygiene` | **Deferred** | See correction 2 below |
+
+**Correction 1 — `--strict` was not "one word".** This plan called adding
+`--strict` to `ratchet_budgets` a one-word fix. It would have made CI
+**permanently red**. `--strict` failed on *any* warning, and a warning fires at
+`count >= warn_threshold` — but the ratchet discipline lowers each ceiling to the
+current count whenever a waiver is resolved, so a correctly maintained budget
+sits *at* its ceiling and therefore permanently above its warn threshold. That
+conflation is why the flag existed for months and was never wired in.
+
+The fix was a severity split: a new frozen `BudgetFinding` distinguishes a
+ceiling breach from an approaching warning, and `--strict` now gates on the
+breach only. `check_budget_item` / `check_all_budgets` keep their `list[str]`
+signatures for the `PostToolUse` hook and the regression tests, delegating to the
+new classifier so the message text has one source. No pre-existing test changed
+behaviour — every `--strict` exit-1 test already used a genuine breach (25
+occurrences against a ceiling of 19), so only the docstring and help text, which
+described the conflated form, were wrong.
+
+**Correction 2 — WS-8b has a sequencing dependency this plan understated.** It
+was called "the cheapest lever in this plan", and widening `doc_hygiene.py`'s
+file list *is* one config change — but it lands **red**, because five of the
+files it would then check are over the 20 KB budget (`progress.md` 76 KB,
+`SKILLS.md` 39 KB, `SMOKE_REPORT.md` 34 KB, `AGENTS.md` 23 KB, `README.md`
+20 KB). The archival work that brings them under budget is WS-8a, in Wave 4. So
+WS-8b is cheap *after* WS-8a, not before it, and the two must move together.
+Deferred rather than landed half-done.
+
+**Also deferred deliberately:** every repo-administration action — creating the
+protective tags (Wave 1's WS-9e half), tagging `v0.4.0`, and establishing `main`.
+Those are hard to reverse and outward-facing, so they wait on explicit maintainer
+approval rather than riding an implementation PR. The version bump and the
+`release.yml` alignment that *precede* the tag have landed, so the tag is now a
+one-command action whenever it is wanted.
 
 ---
 

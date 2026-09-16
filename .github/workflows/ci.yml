@@ -400,7 +400,11 @@ jobs:
               run: python tools/doc_hygiene.py NEXT_STEPS.md --strict
 
             - name: Ratchet budgets (advisory early warning, exits 0 unless --strict)
-              run: python -m tools.ratchet_budgets
+              # --strict gates on a ceiling BREACH only; an approaching-budget
+              # warning still prints but exits 0. Without that split the flag
+              # would be perma-red here, since the ratchet discipline lowers each
+              # ceiling to the current count, so a healthy budget sits at it.
+              run: python -m tools.ratchet_budgets --strict
 
             - name: Workforce hook coverage (line gate + advisory branch)
               run: |
@@ -614,6 +618,17 @@ jobs:
               # log shows no versions to diff against the last green run.
               run: pip list 2>/dev/null | grep -Ei 'mlflow|sqlalchemy|alembic' || true
 
+            - name: Type check (mypy --strict) — mlflow installed
+              # This is the only job that installs the [mlflow] extra AND can run
+              # mypy, so it is the only place a mlflow-typed regression is visible.
+              # The `typecheck` job installs `[dev,telemetry]`, where mlflow is
+              # absent and --ignore-missing-imports degrades it to Any -- errors
+              # that appear only when mlflow ships REAL type information (e.g. a
+              # `redundant-cast` on MlflowClient return values) are structurally
+              # invisible there. Same invocation as Stage 2 `typecheck`, placed
+              # before pytest so a type error fails fast.
+              run: mypy src/ --strict --ignore-missing-imports
+
             - name: Run mlflow-touching test suite
               run: |
                   pytest tests/unit/training/observability/test_mlflow_logger.py \
@@ -715,11 +730,18 @@ jobs:
     # rather than the previous `|| echo ::warning::` swallow, which made the
     # job invisible to scripts/check_advisory_promotions.py — an advisory
     # stage with no promotion clock is a permanent soft gate.
+    # Promoted advisory -> BLOCKING (tech-debt Wave 1). Its 60-day window opened
+    # 2026-07-25 and closed 2026-09-23; the promotion bar was "triage the current
+    # findings", and `pip-audit --skip-editable` reports zero vulnerabilities
+    # across the resolved [dev,telemetry,mcp] set (123 packages, incl. every
+    # network-facing one: aiohttp, cryptography, pyjwt, starlette, uvicorn, h11).
+    # The `advisory_stages.yaml` entry is removed in the same change, per the
+    # gitleaks precedent recorded there — the tracker only covers jobs that still
+    # carry continue-on-error.
     security:
         runs-on: ubuntu-latest
         timeout-minutes: 20
         needs: lint
-        continue-on-error: true
         steps:
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
             - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -752,7 +774,7 @@ jobs:
             # `|| echo` swallow just hid it. Without --strict, the local
             # package warns while real dependency vulnerabilities still exit
             # non-zero and trip this advisory job.
-            - name: Security audit (advisory via continue-on-error)
+            - name: Security audit (blocking since 2026-09-16)
               run: pip-audit --skip-editable
 
     # -------------------------------------------------------------------------

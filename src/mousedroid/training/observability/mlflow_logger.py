@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from mousedroid.logging.redaction import redact_uri_credentials
 from mousedroid.logging.setup import get_logger
@@ -100,14 +100,16 @@ class MlflowExperimentLogger:
 
     # ---- experiment resolution ---------------------------------------------
     def _resolve_or_create_experiment(self, name: str) -> str:
+        # Every return below binds an annotated local rather than returning the
+        # mlflow value directly: under CI's ``--ignore-missing-imports`` mlflow is
+        # untyped, so these attributes/calls are ``Any`` and returning one trips
+        # ``no-any-return``; the annotation narrows it. A ``cast`` would instead be
+        # flagged ``redundant-cast`` when mlflow IS typed (e.g. the ``[mlflow]``
+        # extra installed) — the annotated-local form passes both ways.
         existing = self._client.get_experiment_by_name(name)
         if existing is not None:
-            return cast(str, existing.experiment_id)
-        # Bind to an annotated local rather than returning directly: under CI's
-        # ``--ignore-missing-imports`` mlflow is untyped, so create_experiment is
-        # ``Any`` and returning it trips ``no-any-return``; the annotation narrows
-        # it. A ``cast`` would instead be flagged ``redundant-cast`` when mlflow IS
-        # typed (e.g. a newer mlflow installed locally) — this form passes both.
+            existing_experiment_id: str = existing.experiment_id
+            return existing_experiment_id
         try:
             new_experiment_id: str = self._client.create_experiment(name)
         except Exception:
@@ -119,7 +121,8 @@ class MlflowExperimentLogger:
             raced = self._client.get_experiment_by_name(name)
             if raced is None:
                 raise
-            return cast(str, raced.experiment_id)
+            raced_experiment_id: str = raced.experiment_id
+            return raced_experiment_id
         return new_experiment_id
 
     # ---- parent run --------------------------------------------------------

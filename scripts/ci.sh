@@ -72,7 +72,7 @@ echo "=== Ratchet Budgets (advisory early warning) ==="
 # -m (not a direct script path, unlike doc_hygiene.py) because it imports
 # tools.claude_hooks.config, which needs the repo root importable as a
 # package on sys.path.
-"$PYTHON_BIN" -m tools.ratchet_budgets
+"$PYTHON_BIN" -m tools.ratchet_budgets --strict
 
 echo "=== Type Check ==="
 "$PYTHON_BIN" -m mypy src/ --strict --ignore-missing-imports

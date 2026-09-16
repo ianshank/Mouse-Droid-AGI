@@ -56,9 +56,10 @@ file's own comments (`grep "# Stage" .github/workflows/ci.yml`), not a separate 
 - **Stage 4-4d**: `prometheus-check`, `vla-extras`, `onnx-world-model-extras`
   *(advisory)*, `mlflow-extras` *(advisory)*, `gitleaks` (blocking since 2026-08-07),
   `vulture-audit` *(advisory)*.
-- **Stage 5-6**: `security` (pip-audit) *(advisory)*, `docker` (needs `test` + `typecheck`).
+- **Stage 5-6**: `security` (pip-audit, blocking since 2026-09-16),
+  `docker` (needs `test` + `typecheck`).
 
-6 jobs run *(advisory)* — `continue-on-error: true`, tracked in `.github/advisory_stages.yaml`
+5 jobs run *(advisory)* — `continue-on-error: true`, tracked in `.github/advisory_stages.yaml`
 with a promotion window. There is no separate `skills`/`secret-scan`/`test-fast`/`validate`/
 `regression`/`package` job — those checks are steps inside the jobs above.
 

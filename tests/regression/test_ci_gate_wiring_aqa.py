@@ -13,14 +13,14 @@ Pinned contracts:
 * the ``local-gates`` job keeps running the deterministic scripts/ci.sh-only
   gates in GitHub CI, including the hardcoded-value gate (PR-only, full
   fetch depth — it needs a resolvable base ref);
-* the ``security`` job is honestly advisory (``continue-on-error``, no shell
-  ``||`` swallow) and skips only the editable local package;
+* the ``security`` job is blocking (promoted 2026-09-16) with no shell ``||``
+  swallow, and skips only the editable local package;
 * every ``continue-on-error`` job in ci.yml has an
   ``.github/advisory_stages.yaml`` entry (mirrors
   ``scripts/check_advisory_promotions.py`` as a PR-time signal);
 * scripts/ci.sh runs the smoke stage OUTSIDE the ``MOUSEDROID_CI_SLIM`` skip;
 * the functional / user-journey / security tiers run in the blocking ``test``
-  job and in ci.sh, and never in the advisory ``security`` job (F-028);
+  job and in ci.sh, and never in the ``security`` (pip-audit) job (F-028);
 * those three tiers use the SAME pytest marker expression in all three places
   that run them (ci.yml, ci.sh, scripts/validations/F-028.sh), so local, CI,
   and the feature's own validation command cannot silently run different
@@ -284,13 +284,24 @@ class TestLocalGatesJob:
 
 
 class TestSecurityJob:
-    """pip-audit is honestly advisory and audits the real dependency tree."""
+    """pip-audit is blocking and audits the real dependency tree.
 
-    def test_job_is_advisory_without_shell_swallow(self) -> None:
+    Promoted advisory -> blocking on 2026-09-16 (tech-debt Wave 1), inside its
+    60-day window. The half of this class that mattered is unchanged: the job
+    must never hide findings behind a shell ``||`` swallow, which is how it spent
+    its entire life before being un-swallowed, and it must keep the exact
+    ``--skip-editable``/no-``--strict`` flag pair that makes its output mean
+    anything. Only the advisory-ness assertion inverted.
+    """
+
+    def test_job_is_blocking_without_shell_swallow(self) -> None:
         job = _load_ci_jobs()["security"]
-        assert job.get("continue-on-error") is True, (
-            "advisory-ness must be continue-on-error (visible to "
-            "check_advisory_promotions.py), never a shell `||` swallow"
+        assert job.get("continue-on-error") is not True, (
+            "security is blocking since 2026-09-16 — pip-audit reported zero "
+            "vulnerabilities across the resolved [dev,telemetry,mcp] set. "
+            "Re-adding continue-on-error also needs an advisory_stages.yaml "
+            "entry, or check_advisory_promotions.py WARNs 'untracked advisory "
+            "stage'."
         )
         audit_runs = [
             str(step.get("run", ""))
@@ -435,18 +446,30 @@ class TestOrphanTierWiring:
                 "ran in no CI path at all (F-028)"
             )
 
-    def test_tiers_are_not_in_the_advisory_security_job(self) -> None:
-        """The `security` job is continue-on-error and would swallow failures."""
+    def test_tiers_are_not_in_the_pip_audit_security_job(self) -> None:
+        """``tests/security`` belongs to the ``test`` job, not the audit job.
+
+        Rethought (not deleted) when ``security`` was promoted advisory ->
+        blocking on 2026-09-16 — this guard's own predecessor asked for exactly
+        that. The original reason was that ``continue-on-error`` would swallow
+        every failure in the tier, recreating the F-028 orphan-tier problem
+        wearing a disguise. That specific hazard is gone, but the separation
+        still holds for a second, independent reason: the ``security`` job audits
+        the *dependency tree* (``pip-audit``) and installs a different extras set
+        than the tier needs, so co-locating them would couple a Python test tier
+        to a supply-chain scan's lifecycle. The tier's home is the ``test`` job,
+        asserted by ``test_all_three_tiers_run_in_the_test_job`` above; this is
+        the negative half of that pair.
+        """
         security = _load_ci_jobs()["security"]
-        assert security.get("continue-on-error") is True, (
-            "precondition changed: the security job is no longer advisory, so "
-            "this guard needs rethinking rather than deleting"
-        )
         run_text = _job_run_text(security)
         assert "tests/security" not in run_text, (
-            "tests/security must NOT run in the advisory `security` job — "
-            "continue-on-error would swallow every failure and recreate the "
-            "orphan-tier problem wearing a disguise"
+            "tests/security must NOT run in the `security` (pip-audit) job — "
+            "it runs in the blocking `test` job (F-028). The audit job exists "
+            "to scan dependencies, not to host a test tier."
+        )
+        assert "pip-audit" in run_text, (
+            "precondition: this guard assumes `security` is the pip-audit job"
         )
 
     def test_ci_sh_runs_all_three_tiers(self) -> None:

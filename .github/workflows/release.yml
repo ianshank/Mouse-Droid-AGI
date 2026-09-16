@@ -18,6 +18,13 @@ on:
         tags:
             - "v*.*.*"
 
+# Supersede in-flight runs for the same ref, matching every other workflow.
+# `github.ref` is the tag ref here, so the group is unique per release and this
+# can only cancel a re-run of the *same* tag, never a concurrent release.
+concurrency:
+    group: release-${{ github.ref }}
+    cancel-in-progress: true
+
 permissions:
     contents: read
 
@@ -64,9 +71,16 @@ jobs:
                   cache: pip
                   cache-dependency-path: pyproject.toml
 
+            # Extras MUST match ci.yml's `typecheck` job. The telemetry extra
+            # brings aiohttp + Pillow so mypy sees the REAL types behind the
+            # optional-lib annotations in telemetry/{auth,server}.py and
+            # hardware/display/expressions.py; without them
+            # --ignore-missing-imports degrades those to Any and strict mode
+            # flags untyped-decorator / valid-type errors. Installing only
+            # "[dev]" here meant a tag build could fail where CI was green.
             - name: Install dependencies
               run: |
-                  pip install -e ".[dev]"
+                  pip install -e ".[dev,telemetry]"
                   pip install "typing_extensions>=4.0"
 
             - name: Type check
@@ -87,8 +101,11 @@ jobs:
                   cache: pip
                   cache-dependency-path: pyproject.toml
 
+            # Extras MUST match ci.yml's `test` job. The mcp extra is required
+            # by the MCP suites collected under tests/unit and tests/integration;
+            # omitting it here meant a tag build could fail where CI was green.
             - name: Install dependencies
-              run: pip install -e ".[dev,telemetry]"
+              run: pip install -e ".[dev,telemetry,mcp]"
 
             # Mirrors the coverage invocation in ci.yml's `test` job — keep the
             # two in sync (flags AND the MINIMUM_COVERAGE env, which must match

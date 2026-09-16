@@ -68,6 +68,22 @@ _log = get_logger(__name__)
 # forces a terminal status. Implemented as a callable class so it
 # structurally satisfies :class:`AcceptancePredicateProtocol`'s
 # ``__call__`` shape under ``mypy --strict`` (a bare ``def`` would not).
+class MissionLifecycleStateError(RuntimeError):
+    """Raised when a lifecycle operation runs with no active mission.
+
+    A dedicated type rather than a bare :class:`RuntimeError` so a caller can
+    distinguish this internal-invariant breach from any other runtime failure,
+    and so the regression pin can assert on the type instead of on message text.
+
+    This exists because the guards it backs cannot be ``assert``: the Jetson
+    image sets ``PYTHONOPTIMIZE=1`` (``Dockerfile.jetson``), which strips
+    asserts, so on the rover an absent mission would surface as an
+    ``AttributeError`` partway through a state transition rather than as a
+    typed, logged failure. These methods sit on the mission / e-stop path, so
+    the difference is operationally visible.
+    """
+
+
 class _MissionOwnedPredicate:
     """Always-False acceptance predicate for lifecycle-owned tasks."""
 
@@ -384,8 +400,34 @@ class MissionLifecycle:
         )
         return float(score_tensor.view(-1)[0].item())
 
+    def _require_mission(self, operation: str) -> _MissionState:
+        """Return the active mission, or raise if the state machine has none.
+
+        The single narrowing guard behind every lifecycle method that may only
+        run with a mission in flight. Deliberately **not** an ``assert`` — see
+        :class:`MissionLifecycleStateError` for why that distinction is
+        load-bearing on the rover.
+
+        Args:
+            operation: Short name of the calling operation, surfaced in the log
+                event and the exception message so a failure identifies its own
+                call site without a traceback.
+
+        Returns:
+            The active :class:`_MissionState`.
+
+        Raises:
+            MissionLifecycleStateError: When no mission is active.
+        """
+        mission = self._mission
+        if mission is None:
+            _log.error("mission_lifecycle_no_active_mission", operation=operation)
+            msg = f"{operation} requires an active mission, but none is in flight"
+            raise MissionLifecycleStateError(msg)
+        return mission
+
     async def _handle_stall(self) -> MissionTickResult:
-        assert self._mission is not None
+        mission = self._require_mission("handle_stall")
 
         # Always transition through REPLANNING first so the
         # ``mission_state_transitions_total{from_state="replanning",
@@ -395,9 +437,9 @@ class MissionLifecycle:
         # wired, LLM returned None, LLM raised) — in every case the
         # subsequent FAILED transition originates from REPLANNING.
         self._transition(MissionLifecycleState.REPLANNING, reason="stalled")
-        self._mission.stall_counter = 0
+        mission.stall_counter = 0
 
-        if self._mission.replan_count >= self._cfg.max_replans_per_mission:
+        if mission.replan_count >= self._cfg.max_replans_per_mission:
             return self._transition_to_failed(reason="replan_limit_exceeded")
 
         if self._replanner is None:
@@ -406,14 +448,14 @@ class MissionLifecycle:
 
         try:
             new_goal: GoalVector | None = await self._replanner.submit_replan_request(
-                mission_id=self._mission.mission_id,
-                goal_text=self._mission.goal_text,
-                last_progress=self._mission.last_progress,
+                mission_id=mission.mission_id,
+                goal_text=mission.goal_text,
+                last_progress=mission.last_progress,
             )
         except Exception as exc:  # pragma: no cover - defensive
             _log.warning(
                 "mission_replan_exception",
-                mission_id=self._mission.mission_id,
+                mission_id=mission.mission_id,
                 error=type(exc).__name__,
             )
             new_goal = None
@@ -422,14 +464,14 @@ class MissionLifecycle:
             return self._transition_to_failed(reason="llm_replan_unavailable")
 
         # Success — resume RUNNING with the new goal vector.
-        self._mission.last_goal_vector = new_goal
-        self._mission.replan_count += 1
+        mission.last_goal_vector = new_goal
+        mission.replan_count += 1
         self._transition(MissionLifecycleState.RUNNING, reason="replan_succeeded")
         if self._metrics is not None:
             self._metrics.inc_mission_replan("succeeded")
         return MissionTickResult(
             state=MissionLifecycleState.RUNNING,
-            progress=self._mission.last_progress,
+            progress=mission.last_progress,
             transitioned=True,
             reason="replan_succeeded",
         )
@@ -442,13 +484,13 @@ class MissionLifecycle:
         state transition + the ``inc_mission_replan('failed')`` increment
         + the returned :class:`MissionTickResult` stay in lock-step.
         """
-        assert self._mission is not None
+        mission = self._require_mission("transition_to_failed")
         self._transition(MissionLifecycleState.FAILED, reason=reason)
         if self._metrics is not None:
             self._metrics.inc_mission_replan("failed")
         return MissionTickResult(
             state=MissionLifecycleState.FAILED,
-            progress=self._mission.last_progress,
+            progress=mission.last_progress,
             transitioned=True,
             reason=reason,
         )
@@ -459,14 +501,14 @@ class MissionLifecycle:
         *,
         reason: str,
     ) -> None:
-        assert self._mission is not None
-        from_state = self._mission.state
+        mission = self._require_mission("transition")
+        from_state = mission.state
         if from_state == to_state:
             return
-        self._mission.state = to_state
+        mission.state = to_state
         _log.info(
             "mission_state_transition",
-            mission_id=self._mission.mission_id,
+            mission_id=mission.mission_id,
             from_state=from_state.value,
             to_state=to_state.value,
             reason=reason,
@@ -480,16 +522,16 @@ class MissionLifecycle:
             # reflects the mission outcome. No-op when no tracker is
             # wired; failures are logged and swallowed inside the helper.
             self._forward_terminal_to_tracker(
-                mission_id=self._mission.mission_id,
+                mission_id=mission.mission_id,
                 to_state=to_state,
                 reason=reason,
             )
 
     def _record_terminal_duration(self) -> None:
-        assert self._mission is not None
-        if self._metrics is None or self._mission.started_at_s is None:
+        mission = self._require_mission("record_terminal_duration")
+        if self._metrics is None or mission.started_at_s is None:
             return
-        elapsed = float(self._clock()) - self._mission.started_at_s
+        elapsed = float(self._clock()) - mission.started_at_s
         if elapsed < 0:
             return
         self._metrics.observe_mission_active_duration_seconds(elapsed)
@@ -498,6 +540,7 @@ class MissionLifecycle:
 __all__ = [
     "MissionLifecycle",
     "MissionLifecycleState",
+    "MissionLifecycleStateError",
     "MissionReplannerProtocol",
     "MissionTickResult",
 ]

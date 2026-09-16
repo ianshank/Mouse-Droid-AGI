@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import ClassVar, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from mousedroid.config.schema import MissionParserConfig
 from mousedroid.llm_gateway.protocol import GoalVector
@@ -114,14 +114,12 @@ class RuleBasedMissionParser:
         re.IGNORECASE,
     )
 
-    _SPEED_MAP: ClassVar[dict[str, float]] = {
-        "slow": 0.3,
-        "slowly": 0.3,
-        "half speed": 0.5,
-        "fast": 0.8,
-        "quickly": 0.8,
-        "full speed": 1.0,
-    }
+    # NOTE: the speed-keyword mapping is NOT duplicated here. It lives in
+    # ``MissionParserConfig.speed_map`` (config/schema/llm.py) and reaches this
+    # class through ``cfg.speed_map`` below, so an operator override in YAML is
+    # the only source. A second in-class copy existed until it was removed as
+    # dead code: nothing read it, and it silently diverged from the schema
+    # default it shadowed.
 
     def __init__(self, cfg: MissionParserConfig | None = None) -> None:
         """Initialise parser with optional config overrides.

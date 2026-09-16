@@ -8,6 +8,73 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — `assert` guards stripped in the shipped image (tech-debt Wave 1)
+
+`Dockerfile.jetson` sets `PYTHONOPTIMIZE=1`, which strips every `assert`, while
+`pyproject.toml` globally ignored ruff's `S101` — so eight `assert` guards in
+`src/mousedroid` did not exist on the rover. Four were the first statement of a
+mission-lifecycle method with no fallback, so an absent mission surfaced as
+`AttributeError` partway through a state transition on the mission / e-stop path
+rather than as a named failure.
+
+`S101` is no longer globally ignored (it stays exempt for `tests/**`, where
+`assert` is the assertion mechanism and `PYTHONOPTIMIZE` is never set). All eight
+sites are converted: `mission_lifecycle` gained a `_require_mission` narrowing
+accessor raising the new `MissionLifecycleStateError` (a `RuntimeError` subclass,
+so existing handlers still catch); `experience_exporter` and `pubsub_sink` bind
+their checked object to a local above the closure, which also makes an in-flight
+upload/publish survive a concurrent `close()`; `vla/policy` and
+`dual_stream_rssm_onnx` raise explicitly when `warmup()` yields no session.
+
+Three regression pins, each catching a different rot path: an AST sweep for new
+asserts, a pyproject check that `S101` stays enforced, and a subprocess probe
+under `-O` that first proves asserts really are stripped in that interpreter.
+
+### Added — `ratchet_budgets --strict` gates on a breach, and is wired in
+
+`--strict` existed but was never wired into CI because it failed on *any*
+warning, including "approaching budget" — and the ratchet discipline lowers each
+ceiling to the current count, so a healthy budget sits at its ceiling and
+permanently above `warn_threshold`. It is now severity-aware: the new
+`BudgetFinding` distinguishes a ceiling breach from an approaching warning, and
+`--strict` fails only on the breach. `check_budget_item` / `check_all_budgets`
+keep their `list[str]` signatures for the `PostToolUse` hook and the regression
+tests, delegating to the new classifier so the message text has one source.
+Wired into `ci.yml`'s `local-gates` and `scripts/ci.sh`.
+
+### Changed — `security` (pip-audit) promoted advisory → blocking
+
+Three days inside its 60-day window (opened 2026-07-25, due 2026-09-23). The bar
+was triaging findings, not a green window: `pip-audit --skip-editable` reports
+zero vulnerabilities across the resolved `[dev,telemetry,mcp]` set, including
+every network-facing package. The `advisory_stages.yaml` entry is removed in the
+same change per the gitleaks precedent, leaving five advisory jobs.
+
+### Fixed — `harness.approval` advertised a facade that did not exist
+
+`__init__.py` declared `__all__ = ["OpenClawSafetyGate", "SandboxPolicyGate"]`
+and imported nothing, so `from mousedroid.harness.approval import *` raised
+`AttributeError`. The names are now bound. A new regression test asserts every
+`__all__` entry in every `src/mousedroid/**/__init__.py` resolves, pinning the
+whole class of bug rather than this instance — statically, so it cannot be made
+flaky by which optional extras are installed.
+
+### Fixed — `mypy --strict` failed whenever the `[mlflow]` extra was installed
+
+Two `redundant-cast` errors in `mlflow_logger.py`, structurally invisible to CI
+because no job installed mlflow *and* ran mypy. Both sites now use the
+annotated-local form the file's own comment already documented, and
+`mlflow-extras` gained a mypy step so it cannot regress.
+
+### Added — pyproject ↔ CHANGELOG version pin
+
+`pyproject.toml` said `0.3.0` while the newest released heading here was
+`v0.4.0`; `release.yml` is tag-triggered and there are no tags, so nothing ever
+forced the bump. The version is now `0.4.0` and a regression test pins the two
+together, parsing both files rather than hardcoding either. `release.yml`'s
+extras were aligned with `ci.yml` and it gained the `concurrency` block it
+lacked, so the first tag build cannot fail on a mismatch.
+
 ### Added — Isaac Lab workstation harness (F-043–F-046, F-048)
 
 Isaac Lab is an opt-in workstation training backend behind

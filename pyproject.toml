@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mousedroid"
-version = "0.3.0"
+version = "0.4.0"
 description = "MouseDroid — Star Wars MSE-6 Autonomous Navigation System on Jetson Orin Nano"
 requires-python = ">=3.10"
 authors = [{ name = "Ian Cruickshank", email = "ianshank@gmail.com" }]
@@ -261,7 +261,13 @@ select = [
     "E", "W", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF", "PT",
     "S", "ANN", "D", "T20", "C901", "NPY",
 ]
-ignore = ["D100", "D104", "D107", "D203", "D213", "S101", "ANN401", "TCH", "TC"]
+# S101 (assert) is deliberately NOT ignored globally: Dockerfile.jetson sets
+# PYTHONOPTIMIZE=1, which strips every assert from the shipped image, so an
+# `assert x is not None` guard silently becomes no guard on the rover. It stays
+# ignored for tests/** (per-file-ignores below), where asserts ARE the contract
+# and PYTHONOPTIMIZE is never set. Removing it here un-masked 8 src/ sites --
+# four on the mission/e-stop path -- all converted to explicit raises.
+ignore = ["D100", "D104", "D107", "D203", "D213", "ANN401", "TCH", "TC"]
 
 [tool.ruff.lint.per-file-ignores]
 # NPY002 (legacy np.random.* global-RNG calls) baselined for tests/ only: a
