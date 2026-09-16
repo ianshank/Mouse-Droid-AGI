@@ -117,9 +117,11 @@ class RuleBasedMissionParser:
     # NOTE: the speed-keyword mapping is NOT duplicated here. It lives in
     # ``MissionParserConfig.speed_map`` (config/schema/llm.py) and reaches this
     # class through ``cfg.speed_map`` below, so an operator override in YAML is
-    # the only source. A second in-class copy existed until it was removed as
-    # dead code: nothing read it, and it silently diverged from the schema
-    # default it shadowed.
+    # the only source. A second in-class ``_SPEED_MAP`` ClassVar existed until it
+    # was removed as dead code: grep-confirmed zero readers, while the
+    # constructor already used ``cfg.speed_map``. Its six entries were identical
+    # to the schema default, so nothing had diverged — the hazard was that a
+    # future edit to either copy would go unnoticed, not that one already had.
 
     def __init__(self, cfg: MissionParserConfig | None = None) -> None:
         """Initialise parser with optional config overrides.

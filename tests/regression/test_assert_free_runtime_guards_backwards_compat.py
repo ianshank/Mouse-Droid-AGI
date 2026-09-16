@@ -195,3 +195,90 @@ class TestCloudSinkGuardsDropRatherThanRaise:
         sink = CloudTelemetrySink(_make_gcp_cfg())
         await sink.publish_telemetry({"test": "data"})
         assert sink._publisher is None
+
+    @pytest.mark.asyncio
+    async def test_in_flight_upload_survives_a_concurrent_close(self) -> None:
+        """The stated rationale for binding above the guard, finally pinned.
+
+        ``_upload_shard`` binds ``bucket`` before its ``None`` check so an upload
+        already in flight completes against the bucket it validated, rather than
+        raising when a concurrent ``close()`` nulls the attribute. Nothing
+        asserted that — only the already-``None`` case was covered — so the
+        refactor's whole justification was untested.
+        """
+        from mousedroid.cloud.experience_exporter import CloudExperienceExporter
+
+        exporter = CloudExperienceExporter(_make_gcp_cfg(), ExperienceConfig(path="/tmp/test_exp"))
+        uploaded: list[bytes] = []
+
+        class _Blob:
+            def upload_from_string(self, data: bytes) -> None:
+                uploaded.append(data)
+
+        class _Bucket:
+            def blob(self, path: str) -> _Blob:
+                del path
+                # Simulate close() landing mid-upload: the attribute is nulled
+                # after the guard passed but before the blob is used.
+                exporter._gcs_bucket = None
+                return _Blob()
+
+        exporter._gcs_bucket = _Bucket()  # type: ignore[assignment]
+        assert await exporter._upload_shard(b"payload") is True
+        assert uploaded == [b"payload"], "in-flight upload did not complete"
+        assert exporter._gcs_bucket is None, "the concurrent close did happen"
+
+
+class TestOnnxWarmupGuardsRaiseByName:
+    """The two ONNX conversions, which no other test reaches.
+
+    Both files are at or near 0% in the CI coverage selection because
+    ``onnxruntime``/``mujoco`` are absent from the measured environment, so the
+    converted guards shipped unexecuted. These tests need no ONNX runtime: they
+    stub ``warmup`` to a no-op, which is exactly the "warmup silently failed to
+    produce a session" state the guards exist for.
+    """
+
+    def test_distilled_vla_onnx_raises_when_warmup_yields_no_session(self) -> None:
+        from mousedroid.vla.policy import DistilledVLAOnnx, VLAObservation
+
+        policy = DistilledVLAOnnx(model_path="/nonexistent/model.onnx", action_dim=3)
+        # warmup() is where a real session would be created; make it a no-op so
+        # `_session` stays None past the lazy-warmup branch.
+        policy.warmup = lambda: None  # type: ignore[method-assign]
+        observation = VLAObservation(h=torch.zeros(1, 4), z=torch.zeros(1, 4))
+
+        with pytest.raises(RuntimeError, match="warmup"):
+            policy.predict(observation)
+
+    def test_distilled_vla_onnx_error_is_not_an_attribute_error(self) -> None:
+        """Before the conversion, ``-O`` turned this into ``AttributeError``."""
+        from mousedroid.vla.policy import DistilledVLAOnnx, VLAObservation
+
+        policy = DistilledVLAOnnx(model_path="/nonexistent/model.onnx", action_dim=3)
+        policy.warmup = lambda: None  # type: ignore[method-assign]
+        observation = VLAObservation(h=torch.zeros(1, 4), z=torch.zeros(1, 4))
+
+        with pytest.raises(RuntimeError) as excinfo:
+            policy.predict(observation)
+        assert not isinstance(excinfo.value, AttributeError)
+        assert "session" in str(excinfo.value)
+
+    def test_dual_stream_onnx_raises_when_warmup_yields_no_session(self) -> None:
+        from mousedroid.config.schema import ModelConfig
+        from mousedroid.world_model.dual_stream_rssm_onnx import DualStreamRSSMOnnx
+
+        engine = DualStreamRSSMOnnx(
+            model_path="/nonexistent/model.onnx",
+            cfg=ModelConfig(cfc_hidden_dim=8),
+        )
+        engine.warmup = lambda: None  # type: ignore[method-assign]
+        assert engine._session is None
+        # Reaching observe_step's guard is what matters; the packer runs after it.
+        with pytest.raises(RuntimeError, match="warmup"):
+            engine.observe_step(  # type: ignore[call-arg]
+                observation=None,
+                prev_action=torch.zeros(1, 2),
+                h=torch.zeros(1, 8),
+                z=torch.zeros(1, 4),
+            )

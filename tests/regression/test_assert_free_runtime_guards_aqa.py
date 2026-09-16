@@ -131,6 +131,26 @@ class TestS101StaysEnforced:
         assert isinstance(test_ignores, list)
         assert "S101" in test_ignores
 
+    @pytest.mark.parametrize("scope", ["tools/**/*.py", "scripts/**/*.py"])
+    def test_s101_not_exempted_for_tools_or_scripts(self, scope: str) -> None:
+        """Close the obvious escape hatch: exempting another tree instead of fixing.
+
+        ``tools/**`` and ``scripts/**`` both already carry ``per-file-ignores``
+        entries for other rules, so adding ``S101`` to one is a one-token way to
+        silence a future assert rather than convert it. Neither tree contains an
+        assert today and both are covered by CI's ``ruff check`` (the lint job
+        runs ``scripts/`` as a separate invocation), so this keeps it that way.
+        """
+        per_file = self._ruff_lint_config()["per-file-ignores"]
+        assert isinstance(per_file, dict)
+        ignores = per_file.get(scope, [])
+        assert isinstance(ignores, list)
+        assert "S101" not in ignores, (
+            f"S101 was exempted for {scope}. Convert the assert to an explicit "
+            "raise instead of widening the exemption — tests/** is the only tree "
+            "where assert is the contract."
+        )
+
 
 class TestMissionLifecycleGuardRaisesTypedError:
     """Each converted site raises the named error, not ``AttributeError``."""
@@ -155,6 +175,36 @@ class TestMissionLifecycleGuardRaisesTypedError:
             lifecycle._require_mission("handle_stall")
         assert "handle_stall" in str(excinfo.value)
         assert "active mission" in str(excinfo.value)
+
+    def test_returns_the_live_state_object_not_a_copy(self) -> None:
+        """Identity, not equality — this is the load-bearing property.
+
+        The conversion replaced ``self._mission.stall_counter = 0`` with
+        ``mission.stall_counter = 0`` in ``_handle_stall``, so every mutation now
+        goes through the returned reference. An implementation that returned a
+        copy (or a ``model_copy()``, or a frozen view) would satisfy every other
+        test in this file and in the backwards-compat pair while silently
+        discarding all three of ``_handle_stall``'s writes.
+        """
+        lifecycle = MissionLifecycle(_cfg())
+        lifecycle.start_mission("m-identity", "goal")
+        returned = lifecycle._require_mission("transition")
+        assert returned is lifecycle._mission
+
+    def test_mutation_through_the_returned_reference_is_visible(self) -> None:
+        """The same property from the caller's side, stated behaviourally."""
+        lifecycle = MissionLifecycle(_cfg())
+        lifecycle.start_mission("m-mutate", "goal")
+        mission = lifecycle._require_mission("handle_stall")
+        mission.stall_counter = 7
+        assert lifecycle._require_mission("transition").stall_counter == 7
+
+    def test_does_not_raise_while_a_mission_is_active(self) -> None:
+        """The positive case — a guard that always raised would also pass above."""
+        lifecycle = MissionLifecycle(_cfg())
+        lifecycle.start_mission("m-active", "goal")
+        for operation in ("transition", "transition_to_failed", "record_terminal_duration"):
+            assert lifecycle._require_mission(operation) is not None
 
 
 class TestGuardsSurviveOptimisedInterpreter:

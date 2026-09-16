@@ -116,15 +116,18 @@ def classify_budget_item(repo_root: Path, item: RatchetBudgetItem) -> BudgetFind
         otherwise ``None``.
     """
     count = count_marker_occurrences(repo_root, item.scope_glob, item.marker)
+    # Flat kwargs, not ``extra={...}``: ``HookLogger`` is
+    # ``def debug(self, event: str, **fields: Any)`` with no stdlib ``extra``
+    # handling, so an ``extra`` dict lands as a single nested field named
+    # "extra" and a query on ``budget``/``count`` never matches. Every call site
+    # in ``tools/claude_hooks/**`` uses this flat form.
     _logger.debug(
         "ratchet_budget_measured",
-        extra={
-            "budget": item.name,
-            "count": count,
-            "ceiling": item.ceiling,
-            "warn_threshold": item.warn_threshold,
-            "scope_glob": item.scope_glob,
-        },
+        budget=item.name,
+        count=count,
+        ceiling=item.ceiling,
+        warn_threshold=item.warn_threshold,
+        scope_glob=item.scope_glob,
     )
     if count > item.ceiling:
         return BudgetFinding(
@@ -231,7 +234,8 @@ def main(argv: list[str] | None = None) -> int:
     if breaches:
         _logger.warning(
             "ratchet_budget_breached",
-            extra={"budgets": [finding.name for finding in breaches], "strict": args.strict},
+            budgets=[finding.name for finding in breaches],
+            strict=args.strict,
         )
     if args.strict and breaches:
         return 1

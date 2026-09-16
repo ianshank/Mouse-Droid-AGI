@@ -12,10 +12,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 `Dockerfile.jetson` sets `PYTHONOPTIMIZE=1`, which strips every `assert`, while
 `pyproject.toml` globally ignored ruff's `S101` — so eight `assert` guards in
-`src/mousedroid` did not exist on the rover. Four were the first statement of a
-mission-lifecycle method with no fallback, so an absent mission surfaced as
-`AttributeError` partway through a state transition on the mission / e-stop path
-rather than as a named failure.
+`src/mousedroid` did not exist on the rover, and nothing flagged them.
+
+Scope, stated precisely because an earlier draft of this entry overstated it:
+every caller of the four mission-lifecycle guards already checks for an absent
+mission (`start_mission` assigns immediately beforehand; `tick` and `fail` both
+return early on `None`), so those branches are **unreachable today** and the
+asserts were narrowing hints for mypy rather than live faults. The change is
+defence in depth on the mission path plus removal of a whole class of invisible
+drift — not a rover bug being fixed.
 
 `S101` is no longer globally ignored (it stays exempt for `tests/**`, where
 `assert` is the assertion mechanism and `PYTHONOPTIMIZE` is never set). All eight
@@ -50,6 +55,14 @@ zero vulnerabilities across the resolved `[dev,telemetry,mcp]` set, including
 every network-facing package. The `advisory_stages.yaml` entry is removed in the
 same change per the gitleaks precedent, leaving five advisory jobs.
 
+`SECURITY.md` was updated in the same change. This is a **recurrence class**, not
+a one-off: the same file's stale "advisory" *gitleaks* wording was corrected once
+before (see the Tier 1 entry under "Tech-debt / code-quality audit" below, after
+the 2026-08-07 gitleaks promotion). Every advisory → blocking promotion must
+sweep `SECURITY.md`, `docs/claude/surfaces/ci-gates.md`, `docs/CHARTER.md`,
+`NEXT_STEPS.md`, and the root `CLAUDE.md` advisory count — the prose lives in
+five places and only `advisory_stages.yaml` is machine-checked.
+
 ### Fixed — `harness.approval` advertised a facade that did not exist
 
 `__init__.py` declared `__all__ = ["OpenClawSafetyGate", "SandboxPolicyGate"]`
@@ -63,8 +76,40 @@ flaky by which optional extras are installed.
 
 Two `redundant-cast` errors in `mlflow_logger.py`, structurally invisible to CI
 because no job installed mlflow *and* ran mypy. Both sites now use the
-annotated-local form the file's own comment already documented, and
-`mlflow-extras` gained a mypy step so it cannot regress.
+annotated-local form the file's own comment already documented.
+
+The gate took two attempts, and the first one is worth recording. A mypy step
+was added to the advisory `mlflow-extras` job, which then failed for the
+*opposite* reason: that job installs `.[dev,mlflow]` with no `telemetry` extra,
+so aiohttp is absent, `--ignore-missing-imports` degrades `web` to `Any`, and
+`mypy --strict` reports `untyped-decorator` on the three `@web.middleware`
+functions in `telemetry/auth.py` and `telemetry/server/_lifecycle.py`.
+
+`mypy --strict` is sensitive to the whole installed dependency set in both
+directions — an absent optional lib degrades to `Any`, a present one that ships
+real types can turn a required `cast` into a redundant one — so a second
+invocation under narrower extras reports *different* errors rather than more of
+them. There is now exactly one invocation, in the **blocking, matrixed**
+`typecheck` job, which installs `.[dev,telemetry,mlflow]`; `mlflow-extras` has no
+mypy step and is pinned not to grow one. That is stronger than the first attempt,
+which could not have failed the build at all.
+
+### Changed — `# hardcoded-ok` waiver ceiling 28 → 26
+
+`config/migration.py`'s two unjustified markers on `/ 1000.0` and `* 1000.0` were
+resolved by using `constants.MILLISECONDS_PER_SECOND`, which the literals already
+duplicated, and the dead `_SPEED_MAP` ClassVar in `llm_gateway/mission_parser.py`
+was deleted (grep-confirmed zero readers; its six entries were identical to the
+`MissionParserConfig.speed_map` default it shadowed, so nothing had diverged —
+the hazard was a future edit to either copy going unnoticed).
+
+Honest accounting, because this was framed as "buying headroom" and did not: the
+ceiling was ratcheted down with the count, per this budget's own down-only
+discipline, so **all three budgets remain at ceiling** (`noqa` 19/19,
+`type: ignore` 8/8, `# hardcoded-ok` 26/26) and no net slack was created. `noqa`
+and `type: ignore` received no remediation at all. With `--strict` now wired into
+two gates, the next single marker added to `src/mousedroid` fails CI rather than
+only the regression tier — so real slack still needs banking.
 
 ### Added — pyproject ↔ CHANGELOG version pin
 

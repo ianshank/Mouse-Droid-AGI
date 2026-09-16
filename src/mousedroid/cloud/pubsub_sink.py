@@ -205,11 +205,21 @@ class CloudTelemetrySink:
         if publisher is None:
             # Unreachable through either caller (``publish_telemetry`` and
             # ``publish_experience`` both guard), but ``_publish`` must be right
-            # on its own terms. Recorded through the SAME metric path a caught
-            # ``AssertionError`` used to take, so promoting the stripped assert
-            # into a real branch does not trade a crash for a telemetry blind
-            # spot: the outcome is still counted, with a zero-latency
-            # observation because no publish was attempted.
+            # on its own terms. The outcome is still counted, so promoting the
+            # stripped assert into a real branch does not trade a crash for a
+            # telemetry blind spot.
+            #
+            # Two deliberate differences from the old assert path, stated rather
+            # than glossed as equivalence:
+            #   * The assert raised INSIDE ``self._cb.call(_do_publish)``, so the
+            #     circuit breaker recorded a failure and advanced toward OPEN.
+            #     This branch returns before the breaker is reached, so repeated
+            #     no-publisher calls no longer trip it. That is correct — an
+            #     unstarted sink is not a failing remote — but it is a change.
+            #   * Latency is 0.0 rather than a real (tiny) elapsed, so the
+            #     histogram gets a 0.0 observation. Pinned by
+            #     ``test_publish_without_publisher_still_counts_the_outcome``,
+            #     so it is contract, not accident.
             _log.warning("cloud_pubsub_publish_skipped_no_publisher", topic=topic)
             self._record_publish_outcome(category, _RESULT_ERROR, 0.0)
             return

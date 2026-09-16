@@ -68,22 +68,6 @@ _log = get_logger(__name__)
 # forces a terminal status. Implemented as a callable class so it
 # structurally satisfies :class:`AcceptancePredicateProtocol`'s
 # ``__call__`` shape under ``mypy --strict`` (a bare ``def`` would not).
-class MissionLifecycleStateError(RuntimeError):
-    """Raised when a lifecycle operation runs with no active mission.
-
-    A dedicated type rather than a bare :class:`RuntimeError` so a caller can
-    distinguish this internal-invariant breach from any other runtime failure,
-    and so the regression pin can assert on the type instead of on message text.
-
-    This exists because the guards it backs cannot be ``assert``: the Jetson
-    image sets ``PYTHONOPTIMIZE=1`` (``Dockerfile.jetson``), which strips
-    asserts, so on the rover an absent mission would surface as an
-    ``AttributeError`` partway through a state transition rather than as a
-    typed, logged failure. These methods sit on the mission / e-stop path, so
-    the difference is operationally visible.
-    """
-
-
 class _MissionOwnedPredicate:
     """Always-False acceptance predicate for lifecycle-owned tasks."""
 
@@ -94,6 +78,29 @@ class _MissionOwnedPredicate:
 
 
 _MISSION_OWNED_PREDICATE = _MissionOwnedPredicate()
+
+
+class MissionLifecycleStateError(RuntimeError):
+    """Raised when a lifecycle operation runs with no active mission.
+
+    A dedicated type rather than a bare :class:`RuntimeError` so a caller can
+    distinguish this internal-invariant breach from any other runtime failure,
+    and so the regression pin can assert on the type instead of on message text.
+
+    Why not ``assert``: the Jetson image sets ``PYTHONOPTIMIZE=1``
+    (``Dockerfile.jetson``), which strips every assert, so an ``assert
+    self._mission is not None`` guard does not exist on the rover at all.
+
+    Scope, stated precisely because it is easy to overstate: every caller of the
+    four guarded methods already checks for an absent mission —
+    :meth:`MissionLifecycle.start_mission` assigns immediately beforehand, and
+    :meth:`~MissionLifecycle.tick` and :meth:`~MissionLifecycle.fail` both return
+    early on ``None``. So the branches this guards are **unreachable today**, and
+    the four asserts were narrowing hints for mypy rather than live faults. This
+    type exists so that if a future caller reaches them, the failure is a named,
+    logged refusal instead of an ``AttributeError`` partway through a state
+    transition — defence in depth on the mission path, not a bug being fixed.
+    """
 
 
 class MissionLifecycleState(StrEnum):
@@ -407,6 +414,14 @@ class MissionLifecycle:
         run with a mission in flight. Deliberately **not** an ``assert`` — see
         :class:`MissionLifecycleStateError` for why that distinction is
         load-bearing on the rover.
+
+        Callers must not hold the returned state across an ``await``. Every other
+        guarded method re-derives it, so a mission swapped mid-await would leave a
+        holder writing to the old state while its callees transitioned the new
+        one. ``_handle_stall`` does hold it across
+        ``submit_replan_request``; that is safe only because a lifecycle owns one
+        mission and ``tick`` refuses terminal states, so no concurrent
+        ``start_mission`` can land. Preserve that or re-derive.
 
         Args:
             operation: Short name of the calling operation, surfaced in the log
