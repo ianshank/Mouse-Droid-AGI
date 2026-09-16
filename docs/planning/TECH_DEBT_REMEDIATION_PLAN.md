@@ -1,7 +1,10 @@
 # MouseDroid — Code Quality & Tech-Debt Remediation Plan
 
 > **Date:** 2026-09-16
-> **Branch:** `claude/code-quality-tech-debt-plan-36irdi`
+> **Branch (source-audit branch — the PR head, not a trunk):**
+> `claude/code-quality-tech-debt-plan-36irdi` — PR #225, whose base is the repo
+> default branch `claude/markdown-implementation-plan-aVJ2l`. There is no `main`
+> to branch from; that absence is itself a finding (WS-9e).
 > **Baseline:** `dddc16c` (`feat(sim): Isaac Lab workstation harness (F-043–F-046, F-048)`)
 > **Status:** Waves 0–1 **implemented** (see §0); Waves 2–5 remain proposals.
 > **Scope:** Whole tree. Optimisation, tech-debt reduction, hardening, god-file
@@ -24,9 +27,10 @@ this plan, which matters more than the tick-list:
 | WS-1 — `S101` + 8 asserts | **Done** | `S101` un-ignored for `src/`; all 8 converted. New `_require_mission` accessor + `MissionLifecycleStateError`; two closure sites bind above the guard; two ONNX sites raise explicitly |
 | WS-2g(2) — `ratchet_budgets --strict` | **Done, not as planned** | See correction 1 below |
 | WS-2c — promote `security` | **Done** | advisory → blocking; 5 coupled files updated |
+| WS-2h(2) — `make test` ≡ the `test` job | **Done** | `Makefile`'s `test` target is now `test-cov regression smoke behaviour` — all **four** pytest steps of the blocking `test` job, where it previously ran one. This plan said the job had five; the fifth step is an artifact upload |
 | WS-2i — mlflow `redundant-cast` | **Done** | Both sites use the annotated-local form; `mlflow-extras` gained a mypy step |
 | WS-6a — dangling `__all__` | **Done** | Names bound; new sweep pins every `__all__` entry in every package |
-| WS-9a — version pin | **Done** | `0.3.0` → `0.4.0`; regression test parses both files; `release.yml` extras aligned + `concurrency` added |
+| WS-9a — version pin | **Done** (tag deferred) | `0.3.0` → `0.4.0`; `tests/regression/test_package_version_single_source.py` pins pyproject against the newest CHANGELOG heading **and** five further restatements; `release.yml` extras aligned + `concurrency` added. Only the `v0.4.0` tag itself remains, deferred to maintainer approval |
 | WS-8b — widen `doc_hygiene` | **Deferred** | See correction 2 below |
 
 **Correction 1 — `--strict` was not "one word".** This plan called adding
@@ -72,8 +76,8 @@ are already right:
 
 | Checked | Result |
 |---|---|
-| Secrets in tree or history | **Clean** — `gitleaks` 0 findings, and still 0 with the allowlist removed |
-| Dependency CVEs | **Clean** — `pip-audit` 0 vulnerabilities across 123 resolved packages |
+| Secrets in the **working tree** | **Clean** — `gitleaks` 0 findings, and still 0 with the allowlist removed. **History is not covered by this row:** the audit clone is shallow (52 commits), so the `fetch-depth: 0` full-history scan CI runs was never reproduced locally — see §9 |
+| Dependency CVEs | **Clean, with one precondition** — `pip-audit` 0 vulnerabilities across 123 resolved packages *after* CI's `pip install --upgrade pip setuptools` bootstrap. Without that bootstrap the runner image's own setuptools 79.0.1 reports **2** (PYSEC-2026-3447) — see WS-2's advisory table |
 | `SecretStr` coverage on credential fields | **Complete** — no credential field is a plain `str` |
 | Pre-egress prompt-injection sanitisation | **No bypass** — every cloud-hitting dispatch path sanitises first |
 | Blocking calls inside `async def` (invariant 4) | **Zero** across `src/` (AST scan) |
@@ -83,22 +87,23 @@ are already right:
 | `features.yaml` governance | **Clean** — 39/39 `done` entries carry a resolvable `implemented_in` + `validation_command` |
 | Test-tier mirror discipline | **40 of 41** packages have a `tests/unit/<pkg>/` mirror (only `interfaces/` lacks one) |
 
-So this plan is not a rescue. It targets six specific weaknesses:
+So this plan is not a rescue. It targets seven specific weaknesses:
 
 1. **A production-only correctness hole.** `PYTHONOPTIMIZE=1` is set in the
    shipped Jetson image, and 8 `assert` statements in `src/` — 4 of them in the
    mission-lifecycle / e-stop path — are silently stripped there. The lint rule
    that would catch this is globally disabled.
-2. **CI is green, and that greenness is not load-bearing.** All 17 jobs were
-   reproduced locally and pass; PR #224 was 24/24. But 23 matrix legs resolve a
-   fresh dependency tree with no lockfile; there are **five** paths where a gate
-   goes green without checking anything; `push` CI has been dead since
-   2026-09-01 because it triggers on a `main` that does not exist; and a red
-   `lint` skips 14 of 17 jobs.
+2. **CI is green, and that greenness is not load-bearing.** **11 of the 17 jobs**
+   were reproduced locally and pass; for the other six the evidence is CI
+   history, not a local run (WS-2 names each and why). PR #224 was 24/24. But 23
+   matrix legs resolve a fresh dependency tree with no lockfile; there are
+   **five** paths where a gate goes green without checking anything; `push` CI
+   has been dead since 2026-09-01 because it triggers on a `main` that does not
+   exist; and a red `lint` skips 14 of 17 jobs.
 3. **Config has three parallel roots**, and the gate meant to prevent that has a
    blind spot that exempts the codebase's own dominant naming convention.
 4. **God-file reduction stopped at the method boundary.** ADR-017 split the
-   classes; a 46-parameter, 381-line constructor and a 208-line `tick()` remain.
+   classes; a 45-parameter, 381-line constructor and a 208-line `tick()` remain.
 5. **Coverage measures 92.19% honestly, and three things under it are not.**
    Branch coverage alone is **84.60%** — below the gate the blended figure
    passes. 211 statements sit at **0% inside the denominator** because no CI job
@@ -149,7 +154,7 @@ Recorded so later waves can be judged against it rather than against impressions
 | Checkouts with `persist-credentials: false` | **2 of 17** | `grep` on ci.yml |
 | `pip install -e ".[dev,telemetry,mcp]"` repetitions | 6 | ci.yml lines 212, 297, 340, 385, 441, 746 |
 | Advisory (`continue-on-error`) jobs | 6, all tracked | `.github/advisory_stages.yaml` |
-| `Protocol` classes defined | 91 across 60 files | `grep -c 'class .*(Protocol)'` |
+| `Protocol` classes defined | **93 across 57 files** — re-measured at HEAD, not at the `dddc16c` baseline the rest of this table uses (which gave 91 / 60). The `grep` in the next column reports **92**: it misses `EngineTypedWeightUpdatePollerProtocol` (`cloud/protocol.py:110`), whose `Protocol` is a *second* base after `WeightUpdatePollerProtocol`, so `class .*(Protocol)` does not match the line. 93 is the AST count and the real one | `grep -c 'class .*(Protocol)'` (undercounts by 1 — see left); AST sweep for a `Protocol` base |
 | Dependency lockfile | **none** | `ls *.lock requirements*.txt constraints*.txt` |
 | Remote branches / tags | **90 / 0** | `git ls-remote --heads\|--tags origin` |
 | Default branch | `claude/markdown-implementation-plan-aVJ2l` (no `main`) | `git ls-remote --symref origin HEAD` |
@@ -216,10 +221,12 @@ type-narrowing.
 
 ### WS-2 — CI: green today, fragile by construction
 
-**Start from the good news, because it bounds the work.** Every one of the 17
-jobs was reproduced locally at `dddc16c` (isolated venv, CI's pinned tool
+**Start from the good news, because it bounds the work.** **Eleven of the 17
+jobs** were reproduced locally at `dddc16c` (isolated venv, CI's pinned tool
 versions: `actionlint 1.7.12`, `promtool 2.51.0`, `gitleaks 8.24.3`,
-`ruff 0.16.2`, `mypy 2.3.1`). **Zero fast-gate failures.**
+`ruff 0.16.2`, `mypy 2.3.1`). **Zero fast-gate failures.** *This plan's first
+draft claimed all 17; it did not.* The table below has 11 rows and §2 records
+11 run — the six absent jobs are named after it.
 
 | Job | Result at HEAD |
 |---|---|
@@ -235,12 +242,33 @@ versions: `actionlint 1.7.12`, `promtool 2.51.0`, `gitleaks 8.24.3`,
 | `onnx-world-model-extras` *(advisory)* | PASS — `250 passed, 1 skipped` |
 | `mlflow-extras` *(advisory)* | PASS — `62 passed` |
 
+**The six jobs not in that table, and what stands in for a local run.** For each
+of them the evidence is CI history, not a reproduction here — and each is absent
+for a different reason, which is worth stating rather than averaging:
+
+- **`test`** — only its *first* pytest step ran locally (the coverage selection,
+  measured in §WS-7). The regression + e2e, smoke and
+  functional/user_journey/security steps were not run here.
+- **`gitleaks`** — the working-tree scan ran clean, but the clone is shallow
+  (52 commits), so CI's `fetch-depth: 0` full-history scan was not reproduced
+  (§9).
+- **`security`** — its greenness depends on the runner image's
+  `pip install --upgrade pip setuptools` bootstrap rather than on this tree; see
+  the advisory verdict table below.
+- **`vulture-audit`** — it exits 0 asserting nothing (WS-2g(4)), so running it
+  locally would have proved nothing either way.
+- **`test-windows`** — no Windows host was available.
+- **`docker`** — the image was not built locally.
+
+Read "11 run / 0 failures" as exactly that, and nothing wider.
+
 And the real history agrees: **PR #224 (= HEAD) was 24/24 green**, #222 was
 25/25. Nothing is failing on the default-branch tree.
 
 So "get CI green" is not the task. CI *is* green. The task is that this
 greenness is not load-bearing: it is unreproducible, it can be reached without
-checking anything in five places, and there is no trunk signal at all. Also,
+checking anything in five places — **four** of them still live, since WS-2g(2)'s
+ratchet step has landed (§0) — and there is no trunk signal at all. Also,
 structure is **not** the problem, and three things worth not re-auditing: all 17
 jobs carry `timeout-minutes`; every `setup-python` sets `cache: pip` with
 `cache-dependency-path`; all four main workflows have `concurrency` +
@@ -273,23 +301,49 @@ teeth.
 **Gate.** A `uv lock --check` step fails the build when `pyproject.toml` and the
 lockfile disagree.
 
-**WS-2b — Promote the delta-coverage gate into CI.** `scripts/check_branch_coverage.py`
-(675 LOC, itself covered by a 621-LOC test at
-`tests/unit/scripts/test_check_branch_coverage_base_ref.py`) enforces ≥90%
-branch coverage **on changed lines**. It runs in `scripts/ci.sh:178` and
-`make branch-coverage` — and in **no** GitHub Actions workflow. The only
-mention in `ci.yml` is the comment at `:366` explaining it is *"Still local-only
-by design (need heavy deps)"*.
+**Limitation — that gate does not achieve the stated goal, so WS-2a is two
+changes, not one.** Every install in every workflow is `pip install -e`: **13**
+invocations in `ci.yml` and **18** across the five workflows. `uv lock --check`
+asserts only that the lockfile is current with respect to `pyproject.toml`; it
+does not change what CI installs. Land it alone and all 23 matrix legs still
+resolve a fresh tree from floating lower bounds exactly as they do today, with a
+green new step saying nothing about reproducibility. The second change is the
+load-bearing one: switch the installs to a locked form — either `uv sync
+--frozen`, or `uv export` into a constraints file consumed via
+`pip install -e "…" -c constraints.txt`. Landing only the lockfile plus
+`--check` buys deliberate `uv.lock` upgrades (and gives Dependabot something to
+act on) and nothing else. Budget both halves; do not book the first as the fix.
 
-That rationale no longer holds. The `test` job already installs
-`.[dev,telemetry,mcp]` and already runs exactly the tiers the gate needs
-(`tests/unit tests/property tests/integration`, `ci.yml:216-224`). Adding the
-gate as a step on the 3.11 leg costs one extra invocation and **no new
-installs**.
+**WS-2b — Superseded: do *not* promote the delta-coverage gate into CI.** This
+plan proposed adding `scripts/check_branch_coverage.py` (675 LOC, itself covered
+by a 621-LOC test at `tests/unit/scripts/test_check_branch_coverage_base_ref.py`,
+enforcing ≥90% branch coverage **on changed lines**) as a step on the `test`
+job's 3.11 leg, on the grounds that the job already installs
+`.[dev,telemetry,mcp]` and already runs the tiers the gate needs, so it would
+cost "one extra invocation and no new installs".
 
-This is the single highest-value coverage change available: the 90% global floor
-resists erosion slowly (one uncovered file barely moves a 22k-statement
-denominator), whereas a changed-lines gate refuses new uncovered code outright.
+**That proposal has been decided against, and the decision is pinned.** The gate
+is a documented `_CI_EXEMPT_GATES` entry in
+`tests/regression/test_ci_gate_wiring_aqa.py`, and the recorded reason is the one
+this plan got wrong: the gate **re-runs the whole unit/property/integration
+selection** to compute a changed-file branch delta that the blocking `test` job
+already pays for once at the line level. That is roughly double wall-clock for a
+second view of the same run, not one cheap invocation.
+
+Two facts the original proposal missed, both pointing the same way:
+
+- The `test` job's `actions/checkout` sets **no `fetch-depth`**, so its checkout
+  is shallow and the gate could not resolve `origin/$GITHUB_BASE_REF`. It would
+  fall back to working-tree change detection **silently** — a green gate
+  measuring nothing.
+- Only `local-gates` and `gitleaks` check out at `fetch-depth: 0`. So landing the
+  gate as proposed would have *added* a sixth vacuous-green path to WS-2g's list
+  rather than closing one.
+
+It stays local-only (`scripts/ci.sh:178`, `make branch-coverage`). The
+coverage-erosion concern behind the proposal is real — the 90% global floor
+resists erosion slowly, since one uncovered file barely moves a 22k-statement
+denominator. WS-7a's branch-coverage floor is the gate that answers it inside CI.
 
 **WS-2c — Advisory ladder: two promotions come due this week.** Computed from
 `.github/advisory_stages.yaml` against 2026-09-16. `scripts/check_advisory_promotions.py`
@@ -310,12 +364,38 @@ it can be promoted to blocking now. `test-windows` needs a green-streak check
 against the Actions API before flipping. `NEXT_STEPS.md:59-60` already carries
 this as an open item; this plan supplies the dates.
 
-**WS-2d — Consolidate the three extras jobs.** `vla-extras`,
-`onnx-world-model-extras`, and `mlflow-extras` are three separate jobs, each
-`ubuntu-latest` / Python 3.11 / `timeout-minutes: 30`, differing only in which
-extra they install. Collapse to one job matrixed over
-`[vla, onnx_world_model, mlflow]`: same coverage, one job definition instead of
-three, and their advisory states become per-matrix-entry rather than per-job.
+**WS-2d — Consolidate the three extras jobs — but not before the promotion
+clocks can survive it.** `vla-extras`, `onnx-world-model-extras`, and
+`mlflow-extras` are three separate jobs, each `ubuntu-latest` / Python 3.11 /
+`timeout-minutes: 30`, differing only in which extra they install. Collapsing
+them to one job matrixed over `[vla, onnx_world_model, mlflow]` would give the
+same coverage from one job definition instead of three.
+
+**The claim that their advisory states "become per-matrix-entry" is wrong, and
+the mechanism is worth stating because it is not recoverable after the fact.**
+`scripts/check_advisory_promotions.py` walks `jobs.items()` and keys each
+advisory job by the workflow's **job id**, selecting on
+`job.get("continue-on-error") is True`; `.github/advisory_stages.yaml` is matched
+back by its `job:` field (`tracked_by_job`). A matrix has one job id, so:
+
+- **The separate promotion windows are lost.** `onnx-world-model-extras`
+  (advisory since 2026-05-16) and `mlflow-extras` (since 2026-08-27) would
+  collapse into one name with one clock, and the earlier window — the one that
+  is closer to due — would disappear.
+- **`vla-extras` is blocking**, so it cannot share a job-level
+  `continue-on-error` with the other two at all. Adding one would silently make a
+  blocking job advisory.
+- **A per-leg `continue-on-error: ${{ matrix.advisory }}` is worse, not a
+  workaround.** The checker matches `is True`, and a GitHub expression is a
+  *string*, so the collapsed job would fail that test, drop out of the tracker
+  entirely, and not even be reported as an untracked advisory stage. The
+  promotion ladder would go quiet rather than red.
+
+So do this **only** alongside keying promotion metadata by job *and* matrix leg
+(both in `advisory_stages.yaml` and in the checker), or wait until both
+`onnx-world-model-extras` and `mlflow-extras` are blocking — at which point the
+collapse is free, because there is no clock left to lose. The runner-minute
+saving is not worth trading a governance surface for.
 
 **WS-2e — `push` CI is dead, because there is no `main`.** `ci.yml:31-32`:
 
@@ -353,7 +433,7 @@ keep the dependency and accept that a lint failure blinds the entire pipeline.
 The current arrangement optimises runner minutes at the cost of the thing the
 pipeline exists to produce.
 
-**WS-2g — Five places a gate can go green without checking anything.** Ranked
+**WS-2g — Five places a gate can go green without checking anything** (item 2 has since landed; four remain live). Ranked
 by whether a human would notice:
 
 1. **`prometheus-check` is blocking and can no-op.** The promtool download ends
@@ -367,12 +447,18 @@ by whether a human would notice:
    `else echo "No metrics sample generated — skipping validation"` with **no**
    annotation. Rename `generate_metrics_sample` and the format check passes
    silently. (Today it genuinely emits 20,953 bytes.)
-2. **`ratchet_budgets` runs without `--strict`.** `ci.yml:403` and
-   `scripts/ci.sh:75` both invoke `python -m tools.ratchet_budgets` bare, so a
-   WARN exits 0. It currently WARNs on **all three** budgets, because all three
-   are at ceiling. The next suppression anyone adds will fail the regression
-   tier — and this step, whose entire job is to warn first, will not say so.
-   Adding `--strict` is a one-word fix.
+2. **`ratchet_budgets` ran without `--strict`. Closed — but not as described;
+   see §0 correction 1.** The finding was real: `ci.yml` and `scripts/ci.sh`
+   invoked `python -m tools.ratchet_budgets` bare, so a WARN exited 0 and the
+   step whose entire job is to warn first could not. `--strict` is now wired in
+   all three places (`ci.yml:428`, `scripts/ci.sh:75`, `Makefile:144`). **The
+   remedy this plan proposed was wrong**, though: adding the flag as it then
+   behaved would have made CI permanently red, because it failed on any
+   *warning* and a correctly maintained budget sits *at* its ceiling and so above
+   its warn threshold. `noqa` (19, warn at 17) and `type_ignore` (8, warn at 7)
+   warn today from exactly that position. What landed is a severity split —
+   `--strict` gates on a ceiling **breach**, and approaching-budget warnings
+   still exit 0.
 3. **`config-compat.yml` can never be a required check.** It is `paths:`-filtered
    *and* carries a "Skip when no config YAML changed" branch, and it appeared in
    **none** of the check-runs for PRs #222, #223 or #224. The gate itself is
@@ -391,10 +477,10 @@ because `CLAUDE.md` advertises `make gates` / `make test` as the pre-push story.
 | # | Divergence | Consequence |
 |---|---|---|
 | 1 | **`make gates` fails out of the box on a venv checkout.** `scripts/validate.py` runs each feature's `validation_command` through `subprocess.run(..., shell=True)`, and those commands say bare `python` — so it resolves **PATH's** interpreter, not the `MOUSEDROID_PYTHON` / `./.venv/bin/python` the Makefile and `ci.sh` carefully compute. Observed: 26 features fail with `/usr/local/bin/python: No module named pytest`, `make: *** [Makefile:85: validate] Error 1`. With the venv on `PATH`: `OK: 39 done; ran 36`, RC=0. | A contributor's first `make gates` fails for reasons unrelated to their change. Fix: substitute `sys.executable` before `shell=True`. |
-| 2 | **`make test` runs 1 of the blocking `test` job's 5 pytest steps.** It omits `tests/regression tests/e2e`, `tests/smoke`, and `tests/functional tests/user_journey tests/security`, and omits CI's `-x`. | **This is exactly how PR #223 passes locally and fails CI** — the failing step is "Run regression + e2e tiers", which `make test` never executes. `CLAUDE.md` calling `make test` the coverage gate is misleading as written. |
+| 2 | ~~**`make test` runs 1 of the blocking `test` job's 5 pytest steps.**~~ **Landed.** `Makefile`'s `test` target is now `test-cov regression smoke behaviour` — all **four** pytest steps of the `test` job (coverage; regression + e2e; smoke; functional/user_journey/security). The count was also wrong: this plan said five, counting the job's artifact-upload step as a pytest step. | Was **exactly how PR #223 passed locally and failed CI** — the failing step was "Run regression + e2e tiers", which `make test` never executed. Closed: a green `make test` now covers the same four selections, so `CLAUDE.md`'s pre-push story holds. |
 | 3 | **`make gates` ≠ `local-gates`, in both directions.** `local-gates` additionally runs `check_subsystem_boundaries.py`, `doc_hygiene.py --strict`, `ratchet_budgets`, and the workforce-hook coverage gate; `make validate` runs `validate.py --tier fast`, which is a **`harness.yml`** job, not `local-gates`. | Neither side is a superset of the other, so neither is a safe pre-push proxy. |
-| 4 | **`make hooks` enforces 90%, CI enforces 85%.** CI passes `--cov-fail-under=$WORKFORCE_COV_MIN` (85, from `workforce.yaml`); the Makefile passes none, so `fail_under = 90` applies. `make hooks` also drops CI's `-m "not hardware"`. | Local is stricter here — harmless, but the two should agree on purpose rather than by accident. |
-| 5 | **Two gates run in `ci.sh` and in no CI job**: `tools.claude_hooks.docs_trimmer` (root `CLAUDE.md` line budget) and the `workforce.yaml` parse check. | `ci.yml:365-368`'s comment claims the only local-only leftovers are `check_branch_coverage.py`, the pillar dry-run and `--health-check`. **That comment is incomplete** — the same comment WS-2b already contradicts. |
+| 4 | ~~**`make hooks` enforces 90%, CI enforces 85%.**~~ **Closed.** `make hooks` now derives `--cov-fail-under` from `load_config().coverage.tools_line_min` (`Makefile:153-159`) — the same `workforce.yaml` value `ci.yml` reads — and it passes CI's `-m "not hardware"`. | The two agree on purpose now, from one source, instead of by accident at two different numbers. |
+| 5 | ~~**Two gates run in `ci.sh` and in no CI job**~~ — **half landed.** `tools.claude_hooks.docs_trimmer` (root `CLAUDE.md` line budget) now runs in `ci.yml`'s `local-gates` job (`ci.yml:418`). The `workforce.yaml` parse check is still `ci.sh`-only. | The class is now pinned rather than enumerated: `tests/regression/test_ci_gate_wiring_aqa.py` discovers every `ci.sh` gate and fails on any that runs in zero workflows unless it carries a documented `_CI_EXEMPT_GATES` reason — which is also where WS-2b's supersession is recorded. |
 
 Keep `scripts/ci.sh`'s best habit: it prints an explicit "CI jobs NOT reproduced
 locally" epilogue and *announces* its gitleaks/promtool/vulture skips rather than
@@ -481,8 +567,9 @@ the price of getting signal from a red-lint run.
 **One item needs a human, not a plan.** `GET /branches/.../protection` returns
 `403 Resource not accessible by integration`, so **which checks are required at
 merge could not be determined**. With 6 advisory jobs at this document's baseline
-(5 since WS-2c promoted `security` — see §0), 5 vacuous-green paths and no trunk
-CI, it is worth confirming directly that "green" is actually enforced.
+(5 since WS-2c promoted `security` — see §0), 5 vacuous-green paths found (4 still
+live — WS-2g(2) has landed) and no trunk CI, it is worth confirming directly that
+"green" is actually enforced.
 
 ---
 
@@ -620,9 +707,15 @@ But it split *methods*. What remains in `src/mousedroid/orchestrator/orchestrato
 class MouseDroidOrchestrator(_LifecycleMixin, _MissionMixin, _WorldModelStateMixin,
                              _ActionMixin, _TelemetryExperienceMixin,
                              _VoiceFaceMixin, _BackgroundCadenceMixin)
-    __init__   381 lines,  45 parameters  (21 positional-or-keyword + 24 keyword-only)
+    __init__   381 lines,  45 parameters  (6 required positional-or-keyword
+                                          + 15 optional positional-or-keyword
+                                          + 24 keyword-only; no *args/**kwargs)
     tick       208 lines   ← the 30 Hz hot loop
 ```
+
+*Arity, stated once so the rest of this section can rely on it:* the AST count is
+**45**. Two earlier passages in this plan said 46; that figure was wrong and has
+been corrected.
 
 Only **6** of the 45 are required (`world_model`, `agents`, `safety_monitor`,
 `esp32`, `sensor_manager`, `cfg`); the other 39 default to `None`. That ratio is
@@ -635,8 +728,10 @@ soft-constraint safety projector` (`:408`), `# Phase 6 WS3 — replay-triggered
 on-device update coordinator` (`:420`), `# Growth pillar` (`:429`),
 `# Issue #109 — one-shot startup greeting` (`:434`), `# F-023`, `# F-025`. Every
 new subsystem costs one more parameter. This is also *why*
-`factory/orchestrator.py::build_orchestrator` sits at C901 **15/15** — it has to
-wire 46 arguments.
+`factory/orchestrator.py::build_orchestrator` sits at C901 **15/15** — it wires
+**43 of the 45** by keyword, omitting exactly `clock` and the legacy
+`weight_update_poller`. (This plan first said "46 arguments", which was wrong on
+both counts: the constructor takes 45, and the factory does not pass all of them.)
 
 `tick()` at 208 lines is not flagged by C901 (its branching is low; it is long
 and linear), but it is the most timing- and safety-critical function in the
@@ -699,10 +794,27 @@ this audit's own AST map just as a module-path grep did for
 constructor body read, not just a reference count.
 
 **Change.**
-1. Introduce the 8 frozen wiring bundles above, each field
-   `Field(default=None, description=…)`. Keep every existing kwarg accepted via a
-   deprecation shim for one release so `Settings`/YAML and external callers are
-   unaffected (invariant 6). `NEXT_STEPS.md:72-74` already gestures at this
+1. Introduce the 8 wiring bundles above as **frozen `slots=True` dataclasses of
+   Protocol-typed fields defaulting to `None`**.
+
+   *Correction to this plan's own first draft, which specified Pydantic
+   `Field(default=None, description=…)` here:* that is the wrong tool for this
+   signature. Invariant 6's `Field(default=…, description=…)` rule governs
+   **schemas under `config/schema/`** — config fields that must survive a
+   `git pull` against existing YAML. These 45 parameters are not config fields at
+   all: they are runtime collaborators built and injected by
+   `factory/orchestrator.py`, no YAML or `Settings` value reaches them, and
+   `_OrchestratorState` is itself a plain class, not a Pydantic model. Putting
+   live objects behind Pydantic validation would buy no backwards-compatibility
+   guarantee and would put a validator on the 30 Hz construction path. The
+   precedent for the dataclass form is already dominant in the tree: **61**
+   `@dataclass(frozen=True…)` declarations under `src/mousedroid`.
+
+   Then add a **constructor compatibility adapter**: keep accepting every one of
+   the existing kwargs for one release, fold each into its bundle, and emit a
+   `DeprecationWarning`. That is the shape the `weight_update_poller` shim already
+   uses at `orchestrator.py:388-400` (see below) — copy it rather than invent a
+   second mechanism. `NEXT_STEPS.md:72-74` already gestures at the test side
    ("property-test orchestrator kwargs vs `_OrchestratorState`").
 2. Extract `tick()`'s phases into named private methods on the existing mixins,
    preserving ordering and the `_mark_phase` instrumentation (the comment at
@@ -760,13 +872,26 @@ this class of change.
 
 ### WS-5 — Interface coherence
 
-91 `Protocol` classes across 60 files, under **three** competing module naming
-conventions — `protocol.py` (singular), `protocols.py` (plural), `_protocol.py`
-(private) — plus 41 Protocols defined inline in implementation modules.
+**92** `Protocol` classes across **57** files — re-measured at HEAD with this
+an AST sweep at HEAD, rather than at the `dddc16c` baseline in §2, which reported
+91 / 60 — under **three** competing module naming conventions: `protocol.py`
+(singular), `protocols.py` (plural), `_protocol.py` (private) — **66 of the 93**
+live in a protocol-named module and the other **27** are declared inline in
+implementation modules.
+
+The measurement method matters here, not just the number. This plan's original
+`grep -c 'class .*(Protocol)'` reports 92, not 93: it cannot see
+`EngineTypedWeightUpdatePollerProtocol` (`cloud/protocol.py:110`), which lists
+`Protocol` as a *second* base after `WeightUpdatePollerProtocol`. That is a
+direct constraint on WS-5's proposed gate — a duplicate-name check built on that
+grep would be blind to every multi-base Protocol, which is exactly the shape a
+Protocol gets when someone extends an existing one. Implement the gate on an AST
+sweep, not a line regex.
 
 The decentralised `<package>/protocol.py` pattern is defensible (co-locate the
-interface with its domain). The inconsistency is not, and it has produced two
-verified duplications:
+interface with its domain). The inconsistency is not, and it has produced three
+verified duplications — an AST sweep over `src/mousedroid/**` finds **two** exact
+duplicate Protocol *names* (WS-5a, WS-5d) plus one case-differing pair (WS-5b):
 
 **WS-5a — `PromptInjectionFilterProtocol` is defined twice, with divergent
 signatures.**
@@ -781,32 +906,129 @@ Both are `@runtime_checkable`. Under PEP 544, positional-or-keyword parameter
 interchangeable for keyword calls — a latent `mypy --strict` divergence, not
 just cosmetic duplication.
 
-Both are live, and the split runs straight through the DI seam:
-`factory/llm_gateway.py:9,21` imports and returns the **`security`** one as
-`build_injection_filter`'s return type, while `factory/__init__.py:255,308`
-re-exports the **`interfaces`** one. The same package exports two different
-names for the same builder's return type.
+Both are live — but **this plan misstated where the split runs, and the correction
+matters because it moves the fix**. The factory surface is internally
+*consistent*: `factory/llm_gateway.py:9,21` imports the **`security`** definition
+and returns it as `build_injection_filter`'s return type, and
+`factory/__init__.py:254-257,308` imports and re-exports **that same `security`
+definition**. There is no factory-export divergence.
+
+The divergence runs through the `llm_gateway` package instead. The `interfaces`
+definition is exported by `interfaces/__init__.py:12,22` and consumed by exactly
+one implementation: `llm_gateway/composite_gateway.py:23-28`, which annotates its
+`injection_filter` parameter against it. Every other gateway —
+`llm_gateway/gateway.py:18`, `anthropic_gateway.py:54`, `openai_compatible.py:41`
+— plus `orchestrator/mission_dispatcher.py:32` and
+`harness/approval/openclaw_gate.py:12` use the **`security`** one. So a single
+package annotates one collaborator against two incompatible definitions of the
+same name, and `composite_gateway.py` is the lone outlier. Fix it there, not in
+the factory.
 
 **WS-5b — `LiDARProtocol` vs `LidarProtocol`.** `interfaces/protocols.py:70`
 and `hardware/protocols.py:160` — case-differing near-duplicates of the same
-concept.
+concept. And the DI facade re-exports **both**: `factory/__init__.py` imports
+`LiDARProtocol` from `interfaces` (`:245`) and `LidarProtocol` from
+`hardware/protocols.py` (`:238`), then lists them on **adjacent lines** of
+`__all__` (`:302-303`). A reader of the factory surface is offered two spellings
+of one concept, side by side, with nothing to distinguish them.
 
-**WS-5c — `interfaces/` is under-adopted.** It holds 7 cross-cutting Protocols
-(`MotorControllerProtocol`, `CameraProtocol`, `LiDARProtocol`,
+**WS-5c — `interfaces/` is under-adopted.** It holds **six** cross-cutting
+Protocols (`MotorControllerProtocol`, `CameraProtocol`, `LiDARProtocol`,
 `LLMGatewayProtocol`, `MetricsRegistryProtocol`,
-`PromptInjectionFilterProtocol`, plus `GoalVector`) and has **15** import sites
-across `src/` + `tests/` — and is the one package of 42 with **no**
-`tests/unit/` mirror.
+`PromptInjectionFilterProtocol`) **plus one Pydantic model**, `GoalVector` —
+`class GoalVector(BaseModel)` at `interfaces/protocols.py:10`. This plan's first
+draft counted it as a seventh Protocol; it is not one, and the distinction
+matters because a duplicate-Protocol gate will never see it. The package has
+**15** import sites across `src/` + `tests/` — and is the one package of 41 with
+**no** `tests/unit/` mirror.
+
+**WS-5d — `LLMGatewayProtocol` is defined twice, and *this* is the split that
+runs through the DI seam.** This audit missed it; the AST sweep behind WS-5's
+gate finds it immediately.
+
+| | |
+|---|---|
+| `interfaces/protocols.py:87` | `is_ready()` a **method**; `is_degraded()`; `translate_mission(self, command: str)` |
+| `llm_gateway/protocol.py:22` | `is_ready` a **`@property`**; `start()`; `translate_mission(self, nl_command: str)` |
+
+Both are live and the two diverge in **three independent ways**, which is worse
+than WS-5a: method vs property; a positional-or-keyword parameter renamed
+`command` → `nl_command` (the same PEP 544 name-compatibility defect WS-5a
+documents for `command` vs `text`); and member sets that differ in *both*
+directions — `is_degraded` exists only in `interfaces`, `start` only in
+`llm_gateway`. **Neither is a superset of the other**, so no single class can be
+annotated interchangeably against both.
+
+The DI seam is where the consequence lands. **All 10 consumers** import the
+`llm_gateway/protocol.py` definition: `orchestrator/orchestrator.py`,
+`orchestrator/_state.py`, `orchestrator/llm_replanner.py`,
+`common/tools/registry.py`, `llm_gateway/__init__.py`,
+`llm_gateway/fallback_gateway.py`, `factory/__init__.py`, `factory/mission.py`,
+`factory/orchestrator.py`, `factory/llm_gateway.py`. But
+`CompositeLLMGateway` **subclasses the `interfaces` definition**
+(`composite_gateway.py:32`) — the one nobody consumes. Measured shapes:
+`FallbackLLMGateway` and `LLMGateway` both expose `is_ready` as a property and
+both have `start`, so they satisfy the consumer-side protocol.
+`CompositeLLMGateway` has `is_ready` as a function, has **no `start`**, and takes
+`command` — so it satisfies the `interfaces` protocol and **fails the one every
+consumer is typed against**.
+
+*Severity: latent, not live — and the reason is the same one §9 records for the
+motor angular-velocity finding.* `orchestrator/llm_replanner.py:58` reads the
+property form (`if not self._gateway.is_ready:`). Handed a
+`CompositeLLMGateway`, that expression evaluates `not <bound method>`, which is
+**always `False`** — a gateway reported permanently ready, forever. `await
+gateway.start()` would raise `AttributeError`. Neither is reachable today:
+`CompositeLLMGateway` is constructed **only** at `factory/autonomous.py:151`,
+feeding `AutonomousOrchestrator`, which per
+`docs/architecture/ADR-016-autonomous-orchestrator-disposition.md` has zero
+production callers and uses no replanner at all (no `replanner` or `is_ready`
+reference in `orchestrator/autonomous.py`). So it reads as a live safety defect
+until every construction site is traced, and then it is a trap on the parked
+ADR-016 path.
+
+That trap is what makes WS-5 worth doing rather than tidying: an always-truthy
+readiness check is precisely the failure a duplicate Protocol name hides, and it
+sat in the tree behind two definitions that both type-check.
 
 **Change.** Rule: cross-subsystem Protocols live in `interfaces/protocols.py`;
 subsystem-internal Protocols live in `<package>/protocols.py` (settle on plural);
-none are declared in implementation modules. De-duplicate 5a and 5b to one
-definition each, keeping a re-export alias for one release. Add
+none are declared in implementation modules. De-duplicate 5a, 5b and 5d to one
+definition each, keeping a re-export alias for one release. For 5d, the surviving
+definition is the `llm_gateway/protocol.py` one (10 consumers, and the shape
+`LLMGateway`/`FallbackLLMGateway` already satisfy), which means
+`CompositeLLMGateway` has to grow `start()` and a property-form `is_ready`. Add
 `tests/unit/interfaces/`.
 
-**Gate.** A regression test asserting no Protocol *name* is defined twice
-across `src/mousedroid/**` — cheap, AST-based, and it pins the whole class of
-bug rather than these two instances.
+**Gate.** A regression test asserting no Protocol *name* is defined twice across
+`src/mousedroid/**` — cheap, AST-based, and it pins the class of bug rather than
+the individual instances.
+
+**Sequencing, because as specified this gate lands red.** The plan schedules the
+gate in Wave 2 and the de-duplication in Wave 3. An AST sweep at HEAD finds
+**two** exact duplicate Protocol names, not one: `PromptInjectionFilterProtocol`
+(`interfaces/protocols.py` vs `security/injection_filter.py`) **and**
+`LLMGatewayProtocol` (`interfaces/protocols.py` vs `llm_gateway/protocol.py`). A
+gate asserting zero duplicates therefore fails on the day it lands. Either land
+it **in the same commit as the WS-5a/5d cleanup**, or land it with an explicit
+dated baseline allowlist naming those two names and the date they were recorded —
+and then remove each entry as its duplicate is resolved. Do not land it bare.
+
+**And state what the gate cannot see**, so the de-duplication is not mistaken for
+complete when it goes green:
+
+- It does not see **WS-5b**: `LiDARProtocol` and `LidarProtocol` differ by case,
+  so they are two distinct names. Catching that needs a case-insensitive
+  comparison as a second assertion.
+- It does not see **signature divergence** between definitions that are *not*
+  name duplicates — the `sanitize(command:)` vs `sanitize(text:)` split in WS-5a
+  and the method/property plus `command`/`nl_command` splits in WS-5d are
+  invisible to a name sweep. Those are what `mypy --strict` would catch if both
+  definitions were ever annotated on the same call site, which is exactly what
+  the duplication prevents.
+- It does not see `GoalVector` (a `BaseModel`, WS-5c), which is fine, but is
+  worth recording so nobody reads the Protocol count as the whole
+  `interfaces/` surface.
 
 **Do not add `import-linter`.** Initial reading suggested the Factory-First DI
 invariant lacked mechanical enforcement. It does not:
@@ -893,8 +1115,8 @@ One **behavioural** item, not removable: `safety/three_laws.py:68`
 via the in-place `safe[:] = 0.0` at `:248` — but a redundant second channel that
 invites a future caller to trust it. Needs a documented decision.
 
-**WS-6c — 11 duplication clusters, ~430 LOC.** Two close invariant violations
-outright:
+**WS-6c — nine duplication clusters, ~430 LOC.** (This heading said 11; the table
+enumerates nine, and nine is the count.) Two close invariant violations outright:
 
 | Cluster | Sites | Shared home |
 |---|---|---|
@@ -1195,11 +1417,12 @@ against `src/`'s ratcheted 8; plus **98 `model_copy()` calls in `tests/` omit
 `jetson_settings` fixture — shallow copies share nested submodels, so the pattern
 is one nested mutation away from cross-test leakage.
 
-**Gate.** WS-2b's changed-lines gate remains the load-bearing one. Add: a
-branch-coverage floor (WS-7a), a `pragma: no cover` ratchet seeded at 92
-(WS-7e), `exclude_also` instead of `exclude_lines`, an `arm-extras` job or an
-honest omit (WS-7b), and a `CoverageWarning`-to-error setting so WS-7c cannot
-recur silently.
+**Gate.** With WS-2b superseded — the changed-lines gate stays local-only — the
+**branch-coverage floor (WS-7a)** is the load-bearing one, and it is the CI-side
+answer to the erosion WS-2b was proposed for. Add: that floor, a
+`pragma: no cover` ratchet seeded at 92 (WS-7e), `exclude_also` instead of
+`exclude_lines`, an `arm-extras` job or an honest omit (WS-7b), and a
+`CoverageWarning`-to-error setting so WS-7c cannot recur silently.
 
 **Effort:** M. **Risk:** low, except WS-7b — adding an `arm-extras` job means
 211 previously-unmeasured statements enter the reported set, which will move the
@@ -1333,21 +1556,39 @@ updates land together.
 
 ### WS-9 — Release and container hardening
 
-**WS-9a — The release path has never run, and the version records it.**
-`pyproject.toml:7` says `version = "0.3.0"`; `CHANGELOG.md:3208` records
-`## [v0.4.0] — 2026-05-16`. `src/mousedroid/__init__.py` derives `__version__`
-from installed distribution metadata, so the runtime — and any telemetry or
-build label carrying it — reports `0.3.0` for a post-0.4.0 tree.
+**WS-9a — Landed (except the tag). The release path has never run, and the
+version recorded it.**
 
-The cause is mechanical, not an oversight in judgement:
-`.github/workflows/release.yml:16-18` triggers **only** on
-`push: tags: v*.*.*`, and `git ls-remote --tags origin` returns **0 tags**. The
-release workflow has never fired, so nothing has ever forced the version bump.
+*The finding, as measured:* `pyproject.toml:7` said `version = "0.3.0"` while
+`CHANGELOG.md:3208` recorded `## [v0.4.0] — 2026-05-16`. Since
+`src/mousedroid/__init__.py` derives `__version__` from installed distribution
+metadata, the runtime — and every telemetry sample and build label carrying it —
+reported `0.3.0` for a post-0.4.0 tree. The cause was mechanical rather than an
+oversight in judgement: `.github/workflows/release.yml:16-18` triggers **only** on
+`push: tags: v*.*.*`, and `git ls-remote --tags origin` returns **0 tags**, so
+the release workflow has never fired and nothing ever forced the bump.
+`tests/unit/test_package_version.py` tested only the
+`PackageNotFoundError → "0+unknown"` fallback.
 
-`tests/unit/test_package_version.py` tests only the
-`PackageNotFoundError → "0+unknown"` fallback; nothing asserts
-pyproject ↔ CHANGELOG agreement. The pattern to copy already exists:
-`tests/regression/test_ruff_version_single_source.py`.
+*What landed.* `pyproject.toml` is now `0.4.0`, matching the newest CHANGELOG
+heading, and `tests/regression/test_package_version_single_source.py` pins it —
+going further than this plan proposed. It asserts pyproject against the newest
+changelog heading **and** against `CITATION.cff`, `HARNESS_SPEC.md`, and the
+`LABEL version` literal in each of the three Dockerfiles. That widening was not
+optional: all three Dockerfiles and `CITATION.cff` were still on `0.3.0`, so a
+pyproject↔CHANGELOG-only test — the one this plan specified — would have gone
+green over four stale restatements. Two parsing decisions are load-bearing and
+documented in the test: the newest release is the **first** heading in the
+reverse-chronological file (a `max()` would pin the legacy `0.12.0` tail), and
+the `v` prefix is optional because the changelog is inconsistent about it.
+
+*Residual action: the tag itself*, deferred to maintainer approval along with
+every other repo-administration step (§0). **The ordering point stands and still
+matters:** `release.yml`'s `build` job compares the pushed tag against
+`pyproject.toml` and fails the build when they differ, so the version bump has to
+*precede* the tag. It now does, which makes tagging `v0.4.0` a one-command action
+whenever it is wanted — and the first thing that will ever have executed that
+comparison.
 
 **WS-9b — Containers run as root.** Neither `Dockerfile.jetson` nor
 `Dockerfile.dev` has a `USER` directive. The Jetson image needs device access
@@ -1451,31 +1692,42 @@ blocked until slack exists. Two free reductions:
    Wave 5: with 0 remote tags, 39 feature pins rest on surviving branches, and
    creating the tags is cheap, non-destructive, and blocks nothing. The rename
    and the branch prune stay in Wave 5.
-4. **WS-2g(2)** — add `--strict` to `ratchet_budgets` in `ci.yml:403` and
-   `scripts/ci.sh:75`. One word; it is currently WARNing on all three budgets
-   and exiting 0, so the early-warning step cannot warn. Do this **in Wave 0's
-   commit**, right after the headroom is bought.
+4. **WS-2g(2) — landed, and not as one word.** `--strict` is wired in
+   `ci.yml:428`, `scripts/ci.sh:75` and `Makefile:144`, gated on a ceiling
+   **breach** rather than on any warning. The one-word form this plan proposed
+   would have been permanently red, because all three budgets sit at ceiling and
+   therefore above their warn thresholds. See §0 correction 1.
 5. **WS-2j** — decide the two red dependabot PRs: move all four `ruff` literals
    together (#223), decline the `mcp` bump (#218). Both are one decision each and
    they are the only red CI in practice.
 6. **WS-6a** — delete the dangling `__all__` (8 lines, verified `AttributeError`).
 7. **WS-8b** — widen `doc_hygiene.py`'s file list (one config change, 5 findings).
-8. **WS-9a** — align `release.yml`'s extras with `ci.yml` **first** (WS-2k), then
-   tag `v0.4.0` so it fires once, then add the pyproject ↔ CHANGELOG version
-   test. Tagging before aligning means the first-ever release build fails on an
-   extras mismatch rather than on anything real.
+8. **WS-9a — landed except the tag.** `release.yml`'s extras are aligned with
+   `ci.yml` (WS-2k), `pyproject.toml` is `0.4.0`, and the version test pins it
+   against the changelog heading plus five further restatements. Only tagging
+   `v0.4.0` remains, deferred to maintainer approval (§0). The ordering still
+   holds: align before tagging, and bump before tagging, or the first-ever release
+   build fails on an extras mismatch or a version mismatch rather than on
+   anything real.
 9. **WS-2i** — the two `redundant-cast` fixes at `mlflow_logger.py:105,122`, plus
    a mypy step in `mlflow-extras`. Small, and it unblocks any contributor
    working on `.[dev,mlflow]`.
 
 ### Wave 2 — Make the gates real
 
-10. **WS-2b** — changed-lines coverage gate into the `test` job.
-11. **WS-2a** — `uv.lock` + `uv lock --check`. This also retires the four-way
-    `ruff` pin duplication that made #223 red.
-12. **WS-2h(2)** — make `make test` run all five of the `test` job's pytest
-    steps, or rename it and correct `CLAUDE.md`. Until this lands, a green local
-    run is not evidence, which undercuts every other gate in this wave.
+10. **WS-2b — superseded; nothing to do.** The changed-lines gate stays
+    local-only, and the decision is pinned as a `_CI_EXEMPT_GATES` entry in
+    `tests/regression/test_ci_gate_wiring_aqa.py`. WS-7a's branch-coverage floor
+    carries the coverage-erosion concern instead.
+11. **WS-2a** — `uv.lock` + `uv lock --check`, **and** switching the 18
+    `pip install -e` invocations to a locked form (`uv sync --frozen` or an
+    exported constraints file). The lockfile alone changes nothing about what CI
+    installs — see WS-2a's limitation. This also retires the four-way `ruff` pin
+    duplication that made #223 red.
+12. **WS-2h(2) — landed.** `make test` now runs all **four** of the `test` job's
+    pytest steps (`test-cov regression smoke behaviour`), so a green local run is
+    evidence again. This plan said five steps; the fifth is an artifact upload.
+    See §0.
 13. **WS-2h(1)** — `validate.py` → `sys.executable`, so `make gates` works on a
     fresh venv checkout.
 14. **WS-9e, trunk half** — establish `main` (current default kept as an alias
@@ -1510,7 +1762,13 @@ blocked until slack exists. Two free reductions:
     the current state is silently both ways. Also omit
     `telemetry/server/_protocol.py` (typing-only, 113 units of zero-risk
     denominator).
-23. **WS-5** duplicate-Protocol-name regression test.
+23. **WS-5** duplicate-Protocol-name regression test — **but it cannot land bare
+    here.** Two exact duplicates exist at HEAD
+    (`PromptInjectionFilterProtocol`, `LLMGatewayProtocol`), so landing the gate
+    in this wave while the de-duplication sits in Wave 3 makes it red by
+    construction. Either co-commit it with the WS-5a/5d cleanup (moving that much
+    of Wave 3 forward), or land it with an explicit dated baseline naming those
+    two. This is the one place the "gate before cleanup" rule below has to bend.
 24. **WS-8e** — doc link/path-resolution gate.
 
 Wave 2 before Wave 3 deliberately: a gate landed after its cleanup only
@@ -1522,10 +1780,12 @@ documents the cleanup; landed before, it holds the line.
     fields; kill the 9 `getattr` bypasses. Each with a paired AQA +
     backwards-compat test.
 26. **WS-6c** — sysfs + retry consolidation first (closes the two invariant
-    violations); then the remaining 9 clusters.
+    violations); then the remaining **7** of the nine clusters.
 27. **WS-6b** — wire-or-remove decisions on `_skill_delegator`, `dla_enabled`,
     `bc_batch_size`, and `action_override`.
-28. **WS-5a/5b/5c** — de-duplicate the Protocols; add `tests/unit/interfaces/`.
+28. **WS-5a–5d** — de-duplicate the Protocols (including `LLMGatewayProtocol`,
+    WS-5d, which the Wave-2 gate forces forward if it is co-committed); add
+    `tests/unit/interfaces/`.
 29. **WS-6d/6e/6f** — dependency hygiene, 2 orphan scripts, facade tidy-up.
 
 ### Wave 4 — Structure
@@ -1536,7 +1796,10 @@ documents the cleanup; landed before, it holds the line.
 31. **WS-8a/8c/8d/8f** — root-file moves, grab-bag dissolution + narrowed
     `_SHARED_KERNEL_PREFIXES`, one per-directory doc format, `openspec` archive.
 32. **WS-9b/9c/9d** — container hardening.
-33. **WS-2d** — extras-job consolidation.
+33. **WS-2d** — extras-job consolidation, **only** once promotion metadata is
+    keyed by job *and* matrix leg, or once `onnx-world-model-extras` and
+    `mlflow-extras` are both blocking. Collapsing them first destroys their
+    separate promotion clocks and can drop the job out of the tracker silently.
 
 ### Wave 5 — Branch pruning (destructive, last)
 
@@ -1556,24 +1819,32 @@ blocked by the `freeze_gate.py` PreToolUse hook while F-008 is not `done`:
 
 ## 5. New gates, consolidated
 
-The durable output of this plan. Nine gates; five extend something that already
-exists.
+The durable output of this plan. Seventeen rows, and only **two** create a new
+surface: `uv lock --check` is the single new CI *step*, and the
+duplicate-Protocol-name check is a new regression *test file* (collected by the
+existing `test` job, so it adds no job and no step). The other **fifteen** land
+inside a job, config file, or invocation that already exists — which is what makes
+this list cheap to adopt and is the reason it is sequenced as gates-first.
+
+(An earlier draft of this line said "five extend something that already exists",
+which was wrong in both magnitude and direction: fifteen extend existing surfaces,
+not five. Counted row by row against the table below.)
 
 | Gate | Prevents | Where |
 |---|---|---|
 | `S101` blocking on `src/` | `assert` stripped under `PYTHONOPTIMIZE=1` | `pyproject.toml` (existing `lint` job) |
 | `uv lock --check` | Non-reproducible CI resolution | new step |
-| Changed-lines branch coverage ≥90% | New uncovered code | existing `test` job, 3.11 leg |
-| `ratchet_budgets --strict` | A WARN-only early-warning step | `ci.yml:403`, `scripts/ci.sh:75` — **one word** |
+| ~~Changed-lines branch coverage ≥90%~~ — **superseded** (WS-2b) | New uncovered code | Stays local-only (`scripts/ci.sh:178`, `make branch-coverage`); the CI-side answer is the branch-coverage floor below |
+| `ratchet_budgets --strict`, on ceiling **breach** only — **landed** | A WARN-only early-warning step | `ci.yml:428`, `scripts/ci.sh:75`, `Makefile:144` — a severity split, **not** the one word this plan claimed (§0 correction 1) |
 | Branch-coverage floor (seed 84.6%) | A blended 92% hiding a branch 84.6% | `pyproject.toml` |
 | `CoverageWarning` → error | A lost optional import silently deleting 214 statements | `pyproject.toml` |
 | `exclude_also` instead of `exclude_lines` | Silently dropping future coverage.py defaults | `pyproject.toml` |
 | `pragma: no cover` ratchet (seed 92) | The one suppression marker with no ceiling | `.claude/workforce.yaml` |
 | Constructor-arity + class-size ratchets | God-constructor regrowth | `.claude/workforce.yaml` |
 | C901 max-complexity 15 → 12 | Complexity creep at the ceiling | `pyproject.toml` |
-| Duplicate-Protocol-name check | A third `PromptInjectionFilterProtocol` | new regression test |
+| Duplicate-Protocol-name check | A third `PromptInjectionFilterProtocol` | New regression test — **two** duplicates exist at HEAD, so it must be co-committed with the WS-5a/5d cleanup or carry a dated baseline; a name sweep does not see WS-5b's case pair or any signature divergence |
 | `mypy --strict` step in `mlflow-extras` | Type errors only an extra can reveal | existing advisory job |
-| `make test` ≡ the `test` job's 5 steps | A green local run that means nothing | `Makefile` |
+| `make test` ≡ the `test` job's **4** pytest steps — **landed** | A green local run that means nothing | `Makefile` (`test: test-cov regression smoke behaviour`) |
 | Markdown link/path resolution | Doc rot after a reorg | generalise `tools/validate_skill_commands.py` |
 | `doc_hygiene.py` over all root docs | Unbounded doc growth | widen existing invocation |
 | `persist-credentials: false` | `GITHUB_TOKEN` in third-party container contexts | 15 remaining checkouts |
@@ -1581,9 +1852,10 @@ exists.
 
 Plus: extend `test_constants_schema_parity_aqa.py::_MIRRORED_PAIRS`; add a
 `GatewayConfig`↔`LLMConfig` parity test; extend
-`test_facade_completeness.py` to the private re-export count; add a
-pyproject↔CHANGELOG version test; populate the empty Pydantic-validator section
-of `scripts/vulture_allowlist.py:47-51`.
+`test_facade_completeness.py` to the private re-export count; ~~add a
+pyproject↔CHANGELOG version test~~ **(landed, and wider than proposed — WS-9a)**;
+populate the empty Pydantic-validator section of
+`scripts/vulture_allowlist.py:47-51`.
 
 ---
 
@@ -1618,8 +1890,12 @@ Recorded so these do not absorb effort later.
   `config-compat.yml` and `jetson-nightly.yml` all have `concurrency` +
   `cancel-in-progress`; every action is SHA-pinned and both `docker://` images
   are exact-tagged; top-level `permissions: contents: read` is correct and no job
-  writes. The job count is exactly 17 and the advisory count exactly 6, so
-  `CLAUDE.md` is accurate. The CI problems in WS-2 are about *reproducibility and
+  writes. The job count is exactly 17, and `ci.yml` now carries **5**
+  `continue-on-error: true` jobs — `security` was promoted to blocking (§0) —
+  which is what root `CLAUDE.md` says, so `CLAUDE.md` is accurate. *This passage
+  asserted 6 and cited that as the proof of accuracy; 6 was the figure at this
+  document's baseline and is now stale, so the count has to be re-read rather than
+  quoted from here.* The CI problems in WS-2 are about *reproducibility and
   vacuity*, not layout — do not rewrite the workflow.
 - **`orchestrator.py`'s `weight_update_poller` parameter** — reads as dead (no
   mixin touches it) and is in fact a documented one-minor-version
@@ -1678,15 +1954,18 @@ Recorded so these do not absorb effort later.
 |---|---|---|---|
 | 0 | Ratchet headroom + `--strict` | XS | Unblocks everything; makes the early warning warn |
 | 1 | WS-1, 2c, 2g(2), 2i, 2j, 6a, 8b, 9a, 9e (tags) | S | Production correctness hole; 2 dated deadlines; pin protection; the 2 red PRs |
-| 2 | WS-2a, 2b, 2e–2h, 2k, 3a, 5-gate, 7a–7g, 8e, 9e (trunk) | M–L | Makes every later wave self-enforcing; restores post-merge CI; makes the coverage number mean one thing |
-| 3 | WS-3b–3g, 5a–5c, 6b–6f | L | ~850 LOC; 3 config roots → 1 |
+| 2 | WS-2a, 2e–2h, 2k, 3a, 5-gate, 7a–7g, 8e, 9e (trunk) — **2b superseded** | M–L | Makes every later wave self-enforcing; restores post-merge CI; makes the coverage number mean one thing |
+| 3 | WS-3b–3g, 5a–5d, 6b–6f | L | ~850 LOC; 3 config roots → 1 |
 | 4 | WS-4, 8a, 8c, 8d, 8f, 9b–9d | L | 45 ctor params → 14; enterprise layout |
 | 5 | WS-9e (prune) | S | 90 branches → curated set |
 
 **Waves 0–1 are worth doing regardless of appetite for the rest.** They are
 small, they retire the only finding that behaves differently on the rover than in
-CI, they hit two calendar deadlines this week, they clear the two red dependabot
-PRs, and `ratchet_budgets --strict` is literally one word.
+CI, they hit two calendar deadlines this week, and they clear the two red
+dependabot PRs. They are *not* uniformly trivial, which is the one thing this
+paragraph originally got wrong: it called `ratchet_budgets --strict` "literally
+one word", and wiring it needed a severity split because the one-word form would
+have been permanently red (§0 correction 1).
 
 **Wave 2 is where the plan earns its keep, and it is the one to argue about.**
 It is the largest wave and it does no cleanup at all — it restores post-merge CI,
@@ -1694,8 +1973,9 @@ makes a green local run mean something, pins the dependency tree, makes the
 coverage number mean one thing rather than two, and converts a dozen aspirations
 into gates. Everything in Waves 3–5 is ordinary work once Wave 2 lands and mostly
 wasted effort before it: cleanup under a gate that cannot hold the line
-regresses, cleanup validated by a `make test` that skips four of five CI steps is
-not validated, and a coverage delta measured against a number that moved 89
+regresses, cleanup validated by a `make test` that skipped three of the blocking
+job's four pytest steps was not validated (that one is closed — §0), and a
+coverage delta measured against a number that moved 89
 percentage points on one module between two runs of the same commit is not a
 measurement.
 
@@ -1707,8 +1987,11 @@ If appetite is limited, the correct cut is Waves 3–5, not Wave 2.
 
 Six audits ran in parallel — config, security, dead code, tests, CI, docs — each
 required to cite `file:line` and to report the commands it ran. Their claims
-were then re-verified independently before landing here. Two did not survive,
-and are recorded because the same traps will catch the next reader:
+were then re-verified independently before landing here. **Three** claims did not
+survive — **two of them audit findings (1 and 2), the third this plan's own first
+draft (3)**, which is a distinction worth keeping rather than folding into one
+count. This section originally said "two", counting only the audit failures. All
+three are recorded because the same traps will catch the next reader:
 
 1. **`telemetry/metrics_registry.py` was reported as a zero-caller orphan
    recommended for deletion.** It is not. `PrometheusMetricsRegistry` is built
