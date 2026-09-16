@@ -14,7 +14,11 @@ FROM python:3.11-slim
 
 LABEL maintainer="Ian Cruickshank"
 LABEL description="MouseDroid -- CPU-only dev/CI image (no Jetson hardware)"
-LABEL version="0.3.0"
+# Mirrors [project] version in pyproject.toml (0.4.0). Nothing pins the two
+# together, so this literal silently went stale at the 0.3.0 -> 0.4.0 bump;
+# three other sites carry the same number (Dockerfile.jetson,
+# docker/Dockerfile.cloud, CITATION.cff) and all four must move as one.
+LABEL version="0.4.0"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV MOUSEDROID_MOCK_HARDWARE=true

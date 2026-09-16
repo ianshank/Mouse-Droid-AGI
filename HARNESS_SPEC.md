@@ -20,7 +20,7 @@ game.
 project:
   name: "MouseDroid"
   slug: "mousedroid"
-  version: "0.3.0"
+  version: "0.4.0"
   status: "active"          # planning | active | validated | archived
   owner: "Ian Cruickshank"
   harness_version: "2.1"

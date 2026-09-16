@@ -30,9 +30,10 @@ Secret hygiene and dependency posture are checked in CI:
 - **Secret scanning** — `.gitleaks.toml` + [`docs/runbooks/secret-scanning.md`](docs/runbooks/secret-scanning.md)
   (the `gitleaks` job — **blocking** since 2026-08-07, promoted from advisory after its green-run window)
 - **Dependency audit** — the `security` job (`pip-audit --skip-editable`) in
-  `.github/workflows/ci.yml` — currently **advisory** via `continue-on-error`
-  pending triage of open findings; a real vulnerability turns the job red
-  without blocking the merge
+  `.github/workflows/ci.yml` — **blocking** since 2026-09-16, promoted from
+  advisory after `pip-audit --skip-editable` reported zero vulnerabilities
+  across the resolved `[dev,telemetry,mcp]` set; a real vulnerability now
+  blocks the merge
 - **Advisory-stage tracking** — `.github/advisory_stages.yaml` (each advisory
   job carries a promotion clock enforced by `scripts/check_advisory_promotions.py`)
 

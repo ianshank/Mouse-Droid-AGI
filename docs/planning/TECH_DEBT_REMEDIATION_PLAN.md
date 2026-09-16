@@ -480,8 +480,9 @@ the price of getting signal from a red-lint run.
 
 **One item needs a human, not a plan.** `GET /branches/.../protection` returns
 `403 Resource not accessible by integration`, so **which checks are required at
-merge could not be determined**. With 6 advisory jobs, 5 vacuous-green paths and
-no trunk CI, it is worth confirming directly that "green" is actually enforced.
+merge could not be determined**. With 6 advisory jobs at this document's baseline
+(5 since WS-2c promoted `security` — see §0), 5 vacuous-green paths and no trunk
+CI, it is worth confirming directly that "green" is actually enforced.
 
 ---
 

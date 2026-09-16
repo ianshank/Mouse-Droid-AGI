@@ -15,7 +15,9 @@ FROM dustynv/l4t-pytorch:r36.4.0
 
 LABEL maintainer="Ian Cruickshank"
 LABEL description="MouseDroid — GPU-accelerated runtime on Jetson Orin Nano"
-LABEL version="0.3.0"
+# Mirrors [project] version in pyproject.toml (0.4.0) — see the note in
+# Dockerfile.dev: four sites carry this literal and all four must move as one.
+LABEL version="0.4.0"
 
 ENV DEBIAN_FRONTEND=noninteractive
 

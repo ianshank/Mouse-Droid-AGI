@@ -13,6 +13,10 @@
 .claude/settings.local.json
 
 # Agentic shared assets (skills/agents) are tracked; session/state is ignored.
+# Every other agent workspace is ignored wholesale HERE and nowhere else: each
+# of .gemini/ and .serena/ was listed twice, once here and once again ~200 lines
+# down under its own heading. Duplicate entries are not harmless — a future edit
+# that "removes" one is silently overridden by the copy it did not see.
 .agents/*
 !.agents/skills/
 !.agents/agents/
@@ -191,9 +195,16 @@ var/
 # Local run artifacts moved out of repo root
 reports/local_runs/
 
-# Temporary deploy/build scripts
-/tmp/jetson_*.py
-/tmp/install_*.py
+# Scratch directory at the repo root, if a tool ever materialises one.
+#
+# This replaces five patterns that could never fire: /tmp/jetson_*.py,
+# /tmp/install_*.py, /tmp/mousedroid_heartbeat, /tmp/wave_rover_* and
+# /tmp/*.html were written for the SYSTEM /tmp, but a leading slash in
+# .gitignore anchors to the REPOSITORY root, so they only ever described
+# <repo>/tmp/. git cannot ignore paths outside the worktree at all — nothing
+# under the system /tmp is ever a candidate for staging, so those entries were
+# inert rather than protective. Keep the one case the syntax can express.
+/tmp/
 
 # Host-specific Docker Compose overrides (generated when device nodes
 # are transiently missing; do not commit — regenerate per host).
@@ -208,8 +219,8 @@ docker-compose.override.yaml
 .cache/huggingface/
 huggingface_cache/
 
-# Gemini / Antigravity agent artefacts
-.gemini/
+# Gemini / Antigravity agent artefacts: see the agent-workspace block at the
+# top of this file — .gemini/ is ignored there, once.
 
 # Pip cache
 pip-wheel-metadata/
@@ -231,11 +242,12 @@ display_captures/
 # Worktree branches (auto-managed by Claude Code)
 .claude/worktrees/
 
-# Serena agent workspace
-.serena/
+# Serena agent workspace: see the agent-workspace block at the top of this file
+# — .serena/ is ignored there, once.
 
-# Heartbeat / watchdog files (runtime artefacts)
-/tmp/mousedroid_heartbeat
+# Heartbeat / watchdog files: the default heartbeat path is under the system
+# /tmp, which git cannot ignore (see the /tmp/ entry above for why). Nothing to
+# list here; a repo-relative heartbeat path would need its own entry.
 
 # Pre-flight validation output
 preflight_results.txt
@@ -308,10 +320,10 @@ snap-*.jpg
 *.bak
 *.bak.*
 
-# Web-research scratch fetches (firecrawl/curl output cached under /tmp/ during
-# external-doc lookups — see the Wave Rover platform reference memory).
-/tmp/wave_rover_*
-/tmp/*.html
+# Web-research scratch fetches (firecrawl/curl output cached under the system
+# /tmp during external-doc lookups — see the Wave Rover platform reference
+# memory). Covered by the /tmp/ entry above for the repo-relative case; the
+# system /tmp is outside the worktree and cannot be ignored.
 
 # config-compat gate worktree scratch. scripts/check_config_compat.py materialises
 # the deployed-image SHA into a temporary git worktree via tempfile.mkdtemp

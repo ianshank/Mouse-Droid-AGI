@@ -128,12 +128,12 @@ reward = (
 ```
 
 > **Status: IMPLEMENTED in Tier C4.** The
-> [`RoverRewardConfig`](../../src/mousedroid/config/schema.py)
+> [`RoverRewardConfig`](../../src/mousedroid/config/schema/sim.py)
 > Pydantic block ships alongside the `build/reset/step` body. The
 > field path is
-> [`cfg.rover.reward.forward_velocity_weight`](../../src/mousedroid/config/schema.py)
+> [`cfg.rover.reward.forward_velocity_weight`](../../src/mousedroid/config/schema/sim.py)
 > and
-> [`cfg.rover.reward.collision_weight`](../../src/mousedroid/config/schema.py)
+> [`cfg.rover.reward.collision_weight`](../../src/mousedroid/config/schema/sim.py)
 > as documented below.
 
 Implemented defaults (Tier C4):
@@ -189,7 +189,7 @@ closes out the remaining sub-tasks.
 | `RoverIsaacLabEnv.build()` — scene + articulation + sensors | ✅ Tier C4 | `src/mousedroid/sim/isaaclab/rover_env.py` |
 | `RoverIsaacLabEnv.reset()` — domain randomization integration | ✅ Tier C4 | `src/mousedroid/sim/isaaclab/rover_env.py` |
 | `RoverIsaacLabEnv.step()` — action fan-out + reward + obs | ✅ Tier C4 | `src/mousedroid/sim/isaaclab/rover_env.py` |
-| `RoverRewardConfig` Pydantic block (defaults documented above) | ✅ Tier C4 | `src/mousedroid/config/schema.py` |
+| `RoverRewardConfig` Pydantic block (defaults documented above) | ✅ Tier C4 | `src/mousedroid/config/schema/sim.py` |
 | 9 unit tests under `pytest.importorskip("isaaclab")` | ✅ Tier C4 | `tests/unit/sim/isaaclab/test_rover_env.py` |
 | 50-step random-rollout liveness smoke check | ✅ Tier C4 (test 9/9) | `tests/unit/sim/isaaclab/test_rover_env.py::test_random_rollout_produces_finite_observations` |
 

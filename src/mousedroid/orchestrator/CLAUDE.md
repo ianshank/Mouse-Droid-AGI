@@ -39,8 +39,14 @@
   callers**, deliberately parked off the production path per
   `docs/architecture/ADR-016-autonomous-orchestrator-disposition.md`; do not confuse it
   with the production path above.
-- `mission_dispatcher.py`, `mission_lifecycle.py`, `llm_replanner.py`, `face_controller.py` —
-  supporting collaborators, not the loop itself.
+- `mission_lifecycle.py::MissionLifecycle` — the mission state machine. `_require_mission` is
+  the single narrowing guard behind its four lifecycle methods (`_transition`,
+  `_handle_stall`, `_transition_to_failed`, `_record_terminal_duration`); it raises
+  `MissionLifecycleStateError` (a `RuntimeError` subclass, so existing handlers still catch)
+  and is deliberately **not** an `assert` — `PYTHONOPTIMIZE=1` strips asserts on the rover,
+  so an assert guard on the mission path does not exist in the shipped image.
+- `mission_dispatcher.py`, `llm_replanner.py`, `face_controller.py` — supporting
+  collaborators, not the loop itself.
 - `factory/orchestrator.py::build_orchestrator` — factory builder wiring `MouseDroidOrchestrator`.
 - `../safety/monitor.py::MouseDroidSafetyMonitor` — the concrete safety monitor
   (`SafetyMonitorProtocol` is the interface application code is typed against).

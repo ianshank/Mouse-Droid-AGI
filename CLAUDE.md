@@ -104,6 +104,8 @@ bash scripts/ci.sh      # Authoritative local CI superset
 - **Hardcoded Values**: Never hardcode ports, pins, paths, or thresholds — use Pydantic schema config.
 - **Leaked Secrets**: Never put credentials in code or YAML defaults; use `SecretStr` and environment vars.
 - **Blocking Syscalls**: Never call blocking I/O in async routines — use `asyncio.to_thread`.
-- **`assert` under Optimization**: Never use `assert` in runtime code paths running under `PYTHONOPTIMIZE=1`.
+- **`assert` in `src/`**: Never use `assert` in `src/` — ruff `S101` is blocking there
+  (`tests/**` exempt); `PYTHONOPTIMIZE=1` in `Dockerfile.jetson` strips asserts, so a guard
+  becomes no guard on the rover. Raise a named exception instead.
 - **Untracked `.claude/` Assets**: New shared workforce files must have `.gitignore` negation (`!.claude/<path>`).
 - **Sysfs File Encoding**: Always open sysfs files with `encoding="utf-8", errors="replace"`.

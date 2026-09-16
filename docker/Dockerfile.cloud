@@ -30,7 +30,9 @@ FROM pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime
 
 LABEL maintainer="Ian Cruickshank"
 LABEL description="MouseDroid cloud training — Vertex AI offline RL (HF Hub upload deferred to follow-up PR)"
-LABEL version="0.3.0"
+# Mirrors [project] version in pyproject.toml (0.4.0) — see the note in
+# Dockerfile.dev: four sites carry this literal and all four must move as one.
+LABEL version="0.4.0"
 LABEL tier="C1"
 
 ENV DEBIAN_FRONTEND=noninteractive \

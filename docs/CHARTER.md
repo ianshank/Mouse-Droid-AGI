@@ -154,7 +154,7 @@ stay green. The authoritative pipeline is `.github/workflows/ci.yml` — count t
 rather than trusting an enumeration here (the load-bearing chain is actionlint →
 lint → typecheck → test+coverage+regression+e2e+smoke → docker, plus config
 gates, extras matrices, `local-gates`, and advisory stages tracked in
-`.github/advisory_stages.yaml` — `security` and `performance` among them), across
+`.github/advisory_stages.yaml` — `performance` among them), across
 Python 3.10 / 3.11 / 3.12; lint covers `src/ tests/ tools/ scripts/`. Developer
 tooling under `tools/claude_hooks/` carries its own `mypy --strict` and coverage
 gates (in `scripts/ci.sh` and the `local-gates` CI job), because the repo-wide

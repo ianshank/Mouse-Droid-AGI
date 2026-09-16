@@ -22,6 +22,8 @@ ADRs record significant, hard-to-reverse decisions. They are immutable once acce
 | [014](ADR-014-cyclomatic-complexity-gate.md) | Cyclomatic-Complexity Gate + Enterprise-Hardening Refactor | Accepted | 2026-07-05 | Code quality / CI |
 | [015](ADR-015-bounded-context-latent-memory.md) | Bounded-Context Latent Memory + Corrupted-History Drift Training | Accepted | 2026-07-23 | World model / memory |
 | [016](ADR-016-autonomous-orchestrator-disposition.md) | AutonomousOrchestrator Disposition | Accepted | 2026-08-23 | Orchestrator / architecture |
+| [017](ADR-017-god-files-decomposition.md) | God-Files Decomposition | Accepted | 2026-08-30 | Code structure / packaging |
+| [018](ADR-018-gate-severity-and-advisory-promotion.md) | Gate Severity Split + Advisory-Promotion Bar | Accepted | 2026-09-16 | CI / governance |
 | [l4t-container](ADR-l4t-container.md) | L4T Container Deployment for MouseDroid | Proposed | 2026-03-11 | Deployment |
 
 ¹ ADR-004 carries no explicit Status field in its source (predates the template); treated as Accepted — it is

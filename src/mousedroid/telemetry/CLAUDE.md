@@ -26,4 +26,5 @@
   format renderer (`registry.py`, `primitives.py`, plus one
   `_registry_<area>.py` mixin per metric family — split from a monolithic
   `metrics.py` per the same ADR).
-- `tests/unit/telemetry/` & `tests/e2e/test_telemetry_server.py` — Test suites.
+- `tests/unit/telemetry/` — test suites (incl. `test_telemetry_server.py`,
+  `test_prometheus_alerts_yml.py`).

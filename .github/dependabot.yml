@@ -8,12 +8,40 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    # Conventional-commit prefix, matching this repo's own history
+    # (`fix(ci): …`, `feat(quality): …`). Dependabot's default subject has no
+    # type, so bot commits were the only ones in the log that did not parse.
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      # A patch/minor action bump is the routine SHA refresh this entry exists
+      # for, and reviewing five of them separately is the whole noise problem.
+      # Majors deliberately stay OUT of the group and get a PR each: a major is
+      # exactly the case where one bump that breaks CI must not also block the
+      # safe ones behind it.
+      github-actions-minor:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
+  # What this entry can and cannot do, because it is easy to over-read:
+  # pyproject.toml declares almost every dependency with an OPEN `>=` bound and
+  # there is no lockfile, so a new release already satisfies the constraint and
+  # dependabot has nothing to change. In practice it acts on exactly two shapes:
+  # an EXACT pin (`ruff==`, `mypy==`) and an UPPER bound that blocks a new
+  # release (`mcp<2`) — plus security advisories. Treating a quiet week here as
+  # "dependencies are current" would be wrong; a lockfile is what would give
+  # this entry teeth (TECH_DEBT_REMEDIATION_PLAN.md WS-2a).
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
     ignore:
       # mcp 2.0 is a breaking major this codebase has not migrated to yet —
       # see the pin-rationale comment on the `mcp` extra in pyproject.toml.
@@ -21,6 +49,22 @@ updates:
       # CI (tests/unit/mcp/test_transport.py, Tool.inputSchema renamed to
       # input_schema on mcp>=2.0). Lifting this bound is a deliberate
       # migration, not a routine bump — remove this ignore rule when that
-      # migration lands.
+      # migration lands. This rule stops the NEXT such PR; PR #218 predates it
+      # and has to be closed by hand.
       - dependency-name: "mcp"
         update-types: ["version-update:semver-major"]
+    # NOT ignored, deliberately, though a ruff bump lands red today (PR #223):
+    # `ruff==0.16.2` is restated as a standalone literal in three workflow `run:`
+    # steps (ci.yml lint, ci.yml test-windows, release.yml lint) as well as the
+    # `dev` extra, and no dependabot ecosystem can edit a `run:` step — so its
+    # one-file PR always trips tests/regression/test_ruff_version_single_source.py.
+    # An `ignore` rule here would silence the symptom and leave the linter pin to
+    # age unwatched; the fix is to move all four literals in one commit, and the
+    # fix that RETIRES the problem is to stop restating the pin in the workflows
+    # (install the `dev` extra, or read the version out of pyproject.toml).
+    #
+    # `mypy==2.3.1` needs no such note: it is pinned in pyproject.toml ONLY and
+    # every workflow installs it through the dev extra, so a mypy bump is a
+    # single-file change dependabot can land correctly. There is no four-literal
+    # coupling to group it with — grouping bundles PRs, not files, and could not
+    # have fixed #223 either way.

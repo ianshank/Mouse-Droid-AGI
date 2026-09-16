@@ -116,7 +116,7 @@ exists to prevent. An explicit non-default pin still wins.
 
 | Tier | File |
 |---|---|
-| Unit | `tests/unit/test_comms_utils.py`, `tests/unit/test_base_driver.py` |
+| Unit | `tests/unit/comms/test_comms_utils.py`, `tests/unit/comms/test_base_driver.py` |
 | Integration | `tests/integration/test_f025_integration.py` |
 | Regression | `tests/regression/test_f025_backwards_compat.py` |
 | AQA | `tests/regression/test_f025_aqa.py` |
