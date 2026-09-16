@@ -30,7 +30,7 @@ are already right:
 | Factory-First DI (invariant 1) | **Enforced in CI** by `scripts/check_subsystem_boundaries.py`, whole-tree, no diff carve-out |
 | Root `CLAUDE.md` accuracy | **0 drifted claims** — 17-job CI list, Surface Map (14/14 links), Makefile targets all verified |
 | `features.yaml` governance | **Clean** — 39/39 `done` entries carry a resolvable `implemented_in` + `validation_command` |
-| Test-tier mirror discipline | **41 of 42** packages have a `tests/unit/<pkg>/` mirror |
+| Test-tier mirror discipline | **40 of 41** packages have a `tests/unit/<pkg>/` mirror (only `interfaces/` lacks one) |
 
 So this plan is not a rescue. It targets six specific weaknesses:
 
@@ -65,7 +65,7 @@ Recorded so later waves can be judged against it rather than against impressions
 
 | Dimension | Value | Source |
 |---|---|---|
-| `src/` Python | 73,759 LOC / 41 packages | `find src -name '*.py' \| wc -l` |
+| `src/` Python | 73,759 LOC / 41 top-level packages | `find src -name '*.py'` + per-package `wc -l` |
 | `tests/` Python | 128,080 LOC / 728 test files across 11 tiers | per-tier `find` |
 | Test:source ratio | 1.74:1 | derived |
 | Largest `src` file | `sim/isaaclab/rover_env.py` — 804 LOC | `wc -l` sorted |
@@ -594,11 +594,18 @@ outright:
 | `mock_hardware` short-circuit ×6 | `validation/preflight.py:210-379` | decorator |
 | `".pt"` slot suffix ×3 | `growth/`, `learning/on_device/`, `factory/` | `constants.py` |
 
-The sysfs cluster closes a **CLAUDE.md Red Flag**: `efficiency/profiler.py:70`
-uses bare `open(path)` and `training/gpu_monitor.py:104` uses `read_text()` —
-both **without `encoding="utf-8", errors="replace"`**. Only
-`health/monitor.py:101` gets it right. The retry cluster closes two hardcoded
-values (`weight_update_poller.py:391` `backoff_s = 2.0**attempt`;
+The sysfs cluster closes a **CLAUDE.md Red Flag**. Two of the three readers omit
+the mandated encoding:
+
+```python
+efficiency/profiler.py:71     with open(path) as fh:                      # no encoding
+training/gpu_monitor.py:104   self._sysfs_path.read_text().strip()        # no encoding
+health/monitor.py:103         with open(path, encoding="utf-8", errors="replace") as fh:   # correct
+```
+
+Consolidating onto `common/sysfs.py` fixes both by construction rather than by
+remembering. The retry cluster likewise closes two hardcoded values
+(`weight_update_poller.py:391` `backoff_s = 2.0**attempt`;
 `weights_manager.py:176-177,373-374` `max_retries=3, backoff_base=2.0`).
 
 **Negative results worth recording** (so nobody re-audits them): ring-buffer
