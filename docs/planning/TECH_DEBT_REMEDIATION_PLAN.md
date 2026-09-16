@@ -48,7 +48,13 @@ So this plan is not a rescue. It targets six specific weaknesses:
    blind spot that exempts the codebase's own dominant naming convention.
 4. **God-file reduction stopped at the method boundary.** ADR-017 split the
    classes; a 46-parameter, 381-line constructor and a 208-line `tick()` remain.
-5. **The delta-coverage gate exists, is tested, and never runs in CI.**
+5. **Coverage measures 92.19% honestly, and three things under it are not.**
+   Branch coverage alone is **84.60%** — below the gate the blended figure
+   passes. 211 statements sit at **0% inside the denominator** because no CI job
+   installs the `[arm]` extra their tests need. And the same commit measured
+   `dual_stream_rssm_onnx.py` at 0% and 89.4% on two runs, with no warning
+   either time. The delta-coverage gate that would catch new gaps exists, is
+   itself tested, and **never runs in CI**.
 6. **Documentation truth holds at the root and drifts at the edges** — 9 broken
    links, 26 stale path references, and two competing per-directory doc formats.
 7. **No trunk and no tags.** 90 remote branches, no `main`, and **zero** tags —
@@ -76,7 +82,12 @@ Recorded so later waves can be judged against it rather than against impressions
 | Largest class | `RoverIsaacLabEnv` — 678 lines, 24 methods | AST scan |
 | Functions at C901 ceiling (15/15) | 4 | `ruff check --select C901 --config mccabe.max-complexity=11` |
 | Functions in the 12–15 band | 15 | same |
-| `# pragma: no cover` in `src/` | 92 | `grep -c` |
+| Measured coverage (CI selection) | **92.19%** blended · **84.60%** branch-only | `pytest --cov=src/mousedroid`, `coverage.json` |
+| Coverage with all `omit`/`exclude` stripped | 92.07% (**−0.11 pp**) | second run, reduced config |
+| Statements at 0% inside the denominator | **211** (`sim/mujoco_rover_env.py`) | no CI job installs `[arm]` |
+| Tests collected / passing | 6,375 passed, 59 skipped, 295 s | same run |
+| `# pragma: no cover` in `src/` | 92 (28 on a whole `def`) | `grep -c` |
+| Lines erased by `exclude_lines` | 1,788 (7.1%) across 230 files | coverage JSON |
 | `noqa` / `type: ignore` in `src/` | 19 / 8 (both at ratchet ceiling) | `grep -c` |
 | `TODO`/`FIXME`/`HACK`/`XXX` in `src/` | **1** | `grep -rnE` |
 | CI jobs / matrix legs per run | 17 / 23 | `.github/workflows/ci.yml` |
@@ -911,53 +922,236 @@ deletions, M for WS-6b (each needs a wire-or-remove decision).
 
 ### WS-7 — Coverage integrity
 
-Configuration is better than most: `branch = true` (`pyproject.toml:389`),
-`fail_under = 90` (`:405`), and the comment records 92% across 22,524 statements
-and 4,696 branches when branch coverage was switched on.
+**Measured, not assumed.** The CI selection was reproduced exactly
+(`pytest tests/unit tests/property tests/integration -m "not hardware"
+--cov=src/mousedroid --cov-fail-under=90`, `-x` dropped so one failure would not
+truncate the run):
 
-Two structural caveats to close:
+```
+TOTAL                      23300   1445   4954    487    92%
+Required test coverage of 90% reached. Total coverage: 92.19%
+6375 passed, 59 skipped, 1 deselected in 295.47s
+```
 
-**WS-7a — Six hardware drivers are omitted from measurement entirely**
-(`pyproject.toml` `[tool.coverage.run] omit`): `hardware/sensors/ultrasonic.py`,
-`hardware/camera/imx500.py`, `hardware/lidar/ld19_driver.py`,
-`arm/hardware/so_arm100_driver.py`, `hardware/display/ssd1306_face_driver.py`,
-plus `main.py`. These are not measured *and* not reported, so the 90% number
-says nothing about them. `ld19_driver.py` additionally carries a complexity-14
-function (WS-4). Proposal: keep them out of the *gate* but report them, so the
-blind spot is visible rather than silent.
+**The headline is honest.** Re-running with `omit` reduced to `*/tests/*` and the
+`pass`/`...` exclusions removed moved the total by **−0.11 pp** (92.185% →
+92.074%). The mitigations are not inflating the number, and that question can be
+closed.
 
-**WS-7b — 92 `# pragma: no cover` in `src/`, ungoverned.** Unlike `noqa` and
-`type: ignore`, `pragma: no cover` has **no ratchet budget** in
-`.claude/workforce.yaml:100-112`. It is the one coverage-suppression marker with
-no ceiling and no justification requirement. Add it as a third ratchet, seeded
-at 92.
+Five things underneath it are not fine.
 
-**WS-7c — `exclude_lines` vs `exclude_also`.** `pyproject.toml:407` uses
-`exclude_lines`, which **replaces** coverage.py's built-in defaults rather than
-adding to them. The current list re-states `pragma: no cover` by hand, so
-nothing is broken today — but future upstream default additions will be silently
-dropped. Per Context7's coverage.py documentation, `exclude_also` is the
-additive form and is the correct choice here.
+**WS-7a — Branch coverage alone is 84.60%, below the gate that reports 92%.**
+From `coverage.json`: 763 of 4,954 branches missing, 487 partial. `fail_under = 90`
+is satisfied by the blended line+branch figure; branch coverage on its own fails
+it. `branch = true` was enabled and then never gated separately — the pyproject
+comment recording "92% across 22,524 statements and 4,696 branches" is the
+blended number too. Add a branch-specific floor, seeded at the measured 84.6%
+and ratcheted, so the two cannot drift apart again.
 
-**WS-7d — Tier distribution.** Two tiers are vestigial: `tests/functional`
-(1 file, 54 LOC) and `tests/user_journey` (1 file, 65 LOC). `NEXT_STEPS.md:75-78`
-confirms both cover the parked `AutonomousOrchestrator`, not production. Either
-fold them into `tests/e2e/` or document them as permanently parked tiers rather
-than leaving two near-empty directories implying coverage that is not there.
-Regression-pair discipline is partial: 39 `_aqa.py` and 39 `_backwards_compat.py`
-files, but 15 `_aqa.py` files have no same-named partner — some legitimately
-(e.g. `test_doc_reconciliation`), so this wants a documented rule, not a blanket
-pairing mandate.
+**WS-7b — 211 statements are permanently 0% *inside* the denominator, because no
+CI job installs the extra that would run them.** The chain, each link verified:
 
-**Largest test files as split candidates:** `tests/unit/validation/test_validation_runtime.py`
-(1,379 LOC), `tests/unit/telemetry/test_telemetry_metrics.py` (1,192),
-`tests/unit/telemetry/test_telemetry_server.py` (893).
+| Link | Evidence |
+|---|---|
+| `mujoco>=3.0` lives in the `[arm]` extra | `pyproject.toml:127` |
+| **No CI job installs `[arm]`** | every `pip install -e` line in `ci.yml` — 128, 149, 183, 212, 297, 340, 385, 441, 531, 571, 609, 693, 746 |
+| So the test file skips wholesale | `tests/unit/sim/test_mujoco_rover_env.py:11` — `mujoco = pytest.importorskip("mujoco")` at module level |
+| But the source is **not** omitted | `pyproject.toml:394-402` lists 6 files; `sim/mujoco_rover_env.py` is not among them |
+| Measured result | 211 statements, 48 branches, **0%** |
 
-**Gate.** WS-2b's changed-lines gate is the load-bearing one. Add the
-`pragma: no cover` ratchet; switch to `exclude_also`; report-but-don't-gate the
-omitted drivers.
+This is the single largest coverage lever in the repo, and it cuts both ways: the
+gate is being dragged down by code CI structurally cannot reach, *and* a
+402-line simulator that the RSSM is pretrained against is completely unverified
+in CI. Either add an `arm-extras` job or omit the module and say so — but not
+silently both-ways as today.
 
-**Effort:** M. **Risk:** low.
+**WS-7c — Extras-gated coverage is non-deterministic, and fails silently.** Two
+full runs, identical selection and identical venv:
+
+| Module | Run 1 | Run 2 |
+|---|---|---|
+| `world_model/dual_stream_rssm_onnx.py` | **0%** (76/76 missing) | 89.4% (6/76 missing) |
+| `training/observability/mlflow_logger.py` | **15%** (112/138 missing) | 100% |
+| totals | 6375 passed / 59 skipped | 6459 passed / 47 skipped |
+
+**Neither run emitted a `CoverageWarning`.** A lost optional import silently
+removes ~214 statements from the covered set without failing anything — so the
+same commit can report materially different coverage depending on what resolved
+that day. This is WS-2a's floating-resolution problem arriving in the coverage
+number, and it is why the lockfile is a coverage fix as much as a CI one.
+
+Compounding it: the only jobs carrying those extras are **advisory**.
+`onnx-world-model-extras` (`ci.yml:554-558`, `continue-on-error: true`) is the
+sole gate on `dual_stream_rssm_onnx.py`; `mlflow-extras` (`:592-596`, likewise)
+the sole gate on `mlflow_logger.py`. `vla-extras` is blocking but runs `--no-cov`
+(`:538`), contributing zero coverage. WS-2's finding that both onnx and mlflow
+have already met their 7-green bar makes promoting them a coverage action, not
+just a ladder action.
+
+**WS-7d — `omit` is honest in aggregate and misleading per file.** The six
+omitted files, measured here for the first time:
+
+| % | stmts | miss | file |
+|---|---|---|---|
+| 56.4 | 35 | 13 | `hardware/camera/imx500.py` |
+| 61.4 | 60 | 21 | `arm/hardware/so_arm100_driver.py` |
+| 68.8 | 160 | 45 | `hardware/lidar/ld19_driver.py` |
+| 74.2 | 29 | 6 | `hardware/sensors/ultrasonic.py` |
+| 87.0 | 114 | 10 | `hardware/display/ssd1306_face_driver.py` |
+| 100.0 | 9 | 0 | `main.py` |
+
+The exclusion is not "untestable hardware": dedicated unit tests already exist
+(`tests/unit/hardware/test_ld19_driver.py`,
+`tests/unit/hardware/display/test_ssd1306_face_driver.py`). It hides
+measured-but-unreported code. Keep them out of the *gate* if that is the
+decision, but report them. Note `ld19_driver.py` is also the complexity-14
+function from WS-4 — complex, hardware-facing, and unreported is the worst
+combination in the tree.
+
+Conversely, one file should be omitted and is not:
+`telemetry/server/_protocol.py` (67 statements, 46 branches, 0%) is a typing-only
+`Protocol` imported solely under `if TYPE_CHECKING` (`_lifecycle.py:38`,
+`_rest_handlers.py:32`). It can never execute. It contributes 113 units of
+zero-risk denominator.
+
+**WS-7e — `pragma: no cover` is ungoverned, and three uses are wrong.** 92 in
+`src/`, **28 of them on a whole `def`**. Unlike `noqa` (19/19) and `type: ignore`
+(8/8), it has no ratchet in `.claude/workforce.yaml:100-112` — the one
+coverage-suppression marker with no ceiling and no justification requirement.
+Most are legitimate innermost blocking-syscall wrappers. These are not:
+
+- **Self-refuting:** `mcp/transport.py:103` `# pragma: no cover - exercised in
+  integration test` and `:115` `# pragma: no cover - integration only`. The gate
+  *measures* `tests/integration`, so a pragma whose stated justification is
+  integration coverage is excluding lines the gate would otherwise count.
+- **Not hardware, not trivial:** `harness/hooks.py:127,130,133` —
+  `NullHookRegistry.register/unregister/for_phase`, excluded as "trivial". This
+  is the no-op path the 30 Hz tick takes whenever `Settings.harness is None`,
+  i.e. the default.
+- **Documented safety behaviour with no test:** `comms/serial_driver.py:430
+  _read_line` is pragma'd, and its docstring *is* the repo's decode-hygiene
+  contract (`errors="replace"` so a garbled byte never raises
+  `UnicodeDecodeError`). Same at `comms/wifi_driver.py:104 _blocking_post`.
+  Nothing verifies either. Test the decode path through an injected fake file
+  object — no device needed.
+
+Also `exclude_lines` erases **1,788 lines (7.1% of the measurable surface)** across
+230 files. `...` Protocol bodies are legitimate; `^\s*pass\s*$` is not — it
+silently removes 14 `except …: pass` swallow-bodies in `src/` from measurement.
+And per Context7's coverage.py documentation, `exclude_lines` **replaces**
+coverage.py's built-in defaults where `exclude_also` **adds** to them. Nothing is
+broken today because the list re-states `pragma: no cover` by hand, but future
+upstream additions will be dropped silently. Switch to `exclude_also`.
+
+**WS-7f — Mock discipline is violated in the one tier where the rule is absolute,
+and that tier runs nowhere.** Two unambiguous violations of "no mock/patch on
+hardware-tier paths":
+
+- `tests/hardware/test_hc_sr04_edge_cases.py:80` patches **the device under test
+  itself** — `patch.object(sensor, "_measure_distance", side_effect=RuntimeError(…))`
+  where `sensor = HcSr04(ultrasonic_cfg)`, in a file marked
+  `pytestmark = pytest.mark.hardware` (`:28`).
+- `tests/hardware/test_hc_sr04_integration.py:104` — `patch.object(GPIO, "input",
+  return_value=0)` fakes the echo pin of the real `Jetson.GPIO`, then asserts
+  `d == ultrasonic_cfg.max_range_m`. The assertion is about the mock.
+
+Four more are mis-tiered rather than DUT-patching
+(`test_esp32_edge_cases.py:106,258`, `test_esp32_loopback.py:222,251`), and their
+own docstrings say so: *"Uses a mock inner driver to simulate failures without
+real hardware"*, *"runs on any host"*.
+
+**And `tests/hardware/**` executes in zero CI jobs** — `grep -n "tests/hardware"
+.github/workflows/*.yml scripts/ci.sh Makefile` returns nothing; it runs only on
+the rover via `scripts/jetson_full_validation.sh:252-255`. Consequence:
+`test_esp32_edge_cases.py:97` and `:250` carry **no** `hardware` marker and need
+no hardware, yet live in a directory no CI path collects — **they run nowhere at
+all.** Equivalent coverage does exist
+(`tests/unit/resilience/test_resilient_driver.py:167`,
+`tests/integration/test_self_healing_orchestrator.py:117`), so these are dead
+duplicates rather than a safety gap — but they should move to
+`tests/unit/resilience/` where CI will run them.
+
+**WS-7g — The timing tier is flaky *and* toothless, and `-x` makes the flake
+expensive.** A second full run under CPU contention produced:
+
+```
+FAILED tests/integration/test_e2e_5sec_run.py::TestE2E5SecondRun::test_tick_count_after_5_seconds
+FAILED tests/integration/test_e2e_5sec_run.py::TestDeadlineAdherence::test_mean_tick_latency_within_budget
+E   Failed: Timeout (>60.0s) from pytest-timeout.
+```
+
+These are in the **blocking** `test` job, which runs with `-x` (`ci.yml:226`), so
+one timing flake aborts the pipeline **before the coverage report is produced**.
+And the budgets are `_deadline_budget_ms(cfg) * 50` (`:186`) and `* 100` (`:220`)
+— so even when green they cannot detect a 10× regression in the 30 Hz loop. Both
+halves want fixing: a monotonic-clock fake makes the loop-overrun e-stop
+(`orchestrator/orchestrator.py:496-534`) deterministically testable, and dropping
+`-x` stops a flake hiding the coverage number.
+
+**WS-7h — Tier shape.** Collected counts, measured:
+
+| Tier | Files | Tests | Share | Verdict |
+|---|---|---|---|---|
+| unit | 447 | 5923 | 74.0% | top-heavy |
+| regression | 125 | 1252 | 15.6% | **outweighs every behavioural tier combined** (1252 vs 725) |
+| integration | 69 | 413 | 5.2% | 14:1 unit:integration |
+| smoke | 18 | 162 | 2.0% | ok |
+| property | 23 | 115 | 1.4% | **real** — 88 `@given` decorators, and zero outside this tier |
+| hardware | 23 | 62 | 0.8% | **runs in no CI job** (WS-7f) |
+| e2e | 10 | 35 | 0.44% | **not end-to-end** — whole tier finishes in **2.75s** |
+| security | 5 | 26 | 0.32% | thin |
+| performance | 6 | 16 | 0.20% | advisory only |
+| functional | 1 | 2 | 0.02% | vestigial |
+| user_journey | 1 | 1 | 0.01% | vestigial |
+
+Nothing finishing in 2.75 s is exercising a 30 Hz mission loop; 14 sites in the
+tier are `importorskip`, and the dashboard tests skip unless
+`MOUSEDROID_DASHBOARD_URL` is set, so they never run in CI. Merge
+`tests/functional/` and `tests/user_journey/` (3 tests total) into `tests/e2e/`
+and build one genuinely long-running e2e, rather than keeping two directories
+that satisfy the pyramid on paper.
+
+Regression-pair discipline is by feature-ID, not field-name: 39 `_aqa.py` and 39
+`_backwards_compat.py` files, with 15 `_aqa.py` files having no name-matched
+sibling. Some legitimately have no backwards-compat dimension, so this wants a
+documented rule rather than a blanket pairing mandate.
+
+**Assertion discipline is good** — exactly one test suite-wide asserts nothing
+(`tests/hardware/test_ssd1306_smoke.py:21`, which drives the OLED and can only
+fail by exception). Worth recording so nobody re-audits it.
+
+**Split candidates (>500 lines):** `tests/unit/validation/test_validation_runtime.py`
+(1,379 — also 40 patch sites), `tests/unit/telemetry/test_telemetry_metrics.py`
+(1,192), `test_telemetry_server.py` (893), `tests/unit/sensing/test_sensor_manager.py`
+(762), `tests/unit/config/test_config_schema.py` (732),
+`tests/unit/test_bug_fixes.py` (681 — a name that carries no contract),
+`tests/smoke/test_telemetry_smoke.py` (670 — a 670-line "smoke" test).
+
+**WS-7i — Lowest-coverage code is factory wiring, which is where invariant 1
+fails.** `cloud/_auth.py` 41.7%, `factory/health.py` 40.0%, `factory/cloud.py`
+56.9%, `factory/world_model.py` 61.4% (branch 56.7%). By risk domain the picture
+is otherwise reassuring: safety 98.3%, comms 99.0%, resilience/failover 97.7%,
+orchestrator 94.5%, hardware 93.8%, telemetry 90.9% — with cloud 84.5% and sim
+70.4% the laggards.
+
+**Two environment notes for whoever executes this.** The checkout ships **no
+runnable environment** — no `.venv`, and `pytest`/`pydantic`/`torch` absent — so
+`Makefile:17-21`'s expectations are not met on a fresh clone (same root as
+WS-2h(1)). And `tests/` carries **635 `type: ignore`** under no budget at all,
+against `src/`'s ratcheted 8; plus **98 `model_copy()` calls in `tests/` omit
+`deep=True`** (only 2 use it), including two off the session-scoped
+`jetson_settings` fixture — shallow copies share nested submodels, so the pattern
+is one nested mutation away from cross-test leakage.
+
+**Gate.** WS-2b's changed-lines gate remains the load-bearing one. Add: a
+branch-coverage floor (WS-7a), a `pragma: no cover` ratchet seeded at 92
+(WS-7e), `exclude_also` instead of `exclude_lines`, an `arm-extras` job or an
+honest omit (WS-7b), and a `CoverageWarning`-to-error setting so WS-7c cannot
+recur silently.
+
+**Effort:** M. **Risk:** low, except WS-7b — adding an `arm-extras` job means
+211 previously-unmeasured statements enter the reported set, which will move the
+headline number. Decide whether the gate follows or holds.
 
 ---
 
@@ -1247,38 +1441,54 @@ blocked until slack exists. Two free reductions:
 17. **WS-2k** — `persist-credentials: false` on the remaining 15 checkouts;
     `concurrency` block on `release.yml`.
 18. **WS-3a** — fix the four hardcoded-value gate blind spots.
-19. **WS-7b/7c** — `pragma: no cover` ratchet; `exclude_also`.
-20. **WS-5** duplicate-Protocol-name regression test.
-21. **WS-8e** — doc link/path-resolution gate.
+19. **WS-7a/7c/7e** — branch-coverage floor seeded at 84.6%; `pragma: no cover`
+    ratchet seeded at 92; `exclude_also` instead of `exclude_lines`; promote
+    `CoverageWarning` to an error so a lost optional import cannot silently
+    delete 214 statements from the covered set.
+20. **WS-7g** — drop `-x` from `ci.yml:226` so a timing flake stops hiding the
+    coverage report, and replace the `* 50` / `* 100` timing budgets with a
+    monotonic-clock fake.
+21. **WS-7f** — move the 2 unmarked mock-only tests out of `tests/hardware/`
+    into `tests/unit/resilience/`, where CI actually collects them, and fix the
+    2 DUT-patching violations. Decide whether `tests/hardware/**` gets a CI path
+    at all, or is documented as rover-only.
+22. **WS-7b** — the `[arm]` decision: add an `arm-extras` job, or omit
+    `sim/mujoco_rover_env.py` from the denominator and say so. **This one needs a
+    maintainer**, because either answer moves the headline coverage number and
+    the current state is silently both ways. Also omit
+    `telemetry/server/_protocol.py` (typing-only, 113 units of zero-risk
+    denominator).
+23. **WS-5** duplicate-Protocol-name regression test.
+24. **WS-8e** — doc link/path-resolution gate.
 
 Wave 2 before Wave 3 deliberately: a gate landed after its cleanup only
 documents the cleanup; landed before, it holds the line.
 
 ### Wave 3 — Consolidation
 
-22. **WS-3b–3g** — collapse the three config roots; add the 5 missing schema
+25. **WS-3b–3g** — collapse the three config roots; add the 5 missing schema
     fields; kill the 9 `getattr` bypasses. Each with a paired AQA +
     backwards-compat test.
-23. **WS-6c** — sysfs + retry consolidation first (closes the two invariant
+26. **WS-6c** — sysfs + retry consolidation first (closes the two invariant
     violations); then the remaining 9 clusters.
-24. **WS-6b** — wire-or-remove decisions on `_skill_delegator`, `dla_enabled`,
+27. **WS-6b** — wire-or-remove decisions on `_skill_delegator`, `dla_enabled`,
     `bc_batch_size`, and `action_override`.
-25. **WS-5a/5b/5c** — de-duplicate the Protocols; add `tests/unit/interfaces/`.
-26. **WS-6d/6e/6f** — dependency hygiene, 2 orphan scripts, facade tidy-up.
+28. **WS-5a/5b/5c** — de-duplicate the Protocols; add `tests/unit/interfaces/`.
+29. **WS-6d/6e/6f** — dependency hygiene, 2 orphan scripts, facade tidy-up.
 
 ### Wave 4 — Structure
 
-27. **WS-4** — orchestrator constructor bundles, `tick()` extraction,
+30. **WS-4** — orchestrator constructor bundles, `tick()` extraction,
     `RoverIsaacLabEnv` split. C901 15 → 12. Sequence
     `hardware/lidar/ld19_driver.py` first (complex **and** coverage-omitted).
-28. **WS-8a/8c/8d/8f** — root-file moves, grab-bag dissolution + narrowed
+31. **WS-8a/8c/8d/8f** — root-file moves, grab-bag dissolution + narrowed
     `_SHARED_KERNEL_PREFIXES`, one per-directory doc format, `openspec` archive.
-29. **WS-9b/9c/9d** — container hardening.
-30. **WS-2d** — extras-job consolidation.
+32. **WS-9b/9c/9d** — container hardening.
+33. **WS-2d** — extras-job consolidation.
 
 ### Wave 5 — Branch pruning (destructive, last)
 
-31. **WS-9e, prune half** — archive and delete the stale branches with
+34. **WS-9e, prune half** — archive and delete the stale branches with
     `archive_stale_branches.sh`, bringing 90 down to a curated set. Last on
     purpose: it is the only destructive step, and it is safe only because Wave 1
     created the protective tags and Wave 2 established `main`. **Do not reorder
@@ -1303,7 +1513,10 @@ exists.
 | `uv lock --check` | Non-reproducible CI resolution | new step |
 | Changed-lines branch coverage ≥90% | New uncovered code | existing `test` job, 3.11 leg |
 | `ratchet_budgets --strict` | A WARN-only early-warning step | `ci.yml:403`, `scripts/ci.sh:75` — **one word** |
-| `pragma: no cover` ratchet | Ungoverned coverage suppression | `.claude/workforce.yaml` |
+| Branch-coverage floor (seed 84.6%) | A blended 92% hiding a branch 84.6% | `pyproject.toml` |
+| `CoverageWarning` → error | A lost optional import silently deleting 214 statements | `pyproject.toml` |
+| `exclude_also` instead of `exclude_lines` | Silently dropping future coverage.py defaults | `pyproject.toml` |
+| `pragma: no cover` ratchet (seed 92) | The one suppression marker with no ceiling | `.claude/workforce.yaml` |
 | Constructor-arity + class-size ratchets | God-constructor regrowth | `.claude/workforce.yaml` |
 | C901 max-complexity 15 → 12 | Complexity creep at the ceiling | `pyproject.toml` |
 | Duplicate-Protocol-name check | A third `PromptInjectionFilterProtocol` | new regression test |
@@ -1364,6 +1577,20 @@ Recorded so these do not absorb effort later.
   reproduced locally" epilogue and names its gitleaks/promtool/vulture skips
   instead of passing silently. This is the habit the Makefile lacks; extend it,
   never remove it.
+- **The `omit` list's effect on the headline coverage number.** Measured: with
+  `omit` reduced to `*/tests/*` and the `pass`/`...` exclusions removed, the total
+  moves **−0.11 pp** (92.185% → 92.074%). The suspicion that `omit` inflates the
+  gate is settled — it does not. WS-7d is about per-file *reporting*, not about
+  the aggregate being fake.
+- **The property tier.** 88 `@given` decorators, all of them in
+  `tests/property/` and none leaking into other tiers. It is small (1.4% of
+  tests) but it is real property-based testing, not decoration.
+- **Assertion discipline.** Exactly one test in 728 files asserts nothing
+  (`tests/hardware/test_ssd1306_smoke.py:21`, which drives the OLED and can only
+  fail by exception). No sweep needed.
+- **Risk-domain coverage.** safety 98.3%, comms 99.0%, resilience/failover
+  97.7%, orchestrator 94.5%, hardware 93.8%. The low-coverage work in WS-7i is
+  factory wiring and cloud, not the safety-critical path.
 - **`scripts/check_subsystem_boundaries.py`** — already enforces Factory-First
   DI whole-tree in CI with zero violations. Do not add `import-linter`; tighten
   this instead.
@@ -1399,7 +1626,7 @@ Recorded so these do not absorb effort later.
 |---|---|---|---|
 | 0 | Ratchet headroom + `--strict` | XS | Unblocks everything; makes the early warning warn |
 | 1 | WS-1, 2c, 2g(2), 2i, 2j, 6a, 8b, 9a, 9e (tags) | S | Production correctness hole; 2 dated deadlines; pin protection; the 2 red PRs |
-| 2 | WS-2a, 2b, 2e–2h, 2k, 3a, 5-gate, 7b, 7c, 8e, 9e (trunk) | M | Makes every later wave self-enforcing; restores post-merge CI |
+| 2 | WS-2a, 2b, 2e–2h, 2k, 3a, 5-gate, 7a–7g, 8e, 9e (trunk) | M–L | Makes every later wave self-enforcing; restores post-merge CI; makes the coverage number mean one thing |
 | 3 | WS-3b–3g, 5a–5c, 6b–6f | L | ~850 LOC; 3 config roots → 1 |
 | 4 | WS-4, 8a, 8c, 8d, 8f, 9b–9d | L | 45 ctor params → 14; enterprise layout |
 | 5 | WS-9e (prune) | S | 90 branches → curated set |
@@ -1411,11 +1638,14 @@ PRs, and `ratchet_budgets --strict` is literally one word.
 
 **Wave 2 is where the plan earns its keep, and it is the one to argue about.**
 It is the largest wave and it does no cleanup at all — it restores post-merge CI,
-makes a green local run mean something, pins the dependency tree, and converts
-eight aspirations into gates. Everything in Waves 3–5 is ordinary work once
-Wave 2 lands and mostly wasted effort before it: cleanup under a gate that
-cannot hold the line regresses, and cleanup validated by a `make test` that skips
-four of five CI steps is not validated.
+makes a green local run mean something, pins the dependency tree, makes the
+coverage number mean one thing rather than two, and converts a dozen aspirations
+into gates. Everything in Waves 3–5 is ordinary work once Wave 2 lands and mostly
+wasted effort before it: cleanup under a gate that cannot hold the line
+regresses, cleanup validated by a `make test` that skips four of five CI steps is
+not validated, and a coverage delta measured against a number that moved 89
+percentage points on one module between two runs of the same commit is not a
+measurement.
 
 If appetite is limited, the correct cut is Waves 3–5, not Wave 2.
 
@@ -1456,11 +1686,21 @@ divergence (WS-3d) reads as a live safety defect until you trace every
 `MockMotorController(` construction site and find the single one, on the parked
 ADR-016 path. It is still worth fixing; it is not a production 30 Hz bug.
 
-**Two measurement caveats for whoever executes this.** The audit clone is
+**Three measurement caveats for whoever executes this.** The audit clone is
 **shallow** (52 commits), so the `gitleaks` history scan covers a subset of what
 CI scans at `fetch-depth: 0` — the working-tree scan is complete, and both were
-clean. And no `implemented_in` SHA-reachability claim is made here; run
-`pin-reachability-audit` in a full clone before Wave 5 touches refs.
+clean. No `implemented_in` SHA-reachability claim is made here; `validate.py
+--tier fast` emits 19 `implemented_in … is not a resolvable git ref` warnings and
+26 of the 39 pins do not resolve locally, but **that is what a shallow clone
+looks like** and says nothing about the server — run `pin-reachability-audit` in a
+full clone before Wave 1 creates tags or Wave 5 touches refs.
+
+And the checkout ships **no runnable environment**: no `.venv`, with `pytest`,
+`pydantic` and `torch` all absent, so `Makefile:17-21`'s expectations are unmet on
+a fresh clone. Every measurement above was taken in an isolated scratchpad venv
+with `COVERAGE_FILE` redirected outside the repo; nothing was installed into the
+tree. That absence is the same root cause as WS-2h(1), so it is a finding as well
+as a caveat.
 
 ---
 
