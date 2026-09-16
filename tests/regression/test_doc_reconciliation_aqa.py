@@ -399,9 +399,7 @@ def _is_adr_document(name: str) -> bool:
 
 def _adr_files_on_disk() -> set[str]:
     """Every ``docs/architecture/ADR-*.md`` filename."""
-    return {
-        path.name for path in _ARCHITECTURE_DIR.glob("ADR-*.md") if _is_adr_document(path.name)
-    }
+    return {path.name for path in _ARCHITECTURE_DIR.glob("ADR-*.md") if _is_adr_document(path.name)}
 
 
 def test_the_adr_index_is_not_mistaken_for_an_adr() -> None:

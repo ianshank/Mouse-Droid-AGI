@@ -519,7 +519,7 @@ class TestEveryTierReachesCi:
 #: Regex for the deterministic gate invocations in scripts/ci.sh: a module run
 #: as ``-m pkg.mod`` or a script run as ``tools/x.py`` / ``scripts/x.py``.
 _CI_SH_GATE_RE = re.compile(
-    r'(?:-m\s+(?P<module>[a-z_][a-z0-9_.]*)'
+    r"(?:-m\s+(?P<module>[a-z_][a-z0-9_.]*)"
     r'|"?\$PYTHON_BIN"?\s+(?P<script>(?:tools|scripts)/[\w/]+\.py))'
 )
 
@@ -579,9 +579,7 @@ def _all_workflow_text() -> str:
     mentioned *somewhere*, which the enumerated per-job pins above then sharpen.
     """
     workflows = _REPO_ROOT / ".github" / "workflows"
-    return "\n".join(
-        path.read_text(encoding="utf-8") for path in sorted(workflows.glob("*.yml"))
-    )
+    return "\n".join(path.read_text(encoding="utf-8") for path in sorted(workflows.glob("*.yml")))
 
 
 class TestEveryCiShGateReachesCi:
