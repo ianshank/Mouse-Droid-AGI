@@ -180,7 +180,17 @@ jobs:
                   # telemetry/{auth,server}.py and hardware/display/expressions.py.
                   # Without them --ignore-missing-imports degrades those to Any and
                   # strict mode flags untyped-decorator / valid-type errors.
-                  pip install -e ".[dev,telemetry]"
+                  #
+                  # mlflow is here for the SAME reason, in the opposite direction:
+                  # mlflow-skinny ships real type information, so a `cast` that is
+                  # necessary when mlflow is absent (Any -> no-any-return) becomes a
+                  # `redundant-cast` error once it is present. That asymmetry was
+                  # invisible while no job ran mypy with mlflow installed. Checking
+                  # it HERE rather than in the advisory `mlflow-extras` job is
+                  # deliberate: this job is blocking and matrixed over 3.10-3.12, and
+                  # one dependency set for every mypy run is what stops the two
+                  # diverging again.
+                  pip install -e ".[dev,telemetry,mlflow]"
                   pip install typing_extensions>=4.0
 
             - name: Type check
@@ -618,16 +628,17 @@ jobs:
               # log shows no versions to diff against the last green run.
               run: pip list 2>/dev/null | grep -Ei 'mlflow|sqlalchemy|alembic' || true
 
-            - name: Type check (mypy --strict) — mlflow installed
-              # This is the only job that installs the [mlflow] extra AND can run
-              # mypy, so it is the only place a mlflow-typed regression is visible.
-              # The `typecheck` job installs `[dev,telemetry]`, where mlflow is
-              # absent and --ignore-missing-imports degrades it to Any -- errors
-              # that appear only when mlflow ships REAL type information (e.g. a
-              # `redundant-cast` on MlflowClient return values) are structurally
-              # invisible there. Same invocation as Stage 2 `typecheck`, placed
-              # before pytest so a type error fails fast.
-              run: mypy src/ --strict --ignore-missing-imports
+            # NOTE: no mypy step here. A first attempt added one, and it failed —
+            # this job installs `.[dev,mlflow]` with no `telemetry` extra, so
+            # aiohttp is absent and `mypy --strict` reports three
+            # `untyped-decorator` errors on the `@web.middleware` functions in
+            # telemetry/auth.py and telemetry/server/_lifecycle.py. That is the
+            # mirror image of the bug the step was meant to catch: mypy --strict is
+            # sensitive to the whole installed dependency set, so running it under a
+            # different extras combination reports different errors rather than more
+            # of them. The mlflow typecheck now lives in the blocking, matrixed
+            # Stage 2 `typecheck` job, which installs `[dev,telemetry,mlflow]`.
+            # This job stays what it was: a runtime exercise of the mlflow extra.
 
             - name: Run mlflow-touching test suite
               run: |

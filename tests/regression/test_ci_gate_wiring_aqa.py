@@ -31,7 +31,13 @@ Pinned contracts:
   pre-egress injection filter -- it is not, and F-028's own proposal and
   peer-review both said so, the latter marking it CONFIRMED;
 * pytest ``addopts`` keeps ``--import-mode=importlib`` (duplicate test
-  basenames make prepend mode fragile).
+  basenames make prepend mode fragile);
+* the ``typecheck`` job installs both the ``telemetry`` and ``mlflow`` extras,
+  and no other job runs mypy. ``mypy --strict`` is sensitive to the whole
+  installed dependency set in BOTH directions — an absent optional lib degrades
+  to ``Any`` and trips ``untyped-decorator``, while a present one that ships real
+  types can turn a required ``cast`` into ``redundant-cast`` — so a second mypy
+  invocation under different extras reports *different* errors, not more of them.
 """
 
 from __future__ import annotations
@@ -322,6 +328,90 @@ class TestSecurityJob:
                 "--strict escalates the --skip-editable skip itself to a "
                 "fatal error ('distribution marked as editable')"
             )
+
+
+class TestTypecheckJobDependencySet:
+    """``mypy --strict`` runs against the extras its result depends on.
+
+    ``mypy --strict`` is sensitive to the *whole* installed dependency set, in
+    both directions, and this job is the only place that is checked:
+
+    * **Absent** optional libs degrade to ``Any`` under
+      ``--ignore-missing-imports``, and strict mode then flags the annotations
+      that reference them. Without the ``telemetry`` extra (aiohttp), the three
+      ``@web.middleware`` functions in ``telemetry/auth.py`` and
+      ``telemetry/server/_lifecycle.py`` report ``untyped-decorator``.
+    * **Present** optional libs that ship real types can make a previously
+      necessary construct redundant. With ``mlflow`` installed, a ``cast`` that
+      ``no-any-return`` required when mlflow was absent becomes
+      ``redundant-cast``.
+
+    Both were real failures. The second was invisible until a mypy step was
+    added to the advisory ``mlflow-extras`` job — which then hit the FIRST one,
+    because that job installs no ``telemetry`` extra. The resolution was to run
+    one mypy invocation against one superset dependency list, here, in a blocking
+    matrixed job. This class is the pin that stops the two diverging again;
+    nothing asserted the extras before, which is precisely how it happened.
+    """
+
+    @staticmethod
+    def _typecheck_install_extras() -> str:
+        """Return only the ``pip install -e`` extras, with comments stripped.
+
+        Comment lines are excluded deliberately, and this is not hypothetical:
+        the first revision of this class matched the raw ``run:`` block, whose
+        prose explains at length *why* telemetry and mlflow are installed. It
+        found "mlflow" in the comment and passed even with the extra deleted from
+        the install line — a pin that could not fail. See :func:`_strip_comments`
+        above, which documents the same trap for the tier assertions and exists
+        for exactly this reason; this helper is its narrower cousin, keeping only
+        real ``pip install -e`` commands rather than all non-comment lines.
+        """
+        job = _load_ci_jobs()["typecheck"]
+        commands = [
+            line.strip()
+            for step in job["steps"]
+            for line in str(step.get("run", "")).splitlines()
+            if line.strip().startswith("pip install -e")
+        ]
+        assert commands, "typecheck job has no `pip install -e` line to inspect"
+        return "\n".join(commands)
+
+    def test_typecheck_installs_telemetry_extra(self) -> None:
+        """aiohttp must be present or the middleware decorators read as untyped."""
+        assert "telemetry" in self._typecheck_install_extras(), (
+            "typecheck must install the telemetry extra — without aiohttp, "
+            "mypy --strict reports untyped-decorator on the @web.middleware "
+            "functions in telemetry/auth.py and telemetry/server/_lifecycle.py"
+        )
+
+    def test_typecheck_installs_mlflow_extra(self) -> None:
+        """mlflow must be present or its redundant-cast class is unreachable."""
+        assert "mlflow" in self._typecheck_install_extras(), (
+            "typecheck must install the mlflow extra — mlflow-skinny ships real "
+            "type information, so errors that only appear when it is present "
+            "(redundant-cast on MlflowClient returns) are otherwise invisible "
+            "to every CI job"
+        )
+
+    def test_typecheck_actually_runs_mypy_strict(self) -> None:
+        run_text = _job_run_text(_load_ci_jobs()["typecheck"])
+        assert "mypy" in run_text, "typecheck job no longer invokes mypy"
+        assert "--strict" in run_text, "typecheck job runs mypy without --strict"
+
+    def test_mlflow_extras_does_not_run_mypy(self) -> None:
+        """Keep exactly one mypy invocation, under one dependency set.
+
+        A second invocation under a narrower extras combination reports
+        *different* errors rather than more of them, which is a false signal, not
+        extra coverage.
+        """
+        assert "mypy" not in _job_run_text(_load_ci_jobs()["mlflow-extras"]), (
+            "mlflow-extras must not run mypy: it installs no telemetry extra, so "
+            "mypy --strict fails there on untyped-decorator regardless of mlflow. "
+            "The mlflow typecheck belongs in the `typecheck` job, which installs "
+            "the superset."
+        )
 
 
 class TestAdvisoryTracking:
