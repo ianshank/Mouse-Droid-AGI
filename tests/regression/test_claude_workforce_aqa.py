@@ -27,10 +27,11 @@ Contracts pinned here:
 
 from __future__ import annotations
 
+import ast
 import json
 import os
+import shutil
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -417,6 +418,29 @@ def test_wired_hook_commands_run_from_the_project_directory() -> None:
 _INTERPRETER_WRAPPER_RELPATH = "tools/claude_hooks/run_hook.sh"
 _INTERPRETER_WRAPPER = _REPO_ROOT / _INTERPRETER_WRAPPER_RELPATH
 
+#: Skip for every test that shells out to the wrapper.
+#:
+#: ``run_hook.sh`` is a POSIX shell script, and on the ``test-windows`` runner
+#: ``bash`` resolves to WSL's ``bash.exe`` with **no distribution installed** — it
+#: exits 1 printing "Windows Subsystem for Linux has no installed distributions"
+#: as UTF-16, so every one of these tests fails for a reason that has nothing to
+#: do with the wrapper. That is not a hypothetical: three of them went red on the
+#: ``test-windows (3.11)`` leg exactly this way.
+#:
+#: The hooks themselves are unaffected — Claude Code runs the command it is given,
+#: and a Windows host needs a different wrapper invocation anyway (which is why
+#: ``_resolve_interpreter`` carries the ``.venv/Scripts/python.exe`` candidate).
+#: The two-part form is the house guard, taken byte-for-byte from
+#: ``tests/unit/scripts/test_repin_tags.py`` (itself copied from
+#: ``test_archive_stale_branches.py``), whose comment documents this exact
+#: failure: ``os.name == "nt"`` is NOT redundant with ``shutil.which("bash")``,
+#: because on the Windows runner ``which()`` *finds* the WSL shim. This is now the
+#: third file in this repo to learn that the hard way.
+_REQUIRES_POSIX_SHELL = pytest.mark.skipif(
+    os.name == "nt" or shutil.which("bash") is None,
+    reason="run_hook.sh is a POSIX script; the Windows runner's bash is a WSL shim with no distro",
+)
+
 #: Interpreter spellings that resolve through ``PATH`` rather than by capability.
 _BARE_INTERPRETERS = ("python", "python3", "python3.10", "python3.11", "python3.12", "py")
 
@@ -493,7 +517,7 @@ def _decoy_interpreter_dir(tmp_path: Path, name: str) -> Path:
     return decoy_dir
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shim script; cmd.exe differs")
+@_REQUIRES_POSIX_SHELL
 @pytest.mark.parametrize("decoy_name", ["python3", "python"])
 def test_interpreter_wrapper_resolves_an_interpreter_that_can_import_the_hooks(
     tmp_path: Path, decoy_name: str
@@ -542,6 +566,7 @@ def test_interpreter_wrapper_resolves_an_interpreter_that_can_import_the_hooks(
     assert "ok" in completed.stdout
 
 
+@_REQUIRES_POSIX_SHELL
 def test_interpreter_wrapper_fails_fast_with_no_arguments() -> None:
     """An argument-less wiring must error, not hang.
 
@@ -596,7 +621,7 @@ def test_post_edit_mypy_profile_covers_the_hook_package_itself() -> None:
     )
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shim script; cmd.exe differs")
+@_REQUIRES_POSIX_SHELL
 def test_interpreter_wrapper_honours_the_explicit_override(tmp_path: Path) -> None:
     """``MOUSEDROID_PYTHON`` wins outright, so an operator can pin an interpreter.
 
@@ -631,7 +656,7 @@ def test_interpreter_wrapper_honours_the_explicit_override(tmp_path: Path) -> No
     )
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shim script; cmd.exe differs")
+@_REQUIRES_POSIX_SHELL
 def test_interpreter_wrapper_rejects_a_non_executable_override(tmp_path: Path) -> None:
     """A typo'd override must name itself, not die as a bare shell error.
 
@@ -658,7 +683,7 @@ def test_interpreter_wrapper_rejects_a_non_executable_override(tmp_path: Path) -
     assert "gates cannot run" in completed.stderr
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shim script; cmd.exe differs")
+@_REQUIRES_POSIX_SHELL
 @pytest.mark.parametrize("exit_code", [0, 1, 2, 42])
 def test_interpreter_wrapper_preserves_the_exit_code(exit_code: int) -> None:
     """Exit-code fidelity is the whole contract Claude Code reads.
@@ -684,7 +709,7 @@ def test_interpreter_wrapper_preserves_the_exit_code(exit_code: int) -> None:
     )
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shim script; cmd.exe differs")
+@_REQUIRES_POSIX_SHELL
 def test_interpreter_wrapper_passes_stdin_through_unread() -> None:
     """The hook payload arrives on stdin and must reach the hook intact.
 
@@ -709,7 +734,7 @@ def test_interpreter_wrapper_passes_stdin_through_unread() -> None:
     )
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shim script; cmd.exe differs")
+@_REQUIRES_POSIX_SHELL
 def test_interpreter_wrapper_falls_back_to_its_own_location() -> None:
     """With ``CLAUDE_PROJECT_DIR`` unset the wrapper must still find the repo.
 
@@ -864,3 +889,80 @@ def test_mcp_next_steps_checkbox_ticked() -> None:
     """docs/MCP_NEXT_STEPS.md must have the Claude Code .mcp.json checkbox ticked."""
     content = _MCP_NEXT_STEPS.read_text(encoding="utf-8")
     assert "- [x] Same for **Claude Code** (`.mcp.json` template)." in content
+
+
+def _launches_the_wrapper(node: ast.FunctionDef) -> bool:
+    """Whether ``node`` contains a ``subprocess.run(["bash", <wrapper>, ...])`` call.
+
+    Matched structurally rather than by substring. A substring check on ``"bash"``
+    and ``_INTERPRETER_WRAPPER`` is what the first version of this sweep used, and
+    it matched the sweep functions *themselves* — they mention both names in order
+    to look for them. Self-matching made every run red regardless of the code
+    under test, which is the same class of mistake as a vacuous pin: the assertion
+    stopped describing the tree.
+    """
+    for call in (n for n in ast.walk(node) if isinstance(n, ast.Call)):
+        if not (
+            isinstance(call.func, ast.Attribute)
+            and call.func.attr == "run"
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id == "subprocess"
+        ):
+            continue
+        if not call.args or not isinstance(call.args[0], ast.List):
+            continue
+        argv = call.args[0].elts
+        starts_with_bash = (
+            bool(argv) and isinstance(argv[0], ast.Constant) and argv[0].value == "bash"
+        )
+        names_wrapper = any(
+            isinstance(inner, ast.Name) and inner.id == "_INTERPRETER_WRAPPER"
+            for element in argv
+            for inner in ast.walk(element)
+        )
+        if starts_with_bash and names_wrapper:
+            return True
+    return False
+
+
+def _wrapper_subprocess_tests() -> list[ast.FunctionDef]:
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    return [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name.startswith("test_")
+        and _launches_the_wrapper(node)
+    ]
+
+
+def test_every_wrapper_subprocess_test_is_marked_posix_only() -> None:
+    """The durable half of the Windows fix: no such test may forget the marker.
+
+    Three of these went red on the ``test-windows (3.11)`` leg because they shell
+    out to ``bash``, which on that runner is WSL with no distribution installed.
+    Adding the marker one test at a time is how the *fourth* one gets forgotten,
+    so this discovers them from the source instead.
+
+    Asserted against the AST rather than by running anything, so it names the
+    offending test on every platform — including the Linux legs, where a missing
+    marker is otherwise invisible until Windows goes red.
+    """
+    offenders = [
+        node.name
+        for node in _wrapper_subprocess_tests()
+        if not any(
+            isinstance(dec, ast.Name) and dec.id == "_REQUIRES_POSIX_SHELL"
+            for dec in node.decorator_list
+        )
+    ]
+    assert not offenders, (
+        f"these tests shell out to run_hook.sh without @_REQUIRES_POSIX_SHELL and "
+        f"will fail on the test-windows leg: {offenders}"
+    )
+
+
+def test_the_wrapper_subprocess_sweep_actually_finds_tests() -> None:
+    """Anti-vacuity: a sweep that matches nothing passes unconditionally."""
+    found = [node.name for node in _wrapper_subprocess_tests()]
+    assert len(found) >= 5, f"the wrapper-subprocess sweep found only {found}"
