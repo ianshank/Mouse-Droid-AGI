@@ -93,6 +93,7 @@ Ordered by severity. Each is a live defect on the shipped configuration.
 | **S-7** | **Medium** | **Skills advertise tools that no registry provides — silently.** Of 11 declared tool names across the four builtin skills, **2 resolve and 9 do not**; `mousedroid-voice` and `mousedroid-world-model` resolve to **zero** tools. `FilteredToolRegistry.names` intersects with the parent, so the capability disappears without error. **Fixed in this change**: now logged, and ratcheted by a gate | `src/mousedroid/skills/builtin/`, `src/mousedroid/skills/registry.py::FilteredToolRegistry` — executed proof in §7.3 |
 | **S-8** | **Medium** | **`vy` is transmitted on a chassis that cannot execute it.** `_project_action_to_executable_axes` zeroes lateral velocity only when the codec reports no lateral support — true for `waveshare_stock`, **false for `legacy`**, the shipped default. So on the current configuration a non-zero `vy` is PWM-scaled, sent, and recorded as the executed action on a skid-steer rover, with no warning at any layer. Related: the projection's guard is `action.shape[0] <= 1`, which is the *batch* dimension for the `(1, action_dim)` tensor `plan()` returns | `_action_mixin.py::_project_action_to_executable_axes`, `src/mousedroid/comms/base_driver.py::send_velocity` |
 | **S-9** | **Low** | **The serial port is opened non-exclusively.** No `exclusive=True`, no `flock`. `scripts/jetson_smoke_test.sh` opens the same device from a second process and writes a legacy STOP frame; `tests/hardware/test_motor_smoke.py` builds a second driver. In-process, the MCP `set_velocity` tool writes motors outside the tick | `src/mousedroid/comms/serial_driver.py::_open_serial`, `src/mousedroid/common/tools/motor_tools.py` |
+| **S-11** | **High** | **A safety flag that reads as ON while being inert.** `ESP32Config.heartbeat_enabled` defaults `True` and `heartbeat_window_ms` resolves to 3000 ms under *every* command set, so an operator inspecting config sees "failsafe armed, 3 s window". Under the default `legacy` command set nothing is armed at all. The asymmetry is the defect: the schema warns loudly when the window is too *tight* (a tuning nuisance), while `_arm_command_set` logs `esp32_heartbeat_armed` only when it did arm something — so the dangerous case is silent and indistinguishable from success. **Fixed in this change** (see §9) | `src/mousedroid/config/schema/hardware.py`, `src/mousedroid/comms/base_driver.py` |
 | **S-10** | **Low** | **One declared-but-unconsumed safety budget.** `MotorLimitsConfig.watchdog_timeout_s` has no production consumer — its only reference outside the schema is a regression assert. This is the class of defect F-026 ("declared governance budgets have consumers") exists to prevent, so that gate has a blind spot. **Corrected in review:** an earlier draft of this row also named `SafetyConfig.max_velocity_mps`. That was wrong — it *is* consumed, via `src/mousedroid/factory/cognitive.py::build_cognitive_core` into `ConstitutionalRLConfig.speed_ceiling_mps`, where `src/mousedroid/cognitive/constitutional_rl.py::ConstitutionalChecker` clips against it | `src/mousedroid/config/schema/hardware.py`, `src/mousedroid/cognitive/constitutional_rl.py` |
 
 ---
@@ -217,7 +218,7 @@ this tree):
 
 | Step | Command | Result |
 |---|---|---|
-| test-cov | `pytest tests/unit tests/property tests/integration -m "not hardware" --import-mode=importlib --cov=src/mousedroid --cov-fail-under=90` | 6374 passed, 129 skipped, 1 deselected — coverage **92.01%** (floor 90) |
+| test-cov | `pytest tests/unit tests/property tests/integration -m "not hardware" --import-mode=importlib --cov=src/mousedroid --cov-fail-under=90` | 6381 passed, 129 skipped, 1 deselected — coverage **92.03%** (floor 90) |
 | regression | `pytest tests/regression/ -m "not hardware"` | 1422 passed, 33 skipped |
 | smoke | `pytest tests/smoke -m "not hardware and not slow"` | 158 passed, 4 skipped |
 | behaviour | `pytest tests/behaviour -m "not hardware"` | no tests collected (tier is empty in this tree) |
@@ -274,6 +275,16 @@ carve-out. Everything else in §4 is left for triage.
   tests), so the warning is latent until the skill-delegation path is wired. The enforcement
   that bites today is the ratcheting regression gate, which records the nine existing dangling
   names with a reason each and fails on any new one.
+
+- **`esp32_failsafe` preflight check + a connect-time warning** — makes the dormant chassis
+  failsafe visible at the two moments an operator would look. The check is a config question,
+  not a device probe (it never opens the port), and names the exact remedy:
+  `MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock`. On the shipped default it reports WARN
+  "the failsafe is NOT armed"; under `waveshare_stock` it reports OK "armed at connect"; an
+  explicit `heartbeat_enabled=false` still warns, worded so a deliberate choice is
+  distinguishable from an accident. `BaseESP32Driver._arm_command_set` now emits
+  `esp32_heartbeat_not_armed` when a failsafe was requested but the codec sends nothing, so
+  silence no longer looks like success. Observability only — no wire-format or behaviour change.
 
 Test tiers: unit (`tests/unit/world_model/test_mcts_candidate_strategy.py`,
 `tests/unit/skills/test_contract.py`), property

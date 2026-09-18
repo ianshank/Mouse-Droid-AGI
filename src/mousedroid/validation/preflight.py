@@ -331,6 +331,63 @@ async def _check_esp32(cfg: Settings) -> PreflightCheckResult:
     return _ok("esp32", f"driver={type(driver).__name__}", time.monotonic() - t0)
 
 
+async def _check_esp32_failsafe(cfg: Settings) -> PreflightCheckResult:
+    """Report whether the chassis heartbeat failsafe is actually armed.
+
+    ``ESP32Config.heartbeat_enabled`` defaults ``True`` and
+    ``heartbeat_window_ms`` resolves to a real number under *every* command
+    set, so an operator inspecting config reads "failsafe on, 3 s window"
+    even when the resolved codec sends no arming command at all. Only
+    ``waveshare_stock`` emits ``CMD_HEART_BEAT_SET``; under the default
+    ``legacy`` the connect sequence is empty and the firmware has no failsafe
+    to fall back on. Nothing else in the stack says so: ``_arm_command_set``
+    logs ``esp32_heartbeat_armed`` only when it *did* arm something, so
+    silence is indistinguishable from success, and the existing schema
+    warning fires only for a window that is too *tight*.
+
+    That matters because this is the only mechanism that stops the *wheels*
+    when the host wedges — the software watchdog restarts the container.
+
+    A config question, not a device probe, so it reports the resolved state
+    rather than opening the port. Short-circuits under ``mock_hardware``
+    like the device checks: with no chassis attached the question does not
+    apply.
+    """
+    t0 = time.monotonic()
+    esp32 = cfg.esp32
+    # Local import: keeps the comms package off the pure-validation import
+    # path (F-006), matching the other checks in this module.
+    from mousedroid.comms.command_set import heartbeat_window_ms, resolve_command_codec
+
+    armed = bool(resolve_command_codec(esp32).connect_commands(esp32))
+    state = (
+        f"command_set={esp32.command_set!r} heartbeat_enabled={esp32.heartbeat_enabled} "
+        f"window_ms={heartbeat_window_ms(esp32)}"
+    )
+    if cfg.mock_hardware:
+        return _ok(
+            "esp32_failsafe", f"mock_hardware=true ({state}; armed={armed})", time.monotonic() - t0
+        )
+    if armed:
+        return _ok(
+            "esp32_failsafe", f"chassis heartbeat armed at connect ({state})", time.monotonic() - t0
+        )
+    if not esp32.heartbeat_enabled:
+        return _warn(
+            "esp32_failsafe",
+            f"chassis failsafe deliberately disabled ({state}); nothing halts the "
+            "wheels if the host wedges or the USB link drops",
+            time.monotonic() - t0,
+        )
+    return _warn(
+        "esp32_failsafe",
+        f"heartbeat_enabled=true but no arming command is sent ({state}) — the "
+        "failsafe is NOT armed. Set MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock "
+        "(also derives the 115200 stock baud) to arm it",
+        time.monotonic() - t0,
+    )
+
+
 async def _check_config(cfg: Settings) -> PreflightCheckResult:
     """Sanity-check core config invariants (always runs, mock or not)."""
     t0 = time.monotonic()
@@ -425,6 +482,7 @@ _CHECK_DISPATCH: dict[str, CheckCallable] = {
     "speaker": _check_speaker,
     "lidar": _check_lidar,
     "esp32": _check_esp32,
+    "esp32_failsafe": _check_esp32_failsafe,
     "config": _check_config,
     "host_env_keys": _check_host_env_keys,
 }

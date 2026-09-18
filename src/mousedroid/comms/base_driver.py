@@ -227,6 +227,21 @@ class BaseESP32Driver(ABC):
                 command_set=self._cfg.command_set,
                 window_ms=heartbeat_window_ms(self._cfg),
             )
+        elif self._cfg.heartbeat_enabled:
+            # Logging only on success would make silence indistinguishable from
+            # an armed failsafe. The operator asked for one via
+            # heartbeat_enabled; say plainly that this command set cannot
+            # provide it, because this is the only thing that stops the wheels
+            # when the host wedges.
+            _log.warning(
+                "esp32_heartbeat_not_armed",
+                command_set=self._cfg.command_set,
+                hint=(
+                    "heartbeat_enabled is true but this command set sends no "
+                    "arming command; set esp32.command_set=waveshare_stock to "
+                    "arm the chassis failsafe"
+                ),
+            )
 
     def _warn_lateral_unsupported(self, vy: float) -> None:
         """Surface a dropped lateral setpoint — WARNING once, DEBUG after.

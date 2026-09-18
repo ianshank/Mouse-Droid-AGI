@@ -22,7 +22,7 @@ notably SIGTERM never halting the motors, a dead LiDAR failing open to "12 m cle
 battery voltage able to e-stop on the production overlay, and preflight reporting OK on a
 physically dead ESP32. Those are recorded for triage, not fixed here.
 
-**Landed (two software-only defects, both found during the review).**
+**Landed (three software-only defects, all found during the review).**
 
 - `MCTSConfig.action_candidate_strategy` — the candidate matrix was rank 1
   (`vx == vy == omega`), so the planner could not drive straight or turn in place.
@@ -34,10 +34,18 @@ physically dead ESP32. Those are recorded for triage, not fixed here.
   `SkillRegistry.tools_for` and ratcheted by a baseline gate. `tools_for` has no production
   caller yet, so the gate is what bites today; the log is latent until delegation is wired.
 
+- `esp32_failsafe` preflight check + `esp32_heartbeat_not_armed` connect warning — the
+  chassis failsafe is dormant on every shipped config (`command_set` defaults `legacy`), while
+  `heartbeat_enabled: true` and a 3000 ms window read as "armed". Nothing said so: the schema
+  warns only when the window is too tight, and `_arm_command_set` logged only on success.
+  The check names the remedy (`MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock`) and never opens
+  the port. Observability only; the rover-side env flip stays an operator action, and is
+  additionally blocked by the dead ESP32 and `esp32.enabled: false`.
+
 Test tiers: unit, property, regression pair, plus the skill-contract AQA gate. The `per_axis`
 pins were proven to go red against the reverted implementation, and three mutations that
-survived the first draft of those tests now fail. Verification: `test-cov` step 6374 passed /
-129 skipped at 92.01% coverage (baseline 6345); `regression` 1422 passed; `smoke` 158 passed;
+survived the first draft of those tests now fail. Verification: `test-cov` step 6381 passed /
+129 skipped at 92.03% coverage (baseline 6345); `regression` 1422 passed; `smoke` 158 passed;
 `e2e` 22 passed; `behaviour` collects nothing in this tree. No CHARTER §3 carve-out: both changes are config-gated or
 observability-only, defaults unchanged, no actuation-gate or hot-loop change.
 
