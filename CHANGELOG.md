@@ -8,6 +8,60 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — a dead LiDAR reported 12 m of clearance in every direction (S-2)
+
+`SensorManager._safe_lidar_read` built `default = np.ones(feature_dim)` and
+returned it on any exception. LiDAR features are *normalised range fractions*
+(`min_in_sector / max_range`), so an all-ones vector does not mean "no data" —
+it asserts **maximum range in every sector**. `MouseDroidSafetyMonitor.evaluate`
+read that vector without consulting the valid mask beside it and computed
+`1.0 * lidar_max_range_m` = 12.0 m of clearance in all directions, with
+`lidar_clearance_ok=True`. The same fabricated ring reached the telemetry
+dashboard, which drew it as a full-range scan.
+
+The `valid_mask` slot *did* record the failure, and `min_valid_sensors` is the
+nominal backstop — but `config/jetson_production.yaml` lowers it to `1`, so one
+healthy sensor kept the rover driving. The generic `sensor_stale_s` sweep was no
+backstop either: it only fires for a mask slot that was valid at least once, so a
+LiDAR dead *from boot* never entered `_last_valid_timestamps` and never went
+stale. It failed open permanently.
+
+A second path had the same shape: when the scan SUCCEEDED but no feature
+extractor was wired, the code fell through to the same `return default, False` —
+a good scan reported invalid while still injecting the all-clear vector.
+
+Two changes, deliberately split:
+
+* **Unconditional (truthfulness).** `_safe_lidar_read` now returns `(None, False)`
+  on every path that does not produce real extracted features. `None` is what
+  every consumer already handles — `observation_packer._pack_optional_vector`
+  zero-fills and zeros the mask slot, `RSSM` takes the encoder's own
+  missing-modality branch, `frame_builder` omits the sector ring. This changes no
+  motion: the encoder gates the LiDAR projection by its mask slot, which was
+  already 0.0, so the latent is bit-identical either way, and both 12.0 m and
+  infinity sit above every projector clamp threshold. The raw scan is still
+  cached for the raw-LiDAR telemetry channel.
+* **Gated (behaviour).** `SafetyConfig.lidar_unavailable_policy`
+  (`ignore` | `degrade` | `emergency`, default `ignore`) decides what an absent
+  reading *means*. `degrade` reports the worst case — 0.0 m,
+  `lidar_clearance_ok=False` — so `SafetyProjector`'s brake and tight-quarters
+  clamps throttle the rover without an e-stop; `emergency` additionally raises
+  `is_emergency`. `lidar_unavailable_grace_s` (default 0.0, exclusive window)
+  debounces a single dropped scan, and is seeded on the first LiDAR-less tick so
+  a boot-dead LiDAR still trips. The default reproduces pre-S-2 behaviour exactly,
+  so existing YAML deploys unchanged — **no rig gains this interlock until an
+  operator sets the policy**, which `config/jetson_production.yaml` deliberately
+  does not do here.
+
+No CHARTER §3 carve-out: the change adds config fields whose defaults preserve
+current behaviour, moves the rover only toward stopping rather than toward
+unattended motion, and adds nothing to the 30 Hz hot loop.
+
+Pinned across unit, property, integration, e2e, regression (AQA +
+backwards-compat) and smoke tiers. Both halves were proven to fail: restoring the
+all-ones substitution reddens 9 tests, and making the monitor read through
+regardless of policy reddens 13.
+
 ### Security — the MLflow tracking URI's password could reach ten log events
 
 `mlflow_logger.py` redacted credentials in its *initialization* event and then
