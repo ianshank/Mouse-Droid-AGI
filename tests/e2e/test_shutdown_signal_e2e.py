@@ -93,9 +93,15 @@ def _wait_for_loop(proc: subprocess.Popen[str]) -> list[str]:
     )
 
 
-@pytest.mark.slow
 def test_real_process_halts_motors_on_sigterm() -> None:
-    """SIGTERM to a live process must halt the wheels and exit cleanly."""
+    """SIGTERM to a live process must halt the wheels and exit cleanly.
+
+    Deliberately NOT marked ``slow``: the e2e tier runs in CI as
+    ``-m "not hardware and not slow"``, so that marker would deselect the
+    one test that reproduces S-1 end to end. It costs a single process
+    spawn (~10 s), which is why every assertion for this scenario lives
+    here rather than in a second spawning test.
+    """
     proc = _spawn()
     try:
         transcript = _wait_for_loop(proc)
@@ -124,13 +130,13 @@ def test_real_process_halts_motors_on_sigterm() -> None:
     # ``mock_emergency_stop``, the real BaseESP32Driver logs
     # ``esp32_emergency_stop``. Accept either — this test is about the halt
     # being reached at all, not about which transport served it.
-    assert any(
-        marker in output for marker in ("esp32_emergency_stop", "mock_emergency_stop")
-    ), output[-3000:]
+    assert any(marker in output for marker in ("esp32_emergency_stop", "mock_emergency_stop")), (
+        output[-3000:]
+    )
     # The serial transport was released, so a restart can reclaim the port.
-    assert any(
-        marker in output for marker in ("esp32_disconnected", "mock_esp32_disconnected")
-    ), output[-3000:]
+    assert any(marker in output for marker in ("esp32_disconnected", "mock_esp32_disconnected")), (
+        output[-3000:]
+    )
     # ...and teardown completed, rather than dying partway through.
     assert "orchestrator_stopped" in output, output[-3000:]
 
@@ -141,19 +147,6 @@ def test_real_process_halts_motors_on_sigterm() -> None:
         f"process was killed by signal {-proc.returncode}, not shut down gracefully"
     )
 
-
-@pytest.mark.slow
-def test_real_process_installs_handlers_at_startup() -> None:
-    """The install must be visible in boot logs, so a degraded rover is diagnosable."""
-    proc = _spawn()
-    try:
-        transcript = _wait_for_loop(proc)
-        proc.send_signal(signal.SIGTERM)
-        remaining = proc.communicate(timeout=_SHUTDOWN_TIMEOUT_S)[0]
-    finally:
-        if proc.poll() is None:  # pragma: no cover - only on an unexpected hang
-            proc.kill()
-            proc.wait(timeout=30)
-
-    output = "".join(transcript) + (remaining or "")
+    # The install is visible in boot logs, so a rover that silently degraded
+    # to the no-handler path is diagnosable from the container log alone.
     assert "shutdown_signal_handlers_installed" in output, output[-3000:]
