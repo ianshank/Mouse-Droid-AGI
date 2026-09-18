@@ -61,6 +61,64 @@ again on removal). Verified the unit pins fail with the fix reverted, and that
 reverting it restores the original `voice_lifecycle_failed` traceback at the
 reported frames.
 
+### Fixed — the orchestrator never halted the motors on SIGTERM (S-1)
+
+No signal handler existed anywhere in `src/` — the only `signal` usage was a
+SIGTERM→SIGKILL reaper for the symbolic planner's worker subprocesses. SIGTERM's
+default disposition terminates the process immediately, so `main.py`'s
+`try/finally → orchestrator.stop() → _halt_actuators → esp32.emergency_stop()`
+never ran. Both `docker stop` and `systemctl stop` send SIGTERM first, so on the
+rover the last commanded velocity stayed latched in firmware until SIGKILL landed
+— and afterwards too, since SIGKILL cannot be handled at all. Only SIGINT unwound
+correctly, and a service-managed rover never sees one.
+`scripts/mousedroid_entrypoint.sh` already `exec`s the Python process
+specifically so "signals (SIGTERM from `docker stop`) are delivered directly to
+mousedroid"; this is the Python half that intent was missing.
+
+`mousedroid.common.signals.install_shutdown_handlers` registers SIGTERM/SIGINT on
+the running loop and returns an idempotent uninstaller, degrading to a logged
+warning where `add_signal_handler` is unavailable (Windows, non-main thread) —
+a process that cannot register handlers is exactly as safe as before, and
+strictly safer than one refusing to start. `request_shutdown(reason)` clears
+`_running`, so `run()`'s `while` check lets the in-flight tick finish and returns
+control to the existing `finally`; it is sync, non-blocking and idempotent
+because a signal handler calls it. `run_until_shutdown()` wires the two and adds
+a `loop.shutdown_grace_s` escalation that cancels the run task if the loop will
+not wind down, because the cooperative path depends on reaching that `while`
+check. A cancellation it did not itself trigger is re-raised, so an outer cancel
+is never mistaken for a graceful stop.
+
+Pinned across unit, property, integration, e2e, regression and smoke tiers, with
+POSIX cases guarded by `sys.platform` and verified on Linux. The pins were shown
+to fail, not merely to pass: with `main.py` reverted to `await orch_obj.run()`
+the integration test printed no results at all — pytest was killed mid-file by
+the unhandled SIGTERM, the production symptom exactly — and both e2e transcripts
+ended at `main_loop_starting` with no shutdown logging. Mutating `await run_task`
+to `asyncio.wait({run_task})` turns the outer-cancel pin red, confirming it is
+load-bearing.
+
+`docker-compose.jetson.yml` gains `stop_grace_period: 30s`: Docker's default 10 s
+left almost no margin for `stop()` to drain background tasks, flush the cloud
+sink and close transports once the loop exits.
+
+### Fixed — a missing chassis failsafe was completely silent
+
+`ESP32Config` ships `command_set="legacy"` and `heartbeat_enabled=True`, but
+legacy firmware has no `CMD_HEART_BEAT_SET`, so `LegacyCommandCodec
+.connect_commands` correctly returns `[]` and nothing arms. `_arm_command_set`
+logged `esp32_heartbeat_armed` only when commands existed and said *nothing*
+otherwise, so an operator running the shipped defaults believed they had a
+firmware-side failsafe and had none. It now logs `esp32_heartbeat_unavailable`
+naming both remedies. Log-only — no frame is sent, so the legacy connect sequence
+stays byte-identical.
+
+This is the failsafe the signal handler cannot substitute for: a wedged Jetson or
+a dropped USB link delivers no signal at all. Migrating the rover to
+`command_set="waveshare_stock"` is a wire-protocol change (velocity framing, the
+battery read path, a baud coupling) and is deliberately *not* part of this change;
+`test_shutdown_signal_backwards_compat.py` pins the defaults so it cannot happen
+by accident.
+
 ### Fixed — a dead LiDAR reported 12 m of clearance in every direction (S-2)
 
 `SensorManager._safe_lidar_read` built `default = np.ones(feature_dim)` and

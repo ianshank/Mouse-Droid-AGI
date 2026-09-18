@@ -23,6 +23,19 @@ services:
     # --- Restart policy ---
     restart: unless-stopped
 
+    # --- Shutdown window (S-1) ---
+    # ``docker stop`` sends SIGTERM, then SIGKILL once this window expires.
+    # SIGKILL cannot be handled, so anything still pending at that point is
+    # lost — including the ``emergency_stop`` that halts the wheels.
+    #
+    # The budget inside this window is: ``loop.shutdown_grace_s`` (2 s) for
+    # the 30 Hz loop to wind down, then ``orchestrator.stop()`` draining
+    # background tasks, flushing the cloud sink and closing the telemetry
+    # server and serial transport. Docker's default 10 s left almost no
+    # margin for that tail; 30 s does, and costs nothing when shutdown is
+    # quick — the container exits as soon as the process does.
+    stop_grace_period: 30s
+
     # --- Environment ---
     # F-014: ``/etc/mousedroid/docker.env`` is the authoritative source for
     # per-host secrets and tunables (MOUSEDROID_TELEMETRY_TOKEN,
