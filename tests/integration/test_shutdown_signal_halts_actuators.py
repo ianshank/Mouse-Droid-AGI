@@ -91,6 +91,12 @@ async def test_sigterm_during_run_halts_the_motors() -> None:
         task = asyncio.ensure_future(_run(cfg))
         await _await_loop_running(orch)
 
+        # Only calls made AFTER the signal may satisfy the assertion. run()'s
+        # tick_timeout path also issues emergency_stop, and coverage
+        # instrumentation makes a slow tick plausible -- without this reset
+        # the test could pass without the shutdown path running at all.
+        esp32.emergency_stop.reset_mock()
+
         signal.raise_signal(signal.SIGTERM)
 
         await asyncio.wait_for(task, timeout=_SHUTDOWN_TIMEOUT_S)
@@ -107,6 +113,9 @@ async def test_sigint_during_run_halts_the_motors() -> None:
     with patch("mousedroid.factory.build_orchestrator", return_value=orch):
         task = asyncio.ensure_future(_run(cfg))
         await _await_loop_running(orch)
+
+        # See the SIGTERM case: the tick_timeout path is the other caller.
+        esp32.emergency_stop.reset_mock()
 
         signal.raise_signal(signal.SIGINT)
 
