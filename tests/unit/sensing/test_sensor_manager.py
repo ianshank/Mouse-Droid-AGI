@@ -207,11 +207,23 @@ def _make_manager_with_lidar():
 
 
 async def test_read_all_with_lidar_produces_5_element_mask():
-    """SensorManager with LiDAR produces a 5-element valid_mask."""
+    """SensorManager with LiDAR produces a 5-element valid_mask.
+
+    This manager has a LiDAR but NO feature extractor, so the mask widens to
+    five slots while the LiDAR slot itself reads invalid.
+
+    The ``lidar_features is None`` assertion replaces an earlier
+    ``is not None``, which pinned the fail-open bug rather than the mask
+    width this test is named for: ``_safe_lidar_read`` used to return
+    ``np.ones(feature_dim)`` on the no-extractor path, and because features
+    are normalised range fractions that vector meant "maximum range in every
+    sector" to the safety monitor.
+    """
     mgr, _ = _make_manager_with_lidar()
     bundle = await mgr.read_all()
     assert bundle.valid_mask.shape == (5,)
-    assert bundle.lidar_features is not None
+    assert bundle.valid_mask[4] == 0.0
+    assert bundle.lidar_features is None
 
 
 async def test_read_all_without_lidar_backwards_compat():
@@ -760,3 +772,71 @@ async def test_recovery_attempt_lidar_read_returns_false() -> None:
         recovered = await mgr.recovery_attempt()
     # Vision + distance + motor succeed; lidar read failed → not counted → 3
     assert recovered == 3
+
+
+# ---------------------------------------------------------------------------
+# S-2: _safe_lidar_read fails CLOSED
+#
+# The helper used to return ``np.ones(feature_dim)`` whenever it could not
+# produce real features. LiDAR features are normalised range fractions
+# (``min_in_sector / max_range``), so an all-ones vector says "maximum range
+# in every sector" -- the safety monitor turned it into 12 m of clearance in
+# all directions and the dashboard drew it as a full-range scan. Absence is
+# now reported as ``None``.
+# ---------------------------------------------------------------------------
+
+
+async def test_lidar_read_failure_publishes_no_features():
+    """A raising ``read_scan`` must not fabricate an all-clear feature vector."""
+    mgr, lidar, extractor = _make_manager_with_lidar_extractor()
+    lidar.read_scan.side_effect = RuntimeError("lidar fail")
+
+    bundle = await mgr.read_all()
+
+    assert bundle.valid_mask[4] == 0.0
+    assert bundle.lidar_features is None
+    # The regression this pins: anything non-None here would be read through
+    # by MouseDroidSafetyMonitor as a real distance.
+    assert extractor.feature_dim == 36
+
+
+async def test_lidar_read_without_extractor_publishes_no_features():
+    """A good scan with no extractor wired is still "no features", not all-clear.
+
+    This path returned ``(np.ones(feature_dim), False)``: the ``False`` marked
+    the mask slot invalid, but the vector still travelled on the bundle to
+    every consumer that reads ``lidar_features`` without consulting the mask
+    -- which is exactly what the safety monitor did.
+    """
+    mgr, _lidar, _extractor = _make_manager_with_lidar_extractor()
+    mgr._lidar_feature_extractor = None
+
+    bundle = await mgr.read_all()
+
+    assert bundle.valid_mask[4] == 0.0
+    assert bundle.lidar_features is None
+
+
+async def test_lidar_raw_scan_still_cached_without_an_extractor():
+    """Failing closed on features must not cost the raw telemetry channel.
+
+    ``last_lidar_scan`` feeds the dashboard's raw-LiDAR stream and is cached
+    before feature extraction, so a rig with no extractor still publishes real
+    points even though it publishes no feature vector.
+    """
+    mgr, _lidar, _extractor = _make_manager_with_lidar_extractor()
+    mgr._lidar_feature_extractor = None
+
+    await mgr.read_all()
+
+    assert mgr.last_lidar_scan == [{"angle": 0.0, "distance": 1.0}]
+
+
+async def test_lidar_read_failure_leaves_ring_buffer_holding_none():
+    """The ring buffer records the absence rather than a synthetic sample."""
+    mgr, lidar, _extractor = _make_manager_with_lidar_extractor()
+    lidar.read_scan.side_effect = RuntimeError("lidar fail")
+
+    await mgr.read_all()
+
+    assert list(mgr._lidar_buf) == [None]

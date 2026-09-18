@@ -8,6 +8,7 @@ enforcement.
 from __future__ import annotations
 
 from itertools import pairwise
+from typing import Literal
 
 from pydantic import Field, model_validator
 
@@ -257,6 +258,49 @@ class SafetyConfig(StrictBaseModel):
     )
     lidar_max_range_m: float = Field(
         12.0, gt=0, description="LiDAR max range for clearance conversion (m)"
+    )
+    lidar_unavailable_policy: Literal["ignore", "degrade", "emergency"] = Field(
+        "ignore",
+        description=(
+            "How the safety monitor treats a tick whose LiDAR features are "
+            "absent or empty. Before this field existed the sensing layer "
+            "substituted an all-ones feature vector on a failed read; because "
+            "features are normalised range fractions (min_in_sector / "
+            "max_range), all-ones means MAXIMUM RANGE IN EVERY SECTOR, so a "
+            "dead LiDAR reported lidar_max_range_m of clearance in all "
+            "directions and no interlock fired. "
+            "'ignore' (the default) keeps that read-through behaviour "
+            "unchanged: the clearance block is skipped and lidar_min_dist_m "
+            "stays infinite. 'degrade' reports the worst case instead "
+            "(lidar_min_dist_m = 0.0, lidar_clearance_ok = False), so "
+            "SafetyProjector's brake and tight-quarters clamps throttle "
+            "motion, WITHOUT raising an emergency stop. 'emergency' does the "
+            "same and additionally raises is_emergency, halting the rover. "
+            "Set 'degrade' or 'emergency' on any rig whose LiDAR is a "
+            "load-bearing obstacle sensor. On a rig with NO LiDAR fitted "
+            "those values fire every tick — deliberately: the monitor cannot "
+            "distinguish 'no LiDAR fitted' from 'LiDAR dead', so the operator "
+            "declares which rig this is."
+        ),
+    )
+    lidar_unavailable_grace_s: float = Field(
+        0.0,
+        ge=0,
+        description=(
+            "Seconds the LiDAR may stay unavailable before "
+            "lidar_unavailable_policy fires, so one dropped scan does not "
+            "brake or emergency-stop the rover. The clock restarts on every "
+            "tick carrying usable features, and is seeded on the monitor's "
+            "first LiDAR-less tick so a LiDAR that is dead FROM BOOT still "
+            "trips: the generic sensor_stale_s check never fires for a mask "
+            "slot that was never valid, which left a permanently dead LiDAR "
+            "failing open forever. The window is exclusive ('fires once "
+            "elapsed >= grace'), so the default 0.0 really is NO grace: the "
+            "policy fires on the first tick without usable features. Raise it "
+            "on a rig whose LiDAR drops the occasional scan — 0.1 tolerates "
+            "three missed scans at the 30 Hz loop rate. Ignored while "
+            "lidar_unavailable_policy is 'ignore'."
+        ),
     )
     sensor_recovery_attempts: int = Field(
         1,
