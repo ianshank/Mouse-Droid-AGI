@@ -27,22 +27,34 @@ the running loop and returns an idempotent uninstaller, degrading to a logged
 warning where `add_signal_handler` is unavailable (Windows, non-main thread) —
 a process that cannot register handlers is exactly as safe as before, and
 strictly safer than one refusing to start. `request_shutdown(reason)` clears
-`_running`, so `run()`'s `while` check lets the in-flight tick finish and returns
-control to the existing `finally`; it is sync, non-blocking and idempotent
-because a signal handler calls it. `run_until_shutdown()` wires the two and adds
-a `loop.shutdown_grace_s` escalation that cancels the run task if the loop will
-not wind down, because the cooperative path depends on reaching that `while`
-check. A cancellation it did not itself trigger is re-raised, so an outer cancel
-is never mistaken for a graceful stop.
+`_running`, so `run()`'s `while` check lets the in-flight tick finish; it is
+sync, non-blocking and idempotent because a signal handler calls it.
+
+`serve()` is the entry point, and it owns the *whole* lifecycle — handlers,
+`start()`, the loop, and `stop()` in a `finally`. Bracketing only the loop was
+not enough: `start()` connects the ESP32 and brings up the sensors, which takes
+real time on the rover, and the firmware may still hold a velocity latched from
+a previous unclean stop — so the machine can be physically moving throughout
+bring-up, and a SIGTERM in that window still died with no teardown. A stop
+arriving during `start()` is latched in `_shutdown_requested`; `start()` ends
+with `self._running = not self._shutdown_requested` rather than an unconditional
+`True`, so the request cannot be overwritten, the loop is never entered, and
+control falls straight through to `stop()`.
+
+`serve()` also adds a `loop.shutdown_grace_s` escalation that cancels the run
+task if the loop will not wind down, because the cooperative path depends on
+reaching that `while` check. A cancellation it did not itself trigger is
+re-raised, so an outer cancel is never mistaken for a graceful stop.
 
 Pinned across unit, property, integration, e2e, regression and smoke tiers, with
 POSIX cases guarded by `sys.platform` and verified on Linux. The pins were shown
 to fail, not merely to pass: with `main.py` reverted to `await orch_obj.run()`
 the integration test printed no results at all — pytest was killed mid-file by
-the unhandled SIGTERM, the production symptom exactly — and both e2e transcripts
+the unhandled SIGTERM, the production symptom exactly — and the e2e transcripts
 ended at `main_loop_starting` with no shutdown logging. Mutating `await run_task`
-to `asyncio.wait({run_task})` turns the outer-cancel pin red, confirming it is
-load-bearing.
+to `asyncio.wait({run_task})` turns the outer-cancel pin red, and restoring
+`start()`'s unconditional `self._running = True` turns the bring-up-window pin
+red — both confirming those pins are load-bearing.
 
 `docker-compose.jetson.yml` gains `stop_grace_period: 30s`: Docker's default 10 s
 left almost no margin for `stop()` to drain background tasks, flush the cloud

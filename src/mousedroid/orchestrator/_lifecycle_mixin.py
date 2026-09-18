@@ -75,8 +75,15 @@ class _LifecycleMixin(_OrchestratorState):
         # engine is started above, BEFORE the 30 Hz loop begins). This is
         # the only greeting touch-point; the hot loop never sees it.
         await self._maybe_fire_startup_greeting()
-        self._running = True
-        _log.info("orchestrator_started")
+        # S-1: honour a shutdown that arrived DURING bring-up. A plain
+        # ``self._running = True`` here would overwrite the flag
+        # ``request_shutdown`` just cleared, so the signal would be swallowed
+        # and the loop would start anyway — with the operator's stop already
+        # sent and no second one coming.
+        self._running = not self._shutdown_requested
+        if self._shutdown_requested:
+            _log.warning("orchestrator_started_into_shutdown")
+        _log.info("orchestrator_started", running=self._running)
 
     async def _maybe_fire_startup_greeting(self) -> None:
         """Fire the startup greeting once iff configured + wired.
@@ -391,40 +398,57 @@ class _LifecycleMixin(_OrchestratorState):
             reason: What asked for the stop — a signal name such as
                 ``"SIGTERM"``, surfaced in the log event.
         """
-        if not self._running:
-            _log.info("shutdown_requested_while_idle", reason=reason)
+        if self._shutdown_requested:
+            _log.info("shutdown_already_requested", reason=reason)
             return
-        _log.warning("shutdown_requested", reason=reason)
+        # Latch BEFORE clearing ``_running``: ``start()`` reads the latch to
+        # decide whether to enable the loop at all, so a signal that lands
+        # mid-bring-up is remembered rather than overwritten.
+        self._shutdown_requested = True
+        _log.warning("shutdown_requested", reason=reason, was_running=self._running)
         self._running = False
 
-    async def run_until_shutdown(self) -> None:
-        """Run the control loop, exiting cleanly on SIGTERM/SIGINT.
+    async def serve(self) -> None:
+        """Own the whole process lifecycle: signals, start, run, stop (S-1).
 
-        The entry point calls this instead of :meth:`run` so that a
-        service-manager stop unwinds through the caller's ``finally``
-        rather than terminating the process outright. :meth:`run` itself is
-        unchanged and still usable directly by tests and embedders that
-        drive their own lifecycle.
+        The entry point calls this instead of driving
+        :meth:`start`/:meth:`run`/:meth:`stop` itself, because the signal
+        handlers must be installed *before* :meth:`start` rather than around
+        the loop alone. ``start()`` connects the ESP32 and brings up the
+        sensors, which takes real time on the rover — and the firmware may
+        still be holding a velocity latched from a previous unclean stop, so
+        the machine can be physically moving throughout. A SIGTERM in that
+        window used to take the default disposition and kill the process
+        with no teardown at all.
 
-        Two-stage by design. A signal first asks the loop to stop
-        cooperatively (:meth:`request_shutdown`); if it has not exited
-        within ``cfg.loop.shutdown_grace_s`` the run task is cancelled
-        outright. The escalation exists because the cooperative path
-        depends on the loop reaching its ``while`` check — a tick that
-        swallows cancellation would otherwise stall shutdown past the
-        service manager's own timeout, and the SIGKILL that follows cannot
-        be handled at all, leaving the last velocity latched in firmware.
+        Shutdown is two-stage. A signal asks the loop to stop cooperatively
+        (:meth:`request_shutdown`); if it has not exited within
+        ``cfg.loop.shutdown_grace_s`` the run task is cancelled outright,
+        because the cooperative path depends on the loop reaching its
+        ``while`` check and a tick that swallowed cancellation would
+        otherwise stall past the service manager's own timeout — after which
+        SIGKILL cannot be handled at all.
+
+        A signal that lands during bring-up is honoured rather than raced:
+        :meth:`start` reads ``_shutdown_requested`` instead of unconditionally
+        setting ``_running``, so the loop is never entered and control falls
+        straight through to :meth:`stop`.
+
+        :meth:`stop` runs in a ``finally``, so it is reached whether startup
+        failed, the loop raised, or the shutdown was graceful — it is the
+        only path to :meth:`_halt_actuators`.
 
         On a platform without asyncio signal handlers (Windows) the
-        registration degrades to a logged warning and this behaves exactly
-        like ``await self.run()``.
+        registration degrades to a logged warning and this still runs the
+        ordinary start/run/stop sequence.
 
         Raises:
-            Exception: Whatever :meth:`run` raised. A cancellation this
-                method did not itself trigger propagates too, so an
-                outer-task cancel is never mistaken for a graceful stop.
+            Exception: Whatever :meth:`start` or :meth:`run` raised. A
+                cancellation this method did not itself trigger propagates
+                too, so an outer-task cancel is never mistaken for a
+                graceful stop.
         """
-        run_task = asyncio.ensure_future(self.run())
+        run_task: asyncio.Task[None] | None = None
         escalations: set[asyncio.Task[None]] = set()
         escalated = False
         grace_s = self._cfg.loop.shutdown_grace_s
@@ -432,14 +456,13 @@ class _LifecycleMixin(_OrchestratorState):
         async def _escalate(reason: str) -> None:
             nonlocal escalated
             await self._clock.sleep(grace_s)
-            if run_task.done():
+            # ``run_task is None`` means the signal arrived before the loop
+            # started; the latch has already prevented it from starting, so
+            # there is nothing to cancel.
+            if run_task is None or run_task.done():
                 return
             escalated = True
-            _log.error(
-                "shutdown_escalated_to_cancel",
-                reason=reason,
-                grace_s=grace_s,
-            )
+            _log.error("shutdown_escalated_to_cancel", reason=reason, grace_s=grace_s)
             run_task.cancel()
 
         def _on_signal(name: str) -> None:
@@ -448,15 +471,24 @@ class _LifecycleMixin(_OrchestratorState):
 
         uninstall = install_shutdown_handlers(_on_signal)
         try:
-            await run_task
-        except asyncio.CancelledError:
-            if not escalated:
-                # Not ours — an outer cancel. Never absorb it.
-                raise
-            _log.warning("shutdown_loop_cancelled_after_grace", grace_s=grace_s)
+            await self.start()
+            if self._shutdown_requested:
+                # Stop was requested during bring-up. Never enter the loop —
+                # the ``finally`` below still halts the actuators.
+                _log.warning("shutdown_before_loop_start")
+                return
+            run_task = asyncio.ensure_future(self.run())
+            try:
+                await run_task
+            except asyncio.CancelledError:
+                if not escalated:
+                    # Not ours — an outer cancel. Never absorb it.
+                    raise
+                _log.warning("shutdown_loop_cancelled_after_grace", grace_s=grace_s)
         finally:
             uninstall()
             await cancel_and_drain(escalations)
+            await self.stop()
 
     async def health_check(self) -> dict[str, object]:
         """Run a quick health check of all subsystems.
