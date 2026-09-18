@@ -61,6 +61,35 @@ again on removal). Verified the unit pins fail with the fix reverted, and that
 reverting it restores the original `voice_lifecycle_failed` traceback at the
 reported frames.
 
+Review follow-up (PR #230) surfaced three further gaps, each confirmed against the
+tree before acting on it.
+
+`robot_id`, `trace_id` and `channel` are bound into `structlog.contextvars` — by
+`configure_logging` and by `orchestrator/mission_dispatcher.py` per dispatch —
+rather than written by a processor, and `merge_contextvars` is implemented as
+`ctx.update(event_dict)`, so the *caller* won outright. A subsystem failure
+recorded during a mission dispatch could silently rewrite that dispatch's
+`trace_id`, breaking the correlation the dispatcher binds it for. All three are
+now reserved, pinned by a test that drives the real recorder through the real
+chain and fails with `robot_id` reading `spoof` when the reservation is removed.
+
+`telemetry/server/_ws_handlers.py`'s `ws_negotiation_failed` path passes
+`extra={"reason": ...}`, which collided with the recorder's *own* `reason` field:
+the emitted line carried the WebSocket close reason where it should have carried
+`ws_negotiation_failed`. The guard namespaces it to `extra_reason` and the
+recorder's value survives. That is a corrected field rather than a preserved one,
+so it is called out here for anyone reading that log line.
+
+The AQA no longer depends on a hard-coded canary list for keys the chain *writes*:
+it emits a bare event and asserts every key that comes back is declared reserved,
+so a newly added processor or contextvar is caught even when nobody thinks to add
+a canary. The backwards-compat inventory is now derived by walking the AST of
+`src/` for `record(..., extra=...)` sites rather than transcribed by hand — the
+hand-written list had silently missed five of the fifteen call sites, which is the
+same staleness it was meant to guard against. A call site whose key collides now
+fails a pin that names the file and key, so the rename has to be a decision;
+verified by pointing an existing site at a reserved key and watching it go red.
+
 ### Fixed — the orchestrator never halted the motors on SIGTERM (S-1)
 
 No signal handler existed anywhere in `src/` — the only `signal` usage was a

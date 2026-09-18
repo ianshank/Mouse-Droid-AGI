@@ -100,9 +100,22 @@ def configure_logging(
 #   exc_info    consumed by ``structlog.processors.format_exc_info``
 #   exception   rendered output of ``format_exc_info``
 #
-# Adding a processor that writes a new key means adding that key here.
+# The second group is bound into ``structlog.contextvars`` rather than written by
+# a processor, but collides just as destructively.  ``merge_contextvars`` is
+# implemented as ``ctx.update(event_dict)``, so the *caller* wins: an ``extra``
+# carrying one of these silently replaces the real correlation id for that line
+# instead of being ignored.
+#
+#   robot_id    bound by :func:`configure_logging` below
+#   trace_id    bound by ``orchestrator/mission_dispatcher.py`` per dispatch
+#   channel     bound alongside ``trace_id`` by the same dispatcher
+#
+# Adding a processor that writes a new key -- or binding a new contextvar --
+# means adding that key here. ``tests/regression/test_reserved_log_keys_aqa.py``
+# derives the written set from a live log call and fails if one is missing.
 RESERVED_LOG_KEYS: Final[frozenset[str]] = frozenset(
     {
+        # processor- and call-signature-owned
         "event",
         "level",
         "logger",
@@ -111,6 +124,10 @@ RESERVED_LOG_KEYS: Final[frozenset[str]] = frozenset(
         "stack",
         "exc_info",
         "exception",
+        # contextvar-bound correlation ids
+        "robot_id",
+        "trace_id",
+        "channel",
     }
 )
 
