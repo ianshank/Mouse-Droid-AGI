@@ -15,14 +15,20 @@
 4. **Safety Filter Projection**: Every action passes through `self._safety_monitor.evaluate(...)`
    (`SafetyMonitorProtocol`) before `_maybe_project_action` and serial dispatch to the ESP32
    driver.
-5. **Graceful Shutdown (S-1)**: Entry points drive the loop via `run_until_shutdown()`, never
-   `run()` directly — `run()` alone has no signal handling, so SIGTERM (`docker stop`,
-   `systemctl stop`) terminates the process before any `finally` unwinds and `_halt_actuators`'
-   `emergency_stop()` never fires, leaving the last velocity latched in firmware. A signal calls
-   `request_shutdown(reason)` (sync, idempotent, non-blocking — it is a signal handler), which
-   clears `_running` so the in-flight tick finishes; if the loop has not exited within
-   `cfg.loop.shutdown_grace_s` the run task is cancelled outright. Signal registration is
-   POSIX-only and degrades to a logged warning elsewhere. Note the firmware-side chassis
+5. **Graceful Shutdown (S-1)**: Entry points call `serve()`, which owns the whole lifecycle —
+   signal handlers, `start()`, the loop, and `stop()` in a `finally`. Never drive
+   `start()`/`run()`/`stop()` directly from an entry point: handlers must be installed *before*
+   `start()`, because `start()` connects the ESP32 and brings up the sensors while the firmware
+   may still hold a velocity latched from a previous unclean stop — the rover can be moving
+   throughout bring-up. Without this, SIGTERM (`docker stop`, `systemctl stop`) terminates the
+   process before any `finally` unwinds and `_halt_actuators`' `emergency_stop()` never fires.
+   A signal calls `request_shutdown(reason)` (sync, idempotent, non-blocking — it is a signal
+   handler), which latches `_shutdown_requested` and clears `_running` so the in-flight tick
+   finishes. `start()` ends with `self._running = not self._shutdown_requested`, never an
+   unconditional `True`, so a stop that lands mid-bring-up is honoured rather than overwritten.
+   If the loop has not exited within `cfg.loop.shutdown_grace_s` the run task is cancelled
+   outright. Signal registration is POSIX-only and degrades to a logged warning elsewhere;
+   `run()` remains available for embedders driving their own lifecycle. Note the firmware-side chassis
    heartbeat (`comms/command_set.py`, `ESP32Config.heartbeat_enabled`) is the *complementary*
    failsafe covering what this cannot: a wedged Jetson or dropped USB link delivers no signal
    at all. It only arms under `command_set: waveshare_stock`; under the `legacy` default the

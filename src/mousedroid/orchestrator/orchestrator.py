@@ -443,6 +443,10 @@ class MouseDroidOrchestrator(
         # silently overwrite ``MissionLifecycle._mission`` state.
         self._mission_seq: int = 0
         self._running = False
+        # S-1 latch: a shutdown signal can arrive DURING ``start()``, before
+        # ``_running`` is ever set True. Without a latch that request would be
+        # overwritten by ``start()``'s own assignment and silently lost.
+        self._shutdown_requested = False
         self._tick_count: int = 0
         self._consolidation_task: asyncio.Task[Any] | None = None
         self._consolidation_tasks: set[asyncio.Task[Any]] = set()

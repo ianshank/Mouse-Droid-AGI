@@ -52,6 +52,88 @@ and a ratcheting regression gate records the nine existing names with a reason
 each while failing on any new one. `query_world_model_pose` is unimplementable
 rather than pending: there is no pose estimator, odometry source, scan matcher
 or map anywhere in `src/`, and the chassis is encoder-less.
+### Fixed — a caller-supplied `event` field crashed the subsystem failure recorder
+
+`PrometheusFailureRecorder.record` merged its caller-controlled `extra` mapping
+into the log payload unguarded and then splatted it:
+`log_fn("subsystem_failure_recorded", **log_kv)`. structlog's bound-logger
+methods are `meth(event, **kw)`, so an `extra` carrying `event` supplied that
+parameter twice and raised
+`TypeError: ... meth() got multiple values for argument 'event'`.
+
+`voice/rocky.py::_record_drop` does exactly that — it passes
+`extra={"event": event, ...}` — so every cooldown or rate-limit drop of a voice
+event raised instead of logging. Observed in
+`python -m mousedroid.main --mock-hardware` during orchestrator shutdown, where
+the `shutdown` lifecycle event is dropped by the cooldown gate:
+`_voice_lifecycle` caught the `TypeError` and logged `voice_lifecycle_failed`
+with the traceback as its payload. Shutdown survived only because that one
+caller happens to wrap `speak` in `try/except`.
+
+`inc_subsystem_failure` runs as `record`'s first statement, so the counter had
+already been incremented when the raise happened: drops were *counted* on
+`/metrics` but the `subsystem_failure_recorded` line explaining them never
+existed. A metric with no corresponding log is the worst shape for this bug —
+the dashboard looks instrumented.
+
+Fixed at the recorder rather than at the one offending call site, so no future
+caller can reintroduce it. `logging/setup.py` gains `RESERVED_LOG_KEYS` and
+`safe_log_extra()`, placed directly beneath `configure_logging` because that
+function's `processors` list is what *defines* the reserved set; each key
+carries a comment naming the processor that claims it. Colliding keys are
+renamed (`event` → `extra_event`, escalating the prefix if that name is also
+taken) rather than dropped, so no caller value is lost, and keys that collide
+with nothing pass through byte-identical — the ten well-behaved `record` call
+sites keep their existing field names, so no dashboard or alert rule moves.
+
+Probing the live processor chain rather than `structlog.testing.capture_logs`
+(which installs its own short chain and cannot observe production behaviour)
+surfaced a second, silent defect of the same family: `subsystem`, `reason` and
+`log_level` all round-tripped, so any caller could overwrite the recorder's own
+fields in the emitted event. Passing `occupied=log_kv` covers both the
+structlog-owned and recorder-owned names in one call.
+
+Every pre-existing test of the drop path injected a recording test double that
+merely stores the mapping, so the real splat was never executed — hence a
+crash in a well-covered module. The new integration tier wires the
+factory-built voice engine to the concrete `PrometheusFailureRecorder`, and one
+assertion pins the invariant that actually broke: the counter's value must
+equal the number of log lines. The AQA pin probes the live chain and fails if a
+newly added processor claims a key absent from `RESERVED_LOG_KEYS`; verified it
+detects that drift by injecting `CallsiteParameterAdder` (9 failures, green
+again on removal). Verified the unit pins fail with the fix reverted, and that
+reverting it restores the original `voice_lifecycle_failed` traceback at the
+reported frames.
+
+Review follow-up (PR #230) surfaced three further gaps, each confirmed against the
+tree before acting on it.
+
+`robot_id`, `trace_id` and `channel` are bound into `structlog.contextvars` — by
+`configure_logging` and by `orchestrator/mission_dispatcher.py` per dispatch —
+rather than written by a processor, and `merge_contextvars` is implemented as
+`ctx.update(event_dict)`, so the *caller* won outright. A subsystem failure
+recorded during a mission dispatch could silently rewrite that dispatch's
+`trace_id`, breaking the correlation the dispatcher binds it for. All three are
+now reserved, pinned by a test that drives the real recorder through the real
+chain and fails with `robot_id` reading `spoof` when the reservation is removed.
+
+`telemetry/server/_ws_handlers.py`'s `ws_negotiation_failed` path passes
+`extra={"reason": ...}`, which collided with the recorder's *own* `reason` field:
+the emitted line carried the WebSocket close reason where it should have carried
+`ws_negotiation_failed`. The guard namespaces it to `extra_reason` and the
+recorder's value survives. That is a corrected field rather than a preserved one,
+so it is called out here for anyone reading that log line.
+
+The AQA no longer depends on a hard-coded canary list for keys the chain *writes*:
+it emits a bare event and asserts every key that comes back is declared reserved,
+so a newly added processor or contextvar is caught even when nobody thinks to add
+a canary. The backwards-compat inventory is now derived by walking the AST of
+`src/` for `record(..., extra=...)` sites rather than transcribed by hand — the
+hand-written list had silently missed five of the fifteen call sites, which is the
+same staleness it was meant to guard against. A call site whose key collides now
+fails a pin that names the file and key, so the rename has to be a decision;
+verified by pointing an existing site at a reserved key and watching it go red.
+
 ### Fixed — the orchestrator never halted the motors on SIGTERM (S-1)
 
 No signal handler existed anywhere in `src/` — the only `signal` usage was a
@@ -71,22 +153,34 @@ the running loop and returns an idempotent uninstaller, degrading to a logged
 warning where `add_signal_handler` is unavailable (Windows, non-main thread) —
 a process that cannot register handlers is exactly as safe as before, and
 strictly safer than one refusing to start. `request_shutdown(reason)` clears
-`_running`, so `run()`'s `while` check lets the in-flight tick finish and returns
-control to the existing `finally`; it is sync, non-blocking and idempotent
-because a signal handler calls it. `run_until_shutdown()` wires the two and adds
-a `loop.shutdown_grace_s` escalation that cancels the run task if the loop will
-not wind down, because the cooperative path depends on reaching that `while`
-check. A cancellation it did not itself trigger is re-raised, so an outer cancel
-is never mistaken for a graceful stop.
+`_running`, so `run()`'s `while` check lets the in-flight tick finish; it is
+sync, non-blocking and idempotent because a signal handler calls it.
+
+`serve()` is the entry point, and it owns the *whole* lifecycle — handlers,
+`start()`, the loop, and `stop()` in a `finally`. Bracketing only the loop was
+not enough: `start()` connects the ESP32 and brings up the sensors, which takes
+real time on the rover, and the firmware may still hold a velocity latched from
+a previous unclean stop — so the machine can be physically moving throughout
+bring-up, and a SIGTERM in that window still died with no teardown. A stop
+arriving during `start()` is latched in `_shutdown_requested`; `start()` ends
+with `self._running = not self._shutdown_requested` rather than an unconditional
+`True`, so the request cannot be overwritten, the loop is never entered, and
+control falls straight through to `stop()`.
+
+`serve()` also adds a `loop.shutdown_grace_s` escalation that cancels the run
+task if the loop will not wind down, because the cooperative path depends on
+reaching that `while` check. A cancellation it did not itself trigger is
+re-raised, so an outer cancel is never mistaken for a graceful stop.
 
 Pinned across unit, property, integration, e2e, regression and smoke tiers, with
 POSIX cases guarded by `sys.platform` and verified on Linux. The pins were shown
 to fail, not merely to pass: with `main.py` reverted to `await orch_obj.run()`
 the integration test printed no results at all — pytest was killed mid-file by
-the unhandled SIGTERM, the production symptom exactly — and both e2e transcripts
+the unhandled SIGTERM, the production symptom exactly — and the e2e transcripts
 ended at `main_loop_starting` with no shutdown logging. Mutating `await run_task`
-to `asyncio.wait({run_task})` turns the outer-cancel pin red, confirming it is
-load-bearing.
+to `asyncio.wait({run_task})` turns the outer-cancel pin red, and restoring
+`start()`'s unconditional `self._running = True` turns the bring-up-window pin
+red — both confirming those pins are load-bearing.
 
 `docker-compose.jetson.yml` gains `stop_grace_period: 30s`: Docker's default 10 s
 left almost no margin for `stop()` to drain background tasks, flush the cloud

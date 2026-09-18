@@ -18,7 +18,7 @@
   firmware's failsafe, and is sequenced against this repo's own control plane. Separately, this
   review found **eleven safety defects the proposal did not** (2 Critical, 4 High, 3 Medium,
   2 Low), several more severe than anything in it. **Both Criticals have since been fixed on the
-  base branch** — S-2 in `c6f701d` (#227) and S-1 in `a3927e1` (#229) — each spun off from this
+  base branch** — S-2 in `c6f701d` (#227) and S-1 in `a3927e1` (#229) + `89fd749` (#231) — each spun off from this
   review; the High and below remain open.
 
 > **Scope note.** This is a findings-only review (ADR-013 audit posture). It reserves no
@@ -45,8 +45,8 @@
    halt lives in a `finally` that `docker stop` and `systemctl stop` both bypass. The container
    entrypoint `exec`s specifically so SIGTERM reaches Python — and Python then ignores it. This
    is the *normal* shutdown path, not an edge case, and it is strictly worse than the `kill -9`
-   scenario the proposal analysed. **Fixed on trunk in `a3927e1` (#229)** after this review filed
-   it. The residual risk stays with S-11: a wedged Jetson or dropped USB link delivers no signal
+   scenario the proposal analysed. **Fixed on trunk in `a3927e1` (#229), extended by `89fd749` (#231)** after this review
+   filed it. The residual risk stays with S-11: a wedged Jetson or dropped USB link delivers no signal
    at all, so only the chassis-side failsafe stops the wheels there. [Certain — §4, S-1]
 
 ---
@@ -89,7 +89,7 @@ Ordered by severity. Each is a live defect on the shipped configuration.
 
 | ID | Severity | Defect | Evidence |
 |---|---|---|---|
-| **S-1** | **Critical** | ~~**`SIGTERM` does not stop the motors.**~~ **RESOLVED ON TRUNK** in `a3927e1` (#229), landed while this branch was open. No signal handler existed in `src/`; the motor halt lived in a `finally` that `docker stop` and `systemctl stop` both bypass, so the *normal* shutdown path never halted the wheels — the container entrypoint `exec`s specifically so SIGTERM reaches Python, and Python then ignored it. Now handled via asyncio signal handlers. Note this does **not** cover a wedged Jetson or a dropped USB link, neither of which delivers a signal — only the chassis-side failsafe does, which is S-11 | `src/mousedroid/main.py`, `src/mousedroid/orchestrator/_lifecycle_mixin.py` |
+| **S-1** | **Critical** | ~~**`SIGTERM` does not stop the motors.**~~ **RESOLVED ON TRUNK** in `a3927e1` (#229), extended by `89fd749` (#231) to cover the bring-up window before the handlers install. Landed while this branch was open. No signal handler existed in `src/`; the motor halt lived in a `finally` that `docker stop` and `systemctl stop` both bypass, so the *normal* shutdown path never halted the wheels — the container entrypoint `exec`s specifically so SIGTERM reaches Python, and Python then ignored it. Now handled via asyncio signal handlers. Note this does **not** cover a wedged Jetson or a dropped USB link, neither of which delivers a signal — only the chassis-side failsafe does, which is S-11 | `src/mousedroid/main.py`, `src/mousedroid/orchestrator/_lifecycle_mixin.py` |
 | **S-2** | **Critical** | ~~**A dead LiDAR fails open.**~~ **RESOLVED ON TRUNK** in `c6f701d` (#227), landed while this branch was open. `_safe_lidar_read` returned `np.ones(feature_dim)` on any exception; features are normalised range fractions, so all-ones asserted *maximum range in every sector* and the monitor computed 12.0 m of clearance with `lidar_clearance_ok=True`. It now returns `(None, False)` on every path that does not produce real features, unconditionally. Note the remaining nuance: what an absent reading *means* is gated behind the new `SafetyConfig.lidar_unavailable_policy`, which defaults to `ignore`, so **no rig gains the stopping interlock until an operator sets the policy** — the fabricated clearance is gone, the interlock is opt-in | `src/mousedroid/sensing/manager.py`, `src/mousedroid/config/schema/reward_safety.py` |
 | **S-3** | **High** | **No battery voltage can trigger an emergency stop on the production overlay.** `battery_critical_v`/`battery_warn_v` are `0.0` (disabled by documented semantics), and an unreadable battery returns a literal `0.0`, which the implausibility guard routes to a log-only branch. A genuinely flat pack reads plausible and trips nothing | `config/jetson_production.yaml`, `src/mousedroid/safety/monitor.py::evaluate`, `src/mousedroid/comms/base_driver.py::get_battery_voltage` |
 | **S-4** | **High** | **Preflight reports the ESP32 healthy when it is physically dead.** `_check_esp32` calls `build_esp32_driver` and asserts the result is not `None` — no `connect()`, no frame, no response. With `esp32.enabled: false` the factory returns `MockESP32Driver`, so the check reports `OK detail="driver=MockESP32Driver"`. Compare `_check_lidar`, which genuinely actuates and asserts angular coverage. This runs as `ExecStartPre` on both systemd units | `src/mousedroid/validation/preflight.py::_check_esp32` vs `::_check_lidar` |

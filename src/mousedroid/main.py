@@ -133,15 +133,13 @@ async def _run(
             # Explicit check, not ``assert`` — asserts are stripped under -O
             # (PYTHONOPTIMIZE=1 is the Jetson Docker default).
             raise TypeError(f"build_orchestrator returned {type(orch_obj).__name__}")
-        await orch_obj.start()
-        try:
-            # ``run_until_shutdown`` — not ``run`` — so a SIGTERM from
-            # ``docker stop`` / ``systemctl stop`` unwinds through the
-            # ``finally`` below instead of terminating the process outright
-            # and leaving the last velocity latched in firmware (S-1).
-            await orch_obj.run_until_shutdown()
-        finally:
-            await orch_obj.stop()
+        # ``serve()`` owns start/run/stop AND the signal handlers, which must
+        # be installed before ``start()`` rather than around the loop alone:
+        # ``start()`` connects the ESP32 and brings up the sensors, and the
+        # firmware may still hold a velocity latched from a previous unclean
+        # stop, so the rover can be moving throughout bring-up. A SIGTERM in
+        # that window previously killed the process with no teardown (S-1).
+        await orch_obj.serve()
     finally:
         if cloud_logging_sink is not None:
             try:

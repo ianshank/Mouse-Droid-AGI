@@ -26,8 +26,8 @@ _SIGNAL_NAMES = st.sampled_from(["SIGTERM", "SIGINT"])
 class _ShutdownFlag(_LifecycleMixin):
     """Minimal subclass carrying only what ``request_shutdown`` touches.
 
-    ``request_shutdown`` reads and writes ``self._running`` and nothing
-    else, so inheriting it exercises the real method — not a
+    ``request_shutdown`` touches only ``self._running`` and
+    ``self._shutdown_requested``, so inheriting it exercises the real method — not a
     reimplementation — without building a whole orchestrator per Hypothesis
     example. Inherited rather than rebound onto a plain class, so nothing
     is mutated between examples.
@@ -35,6 +35,9 @@ class _ShutdownFlag(_LifecycleMixin):
 
     def __init__(self, *, running: bool) -> None:
         self._running = running
+        # The S-1 latch ``request_shutdown`` reads to decide whether this is
+        # a first request or a repeat.
+        self._shutdown_requested = False
 
 
 @given(reasons=st.lists(_SIGNAL_NAMES, min_size=1, max_size=8))
