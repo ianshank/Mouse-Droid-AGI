@@ -34,7 +34,7 @@ physically dead ESP32. Those are recorded for triage, not fixed here.
   `SkillRegistry.tools_for` and ratcheted by a baseline gate. `tools_for` has no production
   caller yet, so the gate is what bites today; the log is latent until delegation is wired.
 
-- `esp32_failsafe` preflight check + `esp32_heartbeat_not_armed` connect warning — the
+- `esp32_failsafe` preflight check + `esp32_heartbeat_unavailable` connect warning — the
   chassis failsafe is dormant on every shipped config (`command_set` defaults `legacy`), while
   `heartbeat_enabled: true` and a 3000 ms window read as "armed". Nothing said so: the schema
   warns only when the window is too tight, and `_arm_command_set` logged only on success.

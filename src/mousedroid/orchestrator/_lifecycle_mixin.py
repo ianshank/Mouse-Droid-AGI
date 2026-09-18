@@ -10,6 +10,7 @@ import contextlib
 from typing import Any
 
 from mousedroid.common.async_utils import cancel_and_drain, spawn_tracked
+from mousedroid.common.signals import install_shutdown_handlers
 from mousedroid.logging.setup import get_logger
 from mousedroid.orchestrator._state import _OrchestratorState
 
@@ -372,6 +373,90 @@ class _LifecycleMixin(_OrchestratorState):
             sleep_time = max(0.0, control_period - elapsed)
             if sleep_time > 0:
                 await self._clock.sleep(sleep_time)
+
+    def request_shutdown(self, reason: str) -> None:
+        """Ask the control loop to wind down cooperatively (S-1).
+
+        :meth:`run` is ``while self._running:``, so clearing the flag lets
+        the in-flight tick finish and returns control to the caller's
+        ``finally`` — which is where :meth:`stop` (and with it
+        :meth:`_halt_actuators`' ``emergency_stop``) lives. Nothing is
+        cancelled and no actuator command is issued here.
+
+        Safe to call from a signal handler: it does not block, does not
+        await, and is idempotent, so a SIGINT arriving behind a SIGTERM is
+        a no-op rather than a second teardown.
+
+        Args:
+            reason: What asked for the stop — a signal name such as
+                ``"SIGTERM"``, surfaced in the log event.
+        """
+        if not self._running:
+            _log.info("shutdown_requested_while_idle", reason=reason)
+            return
+        _log.warning("shutdown_requested", reason=reason)
+        self._running = False
+
+    async def run_until_shutdown(self) -> None:
+        """Run the control loop, exiting cleanly on SIGTERM/SIGINT.
+
+        The entry point calls this instead of :meth:`run` so that a
+        service-manager stop unwinds through the caller's ``finally``
+        rather than terminating the process outright. :meth:`run` itself is
+        unchanged and still usable directly by tests and embedders that
+        drive their own lifecycle.
+
+        Two-stage by design. A signal first asks the loop to stop
+        cooperatively (:meth:`request_shutdown`); if it has not exited
+        within ``cfg.loop.shutdown_grace_s`` the run task is cancelled
+        outright. The escalation exists because the cooperative path
+        depends on the loop reaching its ``while`` check — a tick that
+        swallows cancellation would otherwise stall shutdown past the
+        service manager's own timeout, and the SIGKILL that follows cannot
+        be handled at all, leaving the last velocity latched in firmware.
+
+        On a platform without asyncio signal handlers (Windows) the
+        registration degrades to a logged warning and this behaves exactly
+        like ``await self.run()``.
+
+        Raises:
+            Exception: Whatever :meth:`run` raised. A cancellation this
+                method did not itself trigger propagates too, so an
+                outer-task cancel is never mistaken for a graceful stop.
+        """
+        run_task = asyncio.ensure_future(self.run())
+        escalations: set[asyncio.Task[None]] = set()
+        escalated = False
+        grace_s = self._cfg.loop.shutdown_grace_s
+
+        async def _escalate(reason: str) -> None:
+            nonlocal escalated
+            await self._clock.sleep(grace_s)
+            if run_task.done():
+                return
+            escalated = True
+            _log.error(
+                "shutdown_escalated_to_cancel",
+                reason=reason,
+                grace_s=grace_s,
+            )
+            run_task.cancel()
+
+        def _on_signal(name: str) -> None:
+            self.request_shutdown(name)
+            spawn_tracked(escalations, _escalate(name), name="shutdown_escalation")
+
+        uninstall = install_shutdown_handlers(_on_signal)
+        try:
+            await run_task
+        except asyncio.CancelledError:
+            if not escalated:
+                # Not ours — an outer cancel. Never absorb it.
+                raise
+            _log.warning("shutdown_loop_cancelled_after_grace", grace_s=grace_s)
+        finally:
+            uninstall()
+            await cancel_and_drain(escalations)
 
     async def health_check(self) -> dict[str, object]:
         """Run a quick health check of all subsystems.

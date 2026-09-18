@@ -228,18 +228,22 @@ class BaseESP32Driver(ABC):
                 window_ms=heartbeat_window_ms(self._cfg),
             )
         elif self._cfg.heartbeat_enabled:
-            # Logging only on success would make silence indistinguishable from
-            # an armed failsafe. The operator asked for one via
-            # heartbeat_enabled; say plainly that this command set cannot
-            # provide it, because this is the only thing that stops the wheels
-            # when the host wedges.
+            # ``heartbeat_enabled`` is True but the selected command set has
+            # no arming command (legacy firmware has none), so the chassis
+            # failsafe an operator thinks they configured does not exist.
+            # Silence here is the dangerous case: the host watchdog restarts
+            # the *container*, but only the firmware-side heartbeat stops the
+            # *wheels* after a wedged Jetson or a dropped USB link — neither
+            # of which delivers a SIGTERM the graceful-shutdown path could
+            # catch. Log-only: no frame is sent, so the legacy connect
+            # sequence stays byte-identical.
             _log.warning(
-                "esp32_heartbeat_not_armed",
+                "esp32_heartbeat_unavailable",
                 command_set=self._cfg.command_set,
-                hint=(
-                    "heartbeat_enabled is true but this command set sends no "
-                    "arming command; set esp32.command_set=waveshare_stock to "
-                    "arm the chassis failsafe"
+                remedy=(
+                    "set esp32.command_set='waveshare_stock' to arm "
+                    "CMD_HEART_BEAT_SET, or esp32.heartbeat_enabled=false "
+                    "to acknowledge running without a chassis failsafe"
                 ),
             )
 
