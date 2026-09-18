@@ -195,3 +195,73 @@ class TestBuildFailureRecorder:
         rec = build_failure_recorder(cfg, metrics=None)
 
         assert isinstance(rec, NullFailureRecorder)
+
+
+class TestReservedKeyGuard:
+    """Caller-supplied ``extra`` keys must never break or corrupt the log event.
+
+    structlog's bound-logger method signature is ``meth(event, **kw)``, so an
+    ``extra`` mapping carrying ``event`` collided with the positional event
+    name and raised ``TypeError`` (observed in production during orchestrator
+    shutdown via ``rocky._record_drop``).  Other processor-owned keys were
+    silently clobbered instead.
+    """
+
+    def test_extra_event_key_does_not_raise(self) -> None:
+        """extra={"event": ...} must log, not raise TypeError."""
+        rec = PrometheusFailureRecorder(_registry())
+
+        with structlog.testing.capture_logs() as logs:
+            rec.record("voice", "event_dropped_cooldown", extra={"event": "shutdown"})
+
+        assert len(logs) == 1
+
+    def test_extra_event_key_preserves_event_name(self) -> None:
+        """The recorder's own event name survives a colliding extra key."""
+        rec = PrometheusFailureRecorder(_registry())
+
+        with structlog.testing.capture_logs() as logs:
+            rec.record("voice", "event_dropped_cooldown", extra={"event": "shutdown"})
+
+        assert logs[0]["event"] == "subsystem_failure_recorded"
+
+    def test_extra_event_value_is_not_lost(self) -> None:
+        """The caller's colliding value is namespaced, never dropped."""
+        rec = PrometheusFailureRecorder(_registry())
+
+        with structlog.testing.capture_logs() as logs:
+            rec.record("voice", "event_dropped_cooldown", extra={"event": "shutdown"})
+
+        assert logs[0]["extra_event"] == "shutdown"
+
+    def test_recorder_owned_keys_cannot_be_clobbered(self) -> None:
+        """extra cannot overwrite subsystem/reason/log_level in the log event."""
+        rec = PrometheusFailureRecorder(_registry())
+
+        with structlog.testing.capture_logs() as logs:
+            rec.record(
+                "voice",
+                "piper_timeout",
+                level="error",
+                extra={"subsystem": "spoofed", "reason": "spoofed", "log_level": "debug"},
+            )
+
+        log = logs[0]
+        assert log["subsystem"] == "voice"
+        assert log["reason"] == "piper_timeout"
+        assert log["log_level"] == "error"
+        assert log["extra_subsystem"] == "spoofed"
+        assert log["extra_reason"] == "spoofed"
+        assert log["extra_log_level"] == "debug"
+
+    def test_non_reserved_keys_are_untouched(self) -> None:
+        """Well-behaved extras keep their original names (no blast radius)."""
+        rec = PrometheusFailureRecorder(_registry())
+
+        with structlog.testing.capture_logs() as logs:
+            rec.record("voice", "retry_exhausted", extra={"attempt": 3, "cooldown_s": 1.5})
+
+        log = logs[0]
+        assert log["attempt"] == 3
+        assert log["cooldown_s"] == 1.5
+        assert "extra_attempt" not in log

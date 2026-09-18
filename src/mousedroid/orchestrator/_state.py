@@ -162,6 +162,7 @@ class _OrchestratorState:
     _prev_obs_for_vlm: torch.Tensor | None
     _mission_seq: int
     _running: bool
+    _shutdown_requested: bool
     _tick_count: int
     _last_tick_ms: float
     _tick_phase_timing_enabled: bool

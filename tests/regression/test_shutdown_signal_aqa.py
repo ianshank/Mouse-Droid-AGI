@@ -98,7 +98,7 @@ def test_orchestrator_exposes_the_shutdown_surface() -> None:
     """``main.py`` calls these by name; a rename must fail here, not on the rover."""
     from mousedroid.orchestrator.orchestrator import MouseDroidOrchestrator
 
-    assert inspect.iscoroutinefunction(MouseDroidOrchestrator.run_until_shutdown)
+    assert inspect.iscoroutinefunction(MouseDroidOrchestrator.serve)
     # Deliberately NOT a coroutine: it is called from a signal handler,
     # which cannot await.
     assert not inspect.iscoroutinefunction(MouseDroidOrchestrator.request_shutdown)
@@ -107,12 +107,12 @@ def test_orchestrator_exposes_the_shutdown_surface() -> None:
     assert list(sig.parameters) == ["self", "reason"]
 
 
-def test_main_drives_the_loop_through_run_until_shutdown() -> None:
+def test_main_drives_the_loop_through_serve() -> None:
     """The one-line wiring that makes the whole fix reachable."""
     import mousedroid.main as main_module
 
     source = inspect.getsource(main_module._run)
-    assert "run_until_shutdown()" in source
+    assert "serve()" in source
     assert "await orch_obj.run()" not in source
 
 

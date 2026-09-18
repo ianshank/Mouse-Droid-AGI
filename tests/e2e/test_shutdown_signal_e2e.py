@@ -18,6 +18,7 @@ all — the ``finally`` never ran.
 from __future__ import annotations
 
 import os
+import select
 import signal
 import subprocess
 import sys
@@ -73,23 +74,37 @@ def _wait_for_loop(proc: subprocess.Popen[str]) -> list[str]:
 
     Returns the lines consumed so far, so the caller can keep the full
     transcript for its assertions.
+
+    ``readline()`` blocks, so the deadline alone is not a timeout: a child
+    that wedges without emitting a newline would never return control and
+    the test would hang instead of failing. ``select`` gates each read on
+    the remaining budget, so a silent hang is bounded and reported. POSIX
+    only, which this module already is.
     """
     lines: list[str] = []
     deadline = time.monotonic() + _STARTUP_TIMEOUT_S
-    assert proc.stdout is not None
+    stdout = proc.stdout
+    assert stdout is not None
 
-    while time.monotonic() < deadline:
-        line = proc.stdout.readline()
-        if not line:
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
             break
+        if not select.select([stdout], [], [], remaining)[0]:
+            break  # budget expired with nothing readable
+        line = stdout.readline()
+        if not line:
+            break  # EOF — the child exited during startup
         lines.append(line)
         if "main_loop_starting" in line:
             return lines
 
+    exited = proc.poll()
     proc.kill()
     proc.wait(timeout=30)
     raise AssertionError(
-        "mousedroid never reached its control loop; transcript:\n" + "".join(lines[-40:])
+        f"mousedroid never reached its control loop (child exit={exited}); "
+        "transcript:\n" + "".join(lines[-40:])
     )
 
 
