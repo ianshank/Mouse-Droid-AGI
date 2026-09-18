@@ -368,6 +368,18 @@ async def _check_esp32_failsafe(cfg: Settings) -> PreflightCheckResult:
         return _ok(
             "esp32_failsafe", f"mock_hardware=true ({state}; armed={armed})", time.monotonic() - t0
         )
+    if not esp32.enabled:
+        # build_esp32_driver returns MockESP32Driver when disabled, so connect()
+        # never reaches a chassis and no arming frame is ever sent — reporting
+        # "armed" off the resolved codec here would be the exact false safety
+        # signal this check exists to remove. config/jetson_production.yaml
+        # ships enabled=false as the probe-first bring-up posture.
+        return _ok(
+            "esp32_failsafe",
+            f"esp32.enabled=false ({state}); driver is mocked, so no arming "
+            "frame is sent and no failsafe applies until the board is enabled",
+            time.monotonic() - t0,
+        )
     if armed:
         return _ok(
             "esp32_failsafe", f"chassis heartbeat armed at connect ({state})", time.monotonic() - t0

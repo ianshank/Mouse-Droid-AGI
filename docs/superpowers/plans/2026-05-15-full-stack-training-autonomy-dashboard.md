@@ -138,6 +138,7 @@ from training.train_offline_rl import run_one_epoch  # exported helper, see Step
 def tiny_lmdb(tmp_path: Path) -> Path:
     """8-frame synthetic LMDB for deterministic epoch-replay."""
     from tests._helpers.lmdb_synth import write_synth_lmdb  # existing helper
+
     out = tmp_path / "tiny.lmdb"
     write_synth_lmdb(out, n_frames=8, seed=42)
     return out
@@ -146,9 +147,13 @@ def tiny_lmdb(tmp_path: Path) -> Path:
 def test_bc_weight_zero_leaves_q_values_unchanged(tiny_lmdb: Path) -> None:
     """Baseline: weight=0.0 must produce zero BC contribution."""
     cfg = load_settings()
-    cfg = cfg.model_copy(update={"offline_rl": cfg.offline_rl.model_copy(
-        update={"real_supervised_weight": 0.0, "lmdb_path": str(tiny_lmdb)}
-    )})
+    cfg = cfg.model_copy(
+        update={
+            "offline_rl": cfg.offline_rl.model_copy(
+                update={"real_supervised_weight": 0.0, "lmdb_path": str(tiny_lmdb)}
+            )
+        }
+    )
     summary = run_one_epoch(cfg, seed=42)
     assert math.isclose(summary["bc_loss"], 0.0, abs_tol=1e-9)
     assert summary["q_loss"] > 0.0  # Q-network IS learning
@@ -158,9 +163,13 @@ def test_bc_weight_zero_leaves_q_values_unchanged(tiny_lmdb: Path) -> None:
 def test_bc_weight_positive_contributes_loss(tiny_lmdb: Path) -> None:
     """At weight=0.1 BC must contribute non-zero loss and not crash the epoch."""
     cfg = load_settings()
-    cfg = cfg.model_copy(update={"offline_rl": cfg.offline_rl.model_copy(
-        update={"real_supervised_weight": 0.1, "lmdb_path": str(tiny_lmdb)}
-    )})
+    cfg = cfg.model_copy(
+        update={
+            "offline_rl": cfg.offline_rl.model_copy(
+                update={"real_supervised_weight": 0.1, "lmdb_path": str(tiny_lmdb)}
+            )
+        }
+    )
     summary = run_one_epoch(cfg, seed=42)
     assert summary["bc_loss"] > 0.0, "weight>0 must produce non-zero BC loss"
     assert math.isfinite(summary["bc_loss"]), "BC loss must be finite (no NaN)"
@@ -171,6 +180,7 @@ def test_bc_weight_negative_rejected_at_config_load() -> None:
     """OfflineRLConfig.real_supervised_weight must reject negative values."""
     from pydantic import ValidationError
     from mousedroid.config.schema import OfflineRLConfig
+
     with pytest.raises(ValidationError):
         OfflineRLConfig(real_supervised_weight=-0.01)
 ```
@@ -565,6 +575,7 @@ class AbortReason(Enum):
 @dataclass(frozen=True)
 class MissionGoal:
     """Immutable mission goal description. Use factory constructors."""
+
     forward_m: float = 0.0
     lateral_m: float = 0.0
     heading_rad: float = 0.0
@@ -573,17 +584,23 @@ class MissionGoal:
 
     @classmethod
     def navigate_relative(
-        cls, *, forward_m: float, lateral_m: float = 0.0,
-        tolerance_m: float = 0.10, timeout_s: float = 60.0,
+        cls,
+        *,
+        forward_m: float,
+        lateral_m: float = 0.0,
+        tolerance_m: float = 0.10,
+        timeout_s: float = 60.0,
     ) -> MissionGoal:
-        return cls(forward_m=forward_m, lateral_m=lateral_m,
-                   tolerance_m=tolerance_m, timeout_s=timeout_s)
+        return cls(
+            forward_m=forward_m, lateral_m=lateral_m, tolerance_m=tolerance_m, timeout_s=timeout_s
+        )
 
 
 @dataclass
 class MissionState:
     """Mutable mission lifecycle state. Single source of truth for the
     orchestrator's mission tracking."""
+
     goal: MissionGoal
     lifecycle: MissionLifecycle = MissionLifecycle.PENDING
     started_at_s: float | None = None

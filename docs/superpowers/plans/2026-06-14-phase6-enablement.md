@@ -211,7 +211,9 @@ Both core uncertainties resolved with hard numbers (tiny RSSM hidden=8/latent=4/
    ```python
    out = candidate.train_sequence(batch, decoders)
    params = list(candidate.parameters()) + list(decoders.parameters())
-   grads = torch.autograd.grad(out["loss"], params, allow_unused=True)   # allow_unused=True MANDATORY — reward_head + 3 others are unused in the recon/KL graph; omitting it RAISES RuntimeError
+   grads = torch.autograd.grad(
+       out["loss"], params, allow_unused=True
+   )  # allow_unused=True MANDATORY — reward_head + 3 others are unused in the recon/KL graph; omitting it RAISES RuntimeError
    with torch.no_grad():
        for p, g in zip(params, grads):
            if g is not None:  # None-grad guard MANDATORY

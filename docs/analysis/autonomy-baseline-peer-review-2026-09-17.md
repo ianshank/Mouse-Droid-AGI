@@ -262,7 +262,7 @@ advisory in CI.
 
 ## 9. Changes made alongside this review
 
-Two defects were fixed here because each is software-only, testable offline, and needs no
+Three defects were fixed here because each is software-only, testable offline, and needs no
 carve-out. Everything else in §4 is left for triage.
 
 - **`MCTSConfig.action_candidate_strategy`** — new `Literal["shared_axis", "per_axis"]` field,

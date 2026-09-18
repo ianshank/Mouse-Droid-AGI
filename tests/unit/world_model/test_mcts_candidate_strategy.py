@@ -180,3 +180,21 @@ def test_plan_returns_a_per_axis_candidate() -> None:
     assert action.shape == (1, DEFAULT_ACTION_DIM)
     expected = planner._generate_candidate_actions(_CPU)
     assert bool((expected == action).all(dim=1).any()), "returned action is not a candidate"
+
+
+def test_warm_start_tuning_uses_the_configured_candidate_strategy() -> None:
+    """UCB tuning must plan over the candidate set the rover will deploy.
+
+    ``ucb_c`` trades exploration against a specific branching factor, so tuning
+    on the legacy diagonal and deploying ``per_axis`` would ship a constant
+    fitted to a different action space. ``tune_ucb`` rebuilds ``MCTSConfig``
+    field by field, which is exactly where a new field gets silently dropped.
+    """
+    import inspect
+
+    from training import warmstart_policy
+
+    source = inspect.getsource(warmstart_policy.tune_ucb)
+    assert "action_candidate_strategy=base_cfg.action_candidate_strategy" in source, (
+        "tune_ucb rebuilds MCTSConfig without propagating action_candidate_strategy"
+    )

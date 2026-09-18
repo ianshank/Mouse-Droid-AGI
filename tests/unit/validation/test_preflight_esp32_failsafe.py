@@ -63,6 +63,38 @@ async def test_explicitly_disabled_failsafe_still_warns() -> None:
 
 
 @pytest.mark.asyncio
+async def test_disabled_esp32_never_reports_armed() -> None:
+    """A disabled board is mocked by the factory, so nothing can be armed.
+
+    Reporting "armed at connect" off the resolved codec while
+    ``build_esp32_driver`` hands back ``MockESP32Driver`` would be the exact
+    false safety signal this check exists to remove —
+    ``config/jetson_production.yaml`` ships ``enabled: false`` as the
+    probe-first bring-up posture, so this is the live configuration, not a
+    hypothetical.
+    """
+    result = await _check_esp32_failsafe(_cfg(enabled=False, command_set="waveshare_stock"))
+    assert "armed at connect" not in result.detail
+    assert "esp32.enabled=false" in result.detail
+
+
+@pytest.mark.asyncio
+async def test_disabled_esp32_reports_the_reason_not_just_a_status() -> None:
+    """An operator must be able to tell 'not applicable' from 'armed'."""
+    result = await _check_esp32_failsafe(_cfg(enabled=False))
+    assert result.status is PreflightStatus.OK
+    assert "no failsafe applies" in result.detail
+
+
+@pytest.mark.asyncio
+async def test_enabled_stock_board_still_reports_armed() -> None:
+    """The disabled-board bypass must not mask a genuinely armed failsafe."""
+    result = await _check_esp32_failsafe(_cfg(enabled=True, command_set="waveshare_stock"))
+    assert result.status is PreflightStatus.OK
+    assert "armed at connect" in result.detail
+
+
+@pytest.mark.asyncio
 async def test_mock_hardware_short_circuits_but_still_reports_state() -> None:
     """No chassis attached means the question does not apply.
 
