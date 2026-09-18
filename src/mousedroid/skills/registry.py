@@ -12,6 +12,7 @@ from typing import Any
 
 from mousedroid.common.tools.registry import ToolRegistry, ToolSpec
 from mousedroid.logging.setup import get_logger
+from mousedroid.skills.contract import log_unresolved_tool_names
 from mousedroid.skills.protocol import (
     SkillLoaderProtocol,
     SkillRegistryProtocol,
@@ -109,11 +110,18 @@ class SkillRegistry:
         return len(self._skills)
 
     def tools_for(self, name: str, parent: ToolRegistry) -> FilteredToolRegistry:
-        """Return a :class:`FilteredToolRegistry` over ``parent``."""
+        """Return a :class:`FilteredToolRegistry` over ``parent``.
+
+        Whitelist entries ``parent`` does not register are dropped by the
+        filtered view rather than raising, so the skill would otherwise lose
+        the capability silently. Audit and log the gap on the way through —
+        this is the one place that sees both halves of the contract.
+        """
         spec = self._skills.get(name)
         if spec is None:
             msg = f"Unknown skill: {name!r}"
             raise SkillRegistryError(msg)
+        log_unresolved_tool_names((spec,), parent)
         return FilteredToolRegistry(parent, spec.tool_names)
 
 

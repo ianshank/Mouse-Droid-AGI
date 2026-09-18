@@ -4,6 +4,43 @@ Reverse chronological (newest on top). Set the date with `date +%F`; never copy 
 literal date. Rotation: keep ~10 sessions; move older entries to
 `progress-archive/YYYY-QN.md`. See HARNESS_SPEC.md §11.
 
+## 2026-09-17 — Peer review of an external physical-autonomy proposal (findings-only)
+
+**Context.** Reviewed a user-supplied synthesis of three model reviews proposing an
+umbrella OpenSpec change `jetson-physical-autonomy-baseline` plus four child changes.
+Findings-only per ADR-013 audit posture: no F-number reserved, no `features.yaml` /
+`NEXT_STEPS.md` / `docs/CHARTER.md` edit. F-008 remains the hardware next feature.
+
+**Review.** `docs/analysis/autonomy-baseline-peer-review-2026-09-17.md`, house verdict-table
+format, basis `587f85f`, outcome REQUEST_CHANGES. Load-bearing claims were executed against a
+worktree-local venv, not read. Headlines: the proposal's "no firmware host-heartbeat" premise
+is refuted (F-025 shipped it; it is dormant only because `command_set` defaults to `legacy`,
+and the documented env flip arms it and derives 115200 baud); `/opsx:*` and umbrella/child
+bundles do not exist here; the cited `openspec-quality-plan` skill does not exist. Ten defects
+the proposal missed are recorded (S-1..S-10), four of them more severe than anything in it —
+notably SIGTERM never halting the motors, a dead LiDAR failing open to "12 m clear", no
+battery voltage able to e-stop on the production overlay, and preflight reporting OK on a
+physically dead ESP32. Those are recorded for triage, not fixed here.
+
+**Landed (two software-only defects, both found during the review).**
+
+- `MCTSConfig.action_candidate_strategy` — the candidate matrix was rank 1
+  (`vx == vy == omega`), so the planner could not drive straight or turn in place.
+  New `Literal["shared_axis", "per_axis"]`, default `shared_axis` is byte-identical and
+  pinned by a test that rebuilds the old tensor. `per_axis` is opt-in because changing which
+  actions a planner may propose is an actuation change.
+- `mousedroid.skills.contract` — 9 of 11 declared builtin skill tool names resolved to
+  nothing, silently; two skills resolved to zero tools. Audited at
+  `SkillRegistry.tools_for` and ratcheted by a baseline gate. `tools_for` has no production
+  caller yet, so the gate is what bites today; the log is latent until delegation is wired.
+
+Test tiers: unit, property, regression pair, plus the skill-contract AQA gate. The `per_axis`
+pins were proven to go red against the reverted implementation, and three mutations that
+survived the first draft of those tests now fail. Verification: `test-cov` step 6374 passed /
+129 skipped at 92.01% coverage (baseline 6345); `regression` 1422 passed; `smoke` 158 passed;
+`e2e` 22 passed; `behaviour` collects nothing in this tree. No CHARTER §3 carve-out: both changes are config-gated or
+observability-only, defaults unchanged, no actuation-gate or hot-loop change.
+
 ## 2026-09-11 — Isaac Lab workstation harness (F-043–F-049)
 
 **Context.** F-008 remains the hardware next feature. Isaac Lab is catalogued

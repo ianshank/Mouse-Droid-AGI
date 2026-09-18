@@ -16,6 +16,14 @@ DEFAULT_MOTOR_STATE_DIM: int = 4
 DEFAULT_ACTION_DIM: int = 3
 """Action dimension ``[vx, vy, omega]``."""
 
+DEFAULT_ACTION_LIMIT: float = 1.0
+"""Normalised per-axis action bound: planners emit actions in ``[-limit, +limit]``.
+
+This is the *latent* action convention shared by the RSSM, the MCTS planner and
+``PolicyMLP`` — not a physical limit. Physical clamping happens downstream from
+``SafetyConfig.action_min`` / ``action_max`` and the ``ESP32Config.max_*`` fields.
+"""
+
 DEFAULT_MAX_DISTANCE_M: float = 4.0
 """Default max ultrasonic range in metres (mirrors ``UltrasonicConfig.max_range_m``)."""
 
