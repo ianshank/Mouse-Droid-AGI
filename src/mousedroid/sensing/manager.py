@@ -46,8 +46,13 @@ class SensorManager:
     """Orchestrates concurrent sensor reads and produces fused bundles.
 
     Each sensor has a ring buffer sized according to the corresponding
-    loop frequency in config.  Failed reads zero out the value and mark
-    the modality invalid in the observation bundle.
+    loop frequency in config.  Failed reads mark the modality invalid in the
+    observation bundle; vision, ultrasonic, motor and audio additionally
+    carry a zero-filled placeholder of the right shape, while LiDAR reports
+    ``None``.  LiDAR differs deliberately -- its features are normalised
+    range fractions, so any substitute vector is a claim about obstacle
+    distance that the safety monitor will read (see
+    :meth:`_safe_lidar_read`).
 
     Args:
         vision: Vision driver implementing :class:`VisionProtocol`.
@@ -113,14 +118,6 @@ class SensorManager:
         )
         self._cached_imu_features: NDArray[np.float32] | None = None
         self._cached_imu_ok: bool = False
-
-        # Determine lidar feature size for zero-fill on failure.
-        if lidar_feature_extractor is not None:
-            self._lidar_feature_dim = lidar_feature_extractor.feature_dim
-        elif cfg.lidar is not None:
-            self._lidar_feature_dim = cfg.lidar.feature_dim
-        else:
-            self._lidar_feature_dim = 0
 
         # Determine audio output size for zero-fill on failure.
         # When a feature extractor is present the output dimension changes.
@@ -477,13 +474,25 @@ class SensorManager:
         The raw :class:`LidarScan` is cached on the manager so the
         orchestrator can republish it on the raw-streaming channel
         without driving a second serial read.
+
+        **Fails closed.** Every outcome that does not produce real, extracted
+        features returns ``(None, False)`` — never a substitute vector. This
+        helper used to return ``np.ones(feature_dim)`` on failure, and because
+        LiDAR features are normalised range fractions (``min_in_sector /
+        max_range``) an all-ones vector means *maximum range in every
+        sector*: a dead LiDAR published a fabricated all-clear ring that
+        :meth:`~mousedroid.safety.monitor.MouseDroidSafetyMonitor.evaluate`
+        converted into ``lidar_max_range_m`` of clearance in all directions,
+        and that the telemetry dashboard drew as a full-range scan. ``None``
+        states plainly that the modality is absent, which every consumer
+        already handles: ``observation_packer._pack_optional_vector``
+        zero-fills and zeros the mask slot, ``RSSM`` passes ``None`` to the
+        encoder's own missing-modality branch, and ``frame_builder`` omits
+        the sector ring. Whether an absent reading should *stop the rover* is
+        the safety monitor's call, via ``SafetyConfig.lidar_unavailable_policy``.
         """
         if self._lidar is None:
             return None, False
-
-        default: NDArray[np.float32] | None = None
-        if self._lidar_feature_dim > 0:
-            default = np.ones(self._lidar_feature_dim, dtype=np.float32)
 
         try:
             scan = await self._lidar.read_scan()
@@ -491,13 +500,18 @@ class SensorManager:
             # (telemetry raw-LiDAR streaming). Always overwritten — we
             # only need the latest valid scan.
             self._last_lidar_scan = scan
-            if self._lidar_feature_extractor is not None:
-                features = self._lidar_feature_extractor.extract(scan)
-                return features, True
-            return default, False
+            if self._lidar_feature_extractor is None:
+                # A good scan we cannot turn into features is still not
+                # features. Report the modality absent rather than inventing
+                # an all-clear vector for it — the scan itself is still
+                # cached above for the raw telemetry channel.
+                _log.debug("lidar_features_unavailable", reason="no_feature_extractor")
+                return None, False
+            features = self._lidar_feature_extractor.extract(scan)
+            return features, True
         except Exception:
             _log.warning("lidar_read_failed", exc_info=True)
-            return default, False
+            return None, False
 
     @property
     def last_lidar_scan(self) -> LidarScan | None:
