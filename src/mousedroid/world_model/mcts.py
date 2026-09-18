@@ -9,18 +9,25 @@ import torch
 from torch import Tensor
 
 from mousedroid.config.schema import MCTSConfig
-from mousedroid.constants import DEFAULT_ACTION_DIM, DEFAULT_ACTION_LIMIT
+from mousedroid.constants import (
+    DEFAULT_ACTION_DIM,
+    DEFAULT_ACTION_LIMIT,
+    R_D_NEWTON_ITERATIONS,
+    R_D_NEWTON_START,
+    R_D_SEQUENCE_OFFSET,
+)
 from mousedroid.logging.setup import get_logger
 from mousedroid.world_model.protocol import WorldModelProtocol
 
 _log = get_logger(__name__)
 
-_PHI_NEWTON_ITERS: int = 40
-"""Newton iterations for the R_d generalised-golden-ratio root.
+_AXIS_SIGNS: tuple[float, ...] = (1.0, -1.0)
+"""Directions emitted per action axis, in order, for the spanning candidate set.
 
-Converges to float64 precision in well under this many steps for every
-dimension a candidate set can have; fixed rather than tolerance-based so the
-sequence is bit-identical across platforms.
+Interleaving +/- per axis (rather than grouping all positives first) is what
+makes truncation drop whole axes last-first instead of stripping every reverse
+direction. The primitive count derives from ``len(...)``, so nothing downstream
+restates "two directions per axis" as a literal.
 """
 
 
@@ -45,8 +52,8 @@ def _low_discrepancy_points(count: int, dim: int, device: torch.device) -> Tenso
     if dim < 1:
         msg = f"low-discrepancy points need dim >= 1, got {dim}"
         raise ValueError(msg)
-    phi = 2.0
-    for _ in range(_PHI_NEWTON_ITERS):
+    phi = R_D_NEWTON_START
+    for _ in range(R_D_NEWTON_ITERATIONS):
         numerator = phi ** (dim + 1) - phi - 1.0
         denominator = (dim + 1) * phi**dim - 1.0
         phi -= numerator / denominator
@@ -54,7 +61,7 @@ def _low_discrepancy_points(count: int, dim: int, device: torch.device) -> Tenso
         [phi ** -(axis + 1) for axis in range(dim)], dtype=torch.float32, device=device
     )
     steps = torch.arange(1, count + 1, dtype=torch.float32, device=device).unsqueeze(-1)
-    return torch.frac(0.5 + steps * alpha)
+    return torch.frac(R_D_SEQUENCE_OFFSET + steps * alpha)
 
 
 @dataclass
@@ -173,10 +180,12 @@ class MCTSPlanner:
         axes = torch.eye(action_dim, device=device) * DEFAULT_ACTION_LIMIT
         # Interleave +axis / -axis so truncation drops whole axes last-first
         # rather than stripping every negative direction.
-        signed = torch.stack((axes, -axes), dim=1).reshape(2 * action_dim, action_dim)
+        signed = torch.stack([axes * sign for sign in _AXIS_SIGNS], dim=1).reshape(
+            len(_AXIS_SIGNS) * action_dim, action_dim
+        )
         blocks: list[Tensor] = [stop, signed]
 
-        n_primitives = 1 + 2 * action_dim
+        n_primitives = 1 + len(_AXIS_SIGNS) * action_dim
         if n < n_primitives:
             _log.warning(
                 "mcts_candidates_truncated",
@@ -187,8 +196,8 @@ class MCTSPlanner:
             )
         elif n > n_primitives:
             pool = _low_discrepancy_points(n - n_primitives, action_dim, device)
-            span = 2.0 * DEFAULT_ACTION_LIMIT
-            blocks.append(pool * span - DEFAULT_ACTION_LIMIT)
+            lower, upper = -DEFAULT_ACTION_LIMIT, DEFAULT_ACTION_LIMIT
+            blocks.append(pool * (upper - lower) + lower)
 
         # ``-axes`` yields -0.0 entries; ``+ 0.0`` normalises them so the
         # driver never emits a signed negative zero the legacy path could not.
