@@ -164,9 +164,11 @@ MouseDroid is a Star Wars MSE-6 droid replica running on NVIDIA Jetson Orin Nano
       OPEN = "open"
       HALF_OPEN = "half_open"
 
+
   class CircuitBreaker:
       def __init__(self, name: str, cfg: CircuitBreakerConfig) -> None: ...
       async def call(self, func: Callable[..., Awaitable[T]], *args, **kwargs) -> T: ...
+
 
   class CircuitOpenError(Exception): ...
   ```
@@ -185,6 +187,8 @@ MouseDroid is a Star Wars MSE-6 droid replica running on NVIDIA Jetson Orin Nano
   ```python
   async def retry_async(func, *args, cfg: RetryConfig, retryable_exceptions=...) -> T: ...
   def with_retry(cfg: RetryConfig, retryable_exceptions=...) -> Callable: ...
+
+
   class RetryExhaustedError(Exception): ...
   ```
 - **Tests** (`tests/unit/test_retry.py`): 12 tests

@@ -18,18 +18,20 @@ all — the ``finally`` never ran.
 from __future__ import annotations
 
 import os
-import select
 import signal
 import subprocess
 import sys
 import time
+
+if sys.platform != "win32":
+    import select
 from pathlib import Path
 
 import pytest
 
 pytestmark = pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="POSIX signal delivery; Windows has no loop.add_signal_handler",
+    os.name != "posix",
+    reason="Requires POSIX signal delivery and select() support for subprocess pipes",
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]

@@ -138,6 +138,7 @@ cognitive_core: object | None = None
 
 # AFTER: Strict typing with proper import
 from mousedroid.cognitive.cognitive_core import CognitiveCore
+
 cognitive_core: CognitiveCore | None = None
 ```
 

@@ -285,6 +285,32 @@ class MCTSConfig(StrictBaseModel):
         gt=0,
         description="Target median planning latency used when selecting a tuned UCB value",
     )
+    action_candidate_strategy: Literal["shared_axis", "per_axis"] = Field(
+        "shared_axis",
+        description=(
+            "How MCTS enumerates the candidate actions it may select between. "
+            "Default ``shared_axis`` preserves byte-identical pre-existing "
+            "behaviour: a single ``linspace(-1, 1, n_action_candidates)`` "
+            "broadcast across every action axis, so every candidate satisfies "
+            "``vx == vy == omega``. That candidate matrix has rank 1 — it "
+            "cannot express 'drive straight' (omega=0, vx!=0) or 'turn in "
+            "place' (vx=0, omega!=0), so the planner's only reachable "
+            "non-arcing primitive is a full stop. ``per_axis`` instead emits a "
+            "spanning set: the zero action, the +/- unit move along each axis, "
+            "then a deterministic low-discrepancy fill for any "
+            "remaining slots. Consumed by "
+            "``mousedroid.world_model.mcts.MCTSPlanner._generate_candidate_actions``. "
+            "TRADE-OFF: at the default ``n_action_candidates=9`` with a 3-axis "
+            "action, 7 of the 9 candidates are the bang-bang primitives, so a "
+            "single-axis move is available at full scale or not at all — "
+            "``_execute_action`` multiplies by ``esp32.max_velocity_mps``, so "
+            "'drive straight' means 'drive straight at max_velocity_mps'. The "
+            "legacy set traded reachability for graded magnitudes; this one "
+            "trades the reverse. Raise ``n_action_candidates`` to buy back "
+            "intermediate magnitudes. Changing this changes which actions the "
+            "planner may propose, so it is opt-in rather than a silent flip."
+        ),
+    )
 
 
 class DualStreamTrainingConfig(StrictBaseModel):

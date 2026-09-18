@@ -8,6 +8,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Safety — the chassis heartbeat failsafe reads as armed while being dormant
+
+`ESP32Config.heartbeat_enabled` defaults `True` and `heartbeat_window_ms`
+resolves to 3000 ms under *every* command set, so config reads "failsafe armed,
+3 s window". Only `waveshare_stock` emits `CMD_HEART_BEAT_SET`, and no
+`config/*.yaml` sets `command_set`, so on every shipped overlay nothing is armed
+at all. This is the only mechanism that halts the *wheels* when the host wedges —
+the software watchdog restarts the container.
+
+The defect was the asymmetry, not the default: the schema already warned loudly
+when the window was too *tight* (a tuning nuisance), while
+`BaseESP32Driver._arm_command_set` logged `esp32_heartbeat_armed` only when it
+had armed something, so the dangerous case was silent and indistinguishable from
+success. A new `esp32_failsafe` preflight check now reports the resolved state
+and names the remedy, and `_arm_command_set` emits `esp32_heartbeat_unavailable`
+when a failsafe was requested but the codec sends none. Observability only — no
+wire-format or behaviour change; the rover-side flip remains an operator action.
+
+### Fixed — the MCTS planner could not drive straight or turn in place
+
+`MCTSPlanner._generate_candidate_actions` broadcast one
+`linspace(-1, 1, n_action_candidates)` across every action axis, so every
+candidate satisfied `vx == vy == omega` and the candidate matrix had rank 1. The
+only non-arcing primitive reachable was a full stop; "drive straight" and "turn
+in place" were not in the action set at all. `MCTSConfig.action_candidate_strategy`
+adds an opt-in `per_axis` spanning set (stop, ±unit per axis, deterministic
+low-discrepancy fill). The default `shared_axis` is byte-identical, pinned by a
+test that rebuilds the pre-change tensor from literal bounds; `per_axis` is
+opt-in because changing which actions a planner may propose is an actuation
+change, and it trades graded magnitudes for reachability (documented on the
+field). Three mutations that survived the first draft of the tests — including
+scaling the axis primitives to 0.001 — now fail.
+
+### Fixed — skills advertised tools that no registry provides, silently
+
+`FilteredToolRegistry` intersects a skill's `tool_names` whitelist with the
+parent registry, so a declared tool nothing registers is dropped rather than
+rejected. 9 of 11 declared names across the four builtin skills resolved to
+nothing and two skills resolved to zero tools, with no error.
+`mousedroid.skills.contract` audits the contract at `SkillRegistry.tools_for`,
+and a ratcheting regression gate records the nine existing names with a reason
+each while failing on any new one. `query_world_model_pose` is unimplementable
+rather than pending: there is no pose estimator, odometry source, scan matcher
+or map anywhere in `src/`, and the chassis is encoder-less.
 ### Fixed — a caller-supplied `event` field crashed the subsystem failure recorder
 
 `PrometheusFailureRecorder.record` merged its caller-controlled `extra` mapping

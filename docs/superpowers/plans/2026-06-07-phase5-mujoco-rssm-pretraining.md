@@ -61,6 +61,7 @@
 
 ```python
 """Vision branch is optional and gated on vision_dim, mirroring audio/lidar."""
+
 from __future__ import annotations
 
 import torch
@@ -203,6 +204,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ```python
 """Balanced, free-bits, fp32-stable KL for RSSM training."""
+
 from __future__ import annotations
 
 import torch
@@ -340,6 +342,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ```python
 """RSSM.train_sequence: grad-enabled raw-modality reconstruction + KL."""
+
 from __future__ import annotations
 
 import torch
@@ -417,15 +420,13 @@ values; `kl_beta` may already exist on `TrainingConfig` but the *model* needs it
 own copy for the training forward):
 
 ```python
-    kl_beta: float = Field(
-        1.0, ge=0.0, description="KL weight in the RSSM training ELBO (recon + kl_beta*KL)."
-    )
-    kl_balance_alpha: float = Field(
-        0.8, ge=0.0, le=1.0, description="Dreamer KL-balancing weight (prior-update term)."
-    )
-    kl_free_nats: float = Field(
-        1.0, ge=0.0, description="Free-bits floor (nats) for the training KL."
-    )
+kl_beta: float = Field(
+    1.0, ge=0.0, description="KL weight in the RSSM training ELBO (recon + kl_beta*KL)."
+)
+kl_balance_alpha: float = Field(
+    0.8, ge=0.0, le=1.0, description="Dreamer KL-balancing weight (prior-update term)."
+)
+kl_free_nats: float = Field(1.0, ge=0.0, description="Free-bits floor (nats) for the training KL.")
 ```
 
 **(ii) `TrainingConfig`** (~line 3557, already has `kl_beta`, `sequence_length`,
@@ -603,6 +604,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ```python
 """build_rssm_trainable returns a concrete trainable RSSM with vision off."""
+
 from __future__ import annotations
 
 import torch
@@ -689,6 +691,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ```python
 """Phase 5 Layer-1 additions are byte-identical by default."""
+
 from __future__ import annotations
 
 import torch
@@ -709,7 +712,9 @@ def test_default_training_config_pretrain_disabled() -> None:
 def test_default_encoder_output_shape_unchanged() -> None:
     cfg = ModelConfig()
     enc = MultimodalEncoder(cfg)
-    out = enc(torch.zeros(1, cfg.vision_dim), None, torch.zeros(1, cfg.motor_state_dim), torch.ones(1, 5))
+    out = enc(
+        torch.zeros(1, cfg.vision_dim), None, torch.zeros(1, cfg.motor_state_dim), torch.ones(1, 5)
+    )
     assert out.shape == (1, cfg.obs_dim)
 ```
 
@@ -744,6 +749,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ```python
 """MujocoSimConfig is additive and defaults are sane."""
+
 from __future__ import annotations
 
 import yaml
@@ -864,6 +870,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ```python
 """The MJCF loads, exposes the expected sensors, and is stable at rest."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -993,6 +1000,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ```python
 """RoverMuJoCoEnv conforms to the protocol and matches the mock obs contract."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -1013,8 +1021,12 @@ from mousedroid.sim.protocols import (
 
 def _envs() -> tuple[RoverMuJoCoEnv, MockRoverEnv]:
     cfg = Settings(mock_hardware=True)
-    mj = RoverMuJoCoEnv(cfg.rover, wheel_radius_m=cfg.robot.wheel_radius_m, track_width_m=cfg.robot.track_width_m)
-    mock = MockRoverEnv(cfg.rover, wheel_radius_m=cfg.robot.wheel_radius_m, track_width_m=cfg.robot.track_width_m)
+    mj = RoverMuJoCoEnv(
+        cfg.rover, wheel_radius_m=cfg.robot.wheel_radius_m, track_width_m=cfg.robot.track_width_m
+    )
+    mock = MockRoverEnv(
+        cfg.rover, wheel_radius_m=cfg.robot.wheel_radius_m, track_width_m=cfg.robot.track_width_m
+    )
     return mj, mock
 
 
@@ -1078,6 +1090,7 @@ Create `src/mousedroid/sim/mujoco_rover_env.py`. Key design points: lazy `mujoco
 
 ```python
 """MuJoCo skid-steer rover environment (RoverEnvProtocol backend)."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -1184,7 +1197,9 @@ class RoverMuJoCoEnv:
     def observation_keys(self) -> tuple[str, ...]:
         return self._obs_keys
 
-    def reset(self, *, seed: int | None = None) -> tuple[dict[str, NDArray[np.float32]], dict[str, Any]]:
+    def reset(
+        self, *, seed: int | None = None
+    ) -> tuple[dict[str, NDArray[np.float32]], dict[str, Any]]:
         self._mj.mj_resetData(self._model, self._data)
         if seed is not None:
             self._noise_rng = np.random.default_rng(seed)
@@ -1193,7 +1208,9 @@ class RoverMuJoCoEnv:
         self._mj.mj_forward(self._model, self._data)
         return self._observe(), {"step_idx": self._step_idx}
 
-    def step(self, action: NDArray[np.float32]) -> tuple[dict[str, NDArray[np.float32]], float, bool, bool, dict[str, Any]]:
+    def step(
+        self, action: NDArray[np.float32]
+    ) -> tuple[dict[str, NDArray[np.float32]], float, bool, bool, dict[str, Any]]:
         if action.shape != (self._action_dim,):
             msg = f"action shape must be ({self._action_dim},), got {action.shape}"
             raise ValueError(msg)
@@ -1261,9 +1278,11 @@ class RoverMuJoCoEnv:
 
     def _read_wheel_vel(self) -> NDArray[np.float32]:
         # 4 hinge joint velocities live at the tail of qvel (after the 6-DoF freejoint).
-        wv = np.asarray(self._data.qvel[6:6 + ROVER_NUM_WHEELS], dtype=np.float32)
+        wv = np.asarray(self._data.qvel[6 : 6 + ROVER_NUM_WHEELS], dtype=np.float32)
         if self._slip_noise > 0.0:
-            wv = wv * (1.0 + self._noise_rng.normal(0.0, self._slip_noise, size=wv.shape)).astype(np.float32)
+            wv = wv * (1.0 + self._noise_rng.normal(0.0, self._slip_noise, size=wv.shape)).astype(
+                np.float32
+            )
         return wv
 
     def _read_lidar(self, n: int) -> NDArray[np.float32]:
@@ -1278,7 +1297,7 @@ class RoverMuJoCoEnv:
     def _sensor(self, name: str, dim: int) -> NDArray[np.float32]:
         sid = self._mj.mj_name2id(self._model, self._mj.mjtObj.mjOBJ_SENSOR, name)
         adr = int(self._model.sensor_adr[sid])
-        return np.asarray(self._data.sensordata[adr:adr + dim], dtype=np.float32)
+        return np.asarray(self._data.sensordata[adr : adr + dim], dtype=np.float32)
 ```
 
 - [ ] **Step 4: Run + verify pass**
@@ -1315,6 +1334,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```python
 # tests/unit/sim/test_mujoco_domain_params.py
 """DR params map onto concrete mjModel fields (friction/mass/gain); slip = obs noise."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -1328,7 +1348,9 @@ from mousedroid.sim.mujoco_rover_env import RoverMuJoCoEnv
 
 def _env() -> RoverMuJoCoEnv:
     cfg = Settings(mock_hardware=True)
-    return RoverMuJoCoEnv(cfg.rover, wheel_radius_m=cfg.robot.wheel_radius_m, track_width_m=cfg.robot.track_width_m)
+    return RoverMuJoCoEnv(
+        cfg.rover, wheel_radius_m=cfg.robot.wheel_radius_m, track_width_m=cfg.robot.track_width_m
+    )
 
 
 def test_friction_param_writes_geom_friction() -> None:
@@ -1357,6 +1379,7 @@ def test_slip_is_obs_noise_not_physics() -> None:
 ```python
 # tests/unit/test_factory_rover_env_mujoco.py
 """Factory resolves backend='mujoco' to RoverMuJoCoEnv."""
+
 from __future__ import annotations
 
 import pytest
@@ -1371,7 +1394,13 @@ from mousedroid.sim.protocols import RoverEnvProtocol
 
 def test_mujoco_backend_builds_env() -> None:
     cfg = Settings(mock_hardware=True)
-    cfg = cfg.model_copy(update={"rover": cfg.rover.model_copy(update={"sim": cfg.rover.sim.model_copy(update={"backend": "mujoco"})})})
+    cfg = cfg.model_copy(
+        update={
+            "rover": cfg.rover.model_copy(
+                update={"sim": cfg.rover.sim.model_copy(update={"backend": "mujoco"})}
+            )
+        }
+    )
     env = build_rover_env(cfg)
     assert isinstance(env, RoverMuJoCoEnv)
     assert isinstance(env, RoverEnvProtocol)
@@ -1387,26 +1416,28 @@ Expected: FAIL — `apply_domain_params` missing; factory still raises `NotImple
 Add to `RoverMuJoCoEnv`:
 
 ```python
-    def apply_domain_params(self, *, friction: float, slip: float, mass_kg: float, motor_gain: float) -> None:
-        """Apply per-episode domain-randomization params to the live model.
+def apply_domain_params(
+    self, *, friction: float, slip: float, mass_kg: float, motor_gain: float
+) -> None:
+    """Apply per-episode domain-randomization params to the live model.
 
-        friction -> geom_friction[:,0] on wheel geoms; mass_kg -> chassis
-        body_mass + inertia recompute; motor_gain -> actuator_gainprm[:,0];
-        slip -> observation-noise magnitude (documented proxy; MuJoCo has no
-        first-class slip). Reload-free: edits mjModel arrays in place.
-        """
-        for name in ("g_fl", "g_fr", "g_rl", "g_rr"):
-            gid = self._mj.mj_name2id(self._model, self._mj.mjtObj.mjOBJ_GEOM, name)
-            self._model.geom_friction[gid, 0] = friction
-        bid = self._mj.mj_name2id(self._model, self._mj.mjtObj.mjOBJ_BODY, "chassis")
-        scale = mass_kg / max(float(self._model.body_mass[bid]), 1e-6)
-        self._model.body_mass[bid] = mass_kg
-        self._model.body_inertia[bid] *= scale  # keep inertia consistent with new mass
-        for name in ("a_fl", "a_fr", "a_rl", "a_rr"):
-            aid = self._mj.mj_name2id(self._model, self._mj.mjtObj.mjOBJ_ACTUATOR, name)
-            self._model.actuator_gainprm[aid, 0] = motor_gain
-        self._slip_noise = max(0.0, slip)
-        self._assert_rest_state_stable()
+    friction -> geom_friction[:,0] on wheel geoms; mass_kg -> chassis
+    body_mass + inertia recompute; motor_gain -> actuator_gainprm[:,0];
+    slip -> observation-noise magnitude (documented proxy; MuJoCo has no
+    first-class slip). Reload-free: edits mjModel arrays in place.
+    """
+    for name in ("g_fl", "g_fr", "g_rl", "g_rr"):
+        gid = self._mj.mj_name2id(self._model, self._mj.mjtObj.mjOBJ_GEOM, name)
+        self._model.geom_friction[gid, 0] = friction
+    bid = self._mj.mj_name2id(self._model, self._mj.mjtObj.mjOBJ_BODY, "chassis")
+    scale = mass_kg / max(float(self._model.body_mass[bid]), 1e-6)
+    self._model.body_mass[bid] = mass_kg
+    self._model.body_inertia[bid] *= scale  # keep inertia consistent with new mass
+    for name in ("a_fl", "a_fr", "a_rl", "a_rr"):
+        aid = self._mj.mj_name2id(self._model, self._mj.mjtObj.mjOBJ_ACTUATOR, name)
+        self._model.actuator_gainprm[aid, 0] = motor_gain
+    self._slip_noise = max(0.0, slip)
+    self._assert_rest_state_stable()
 ```
 
 - [ ] **Step 3b: Implement the factory branch**
@@ -1455,6 +1486,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ```python
 """Sub-second import + module-presence smoke for Phase 5."""
+
 from __future__ import annotations
 
 import importlib
@@ -1498,6 +1530,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ```python
 """RoverObsAdapter maps rover obs dict + info -> RSSM encoder tensors."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -1550,6 +1583,7 @@ Create `src/mousedroid/training/rover_obs_adapter.py`:
 
 ```python
 """Adapter: rover env obs dict (+ step info) -> RSSM encoder-input tensors."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -1575,7 +1609,9 @@ class RoverObsAdapter:
     def __init__(self, *, battery_v: float) -> None:
         self._battery_v = float(battery_v)
 
-    def adapt(self, obs: dict[str, NDArray[np.float32]], info: dict[str, Any]) -> dict[str, NDArray[np.float32]]:
+    def adapt(
+        self, obs: dict[str, NDArray[np.float32]], info: dict[str, Any]
+    ) -> dict[str, NDArray[np.float32]]:
         vx = float(info.get("vx_body_mps", 0.0))
         omega = float(info.get("omega_rads", 0.0))
         motor = np.asarray([vx, 0.0, omega, self._battery_v], dtype=np.float32)
@@ -1625,6 +1661,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ```python
 """SimEpisodeGenerator rolls deterministic episodes into batched RSSM tensors."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -1640,7 +1677,13 @@ from mousedroid.training.sim_episode_generator import SimEpisodeGenerator
 
 def _gen(n: int, t: int) -> SimEpisodeGenerator:
     cfg = Settings(mock_hardware=True)
-    cfg = cfg.model_copy(update={"rover": cfg.rover.model_copy(update={"sim": cfg.rover.sim.model_copy(update={"backend": "mujoco"})})})
+    cfg = cfg.model_copy(
+        update={
+            "rover": cfg.rover.model_copy(
+                update={"sim": cfg.rover.sim.model_copy(update={"backend": "mujoco"})}
+            )
+        }
+    )
     env = build_rover_env(cfg)
     adapter = RoverObsAdapter(battery_v=cfg.rover.sim.mujoco.battery_voltage_const_v)
     return SimEpisodeGenerator(env, adapter, n_episodes=n, seq_len=t, seed=0)
@@ -1671,6 +1714,7 @@ Create `src/mousedroid/training/sim_episode_generator.py`:
 
 ```python
 """In-process sim episode generation -> batched tensors for RSSM pretraining."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -1737,17 +1781,23 @@ class SimEpisodeGenerator:
                 action = self._sample_action(prev)
                 # pad 2-DoF wheel action to the RSSM's 3-DoF [vx, vy=0, omega] space.
                 padded = np.asarray([float(action[0]), 0.0, float(action[-1])], dtype=np.float32)
-                em.append(adapted["motor"]); eu.append(adapted["ultrasonic"])
+                em.append(adapted["motor"])
+                eu.append(adapted["ultrasonic"])
                 el.append(adapted.get("lidar", np.zeros(0, dtype=np.float32)))
-                ek.append(adapted["valid_mask"]); ea.append(padded)
+                ek.append(adapted["valid_mask"])
+                ea.append(padded)
                 obs, reward, term, trunc, info = self._env.step(action)
                 er.append(np.float32(reward))
                 prev = action
                 if term or trunc:
                     obs, info = self._env.reset(seed=int(self._rng.integers(0, 2**31 - 1)))
                     prev = np.zeros(self._action_dim, dtype=np.float32)
-            motors.append(em); ultras.append(eu); lidars.append(el)
-            masks.append(ek); actions.append(ea); rewards.append(er)
+            motors.append(em)
+            ultras.append(eu)
+            lidars.append(el)
+            masks.append(ek)
+            actions.append(ea)
+            rewards.append(er)
         _log.info("sim_episodes_generated", n_episodes=self._n, seq_len=self._t)
 
         def _stack(x: list[list[np.ndarray]]) -> Tensor:
@@ -1790,6 +1840,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ```python
 """RSSMPretrainer runs an Adam loop and writes a checkpoint."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -1846,6 +1897,7 @@ Create `src/mousedroid/training/rssm_pretrainer.py`:
 
 ```python
 """Adam pretraining loop for the RSSM dynamics core over sim episode batches."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -1893,7 +1945,9 @@ class RSSMPretrainer:
             "action": batch.action.to(self._device),
         }
 
-    def train(self, batches: list[EpisodeBatch], *, epochs: int, checkpoint_path: Path) -> list[float]:
+    def train(
+        self, batches: list[EpisodeBatch], *, epochs: int, checkpoint_path: Path
+    ) -> list[float]:
         history: list[float] = []
         self._model.train()
         for epoch in range(epochs):
@@ -1953,6 +2007,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ```python
 """_train_rssm is inert by default and runs the pretrainer when opted in."""
+
 from __future__ import annotations
 
 import pytest
@@ -1975,20 +2030,34 @@ async def test_train_rssm_inert_when_disabled() -> None:
     orch = _orch(cfg)
     await orch._train_rssm(batch_size=4)  # noqa: SLF001 — exercising the phase runner
     # inert: no checkpoint written
-    assert not (cfg.training.weights_dir and __import__("pathlib").Path(cfg.training.weights_dir, cfg.training.rssm_checkpoint_name).exists())
+    assert not (
+        cfg.training.weights_dir
+        and __import__("pathlib")
+        .Path(cfg.training.weights_dir, cfg.training.rssm_checkpoint_name)
+        .exists()
+    )
 
 
 @pytest.mark.asyncio
 async def test_train_rssm_runs_when_enabled_and_mujoco(tmp_path) -> None:
     pytest.importorskip("mujoco")
     cfg = Settings(mock_hardware=True)
-    cfg = cfg.model_copy(update={
-        "rover": cfg.rover.model_copy(update={"sim": cfg.rover.sim.model_copy(update={"backend": "mujoco"})}),
-        "training": cfg.training.model_copy(update={
-            "rssm_pretrain_enabled": True, "n_episodes": 2, "sequence_length": 4,
-            "epochs": 2, "weights_dir": str(tmp_path),
-        }),
-    })
+    cfg = cfg.model_copy(
+        update={
+            "rover": cfg.rover.model_copy(
+                update={"sim": cfg.rover.sim.model_copy(update={"backend": "mujoco"})}
+            ),
+            "training": cfg.training.model_copy(
+                update={
+                    "rssm_pretrain_enabled": True,
+                    "n_episodes": 2,
+                    "sequence_length": 4,
+                    "epochs": 2,
+                    "weights_dir": str(tmp_path),
+                }
+            ),
+        }
+    )
     orch = _orch(cfg)
     await orch._train_rssm(batch_size=2)  # noqa: SLF001
     assert (tmp_path / cfg.training.rssm_checkpoint_name).exists()
@@ -2004,51 +2073,54 @@ Expected: FAIL — `_train_rssm` is the stub; no checkpoint behaviour. (If `buil
 Replace the stub `_train_rssm` in `src/mousedroid/training/pipeline_orchestrator.py`:
 
 ```python
-    async def _train_rssm(self, batch_size: int) -> None:
-        """Run RSSM dynamics pretraining on MuJoCo-generated episodes.
+async def _train_rssm(self, batch_size: int) -> None:
+    """Run RSSM dynamics pretraining on MuJoCo-generated episodes.
 
-        Inert (byte-identical to the prior stub) unless
-        ``training.rssm_pretrain_enabled`` is True AND the rover backend is
-        ``mujoco``. The synchronous torch loop runs in a worker thread so the
-        orchestrator event loop (and the cooperative thermal-pause check) is
-        not blocked.
-        """
-        tcfg = self._settings.training
-        if not tcfg.rssm_pretrain_enabled:
-            logger.info("rssm_training_skipped", reason="pretrain_disabled")
-            return
-        if self._settings.rover.sim.backend != "mujoco":
-            logger.info("rssm_training_skipped", reason="non_mujoco_backend")
-            return
+    Inert (byte-identical to the prior stub) unless
+    ``training.rssm_pretrain_enabled`` is True AND the rover backend is
+    ``mujoco``. The synchronous torch loop runs in a worker thread so the
+    orchestrator event loop (and the cooperative thermal-pause check) is
+    not blocked.
+    """
+    tcfg = self._settings.training
+    if not tcfg.rssm_pretrain_enabled:
+        logger.info("rssm_training_skipped", reason="pretrain_disabled")
+        return
+    if self._settings.rover.sim.backend != "mujoco":
+        logger.info("rssm_training_skipped", reason="non_mujoco_backend")
+        return
 
-        import torch  # local import keeps cold-start light
+    import torch  # local import keeps cold-start light
 
-        from mousedroid.factory import build_rover_env, build_rssm_trainable
-        from mousedroid.training.rover_obs_adapter import RoverObsAdapter
-        from mousedroid.training.rssm_pretrainer import RSSMPretrainer
-        from mousedroid.training.sim_episode_generator import SimEpisodeGenerator
+    from mousedroid.factory import build_rover_env, build_rssm_trainable
+    from mousedroid.training.rover_obs_adapter import RoverObsAdapter
+    from mousedroid.training.rssm_pretrainer import RSSMPretrainer
+    from mousedroid.training.sim_episode_generator import SimEpisodeGenerator
 
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model = build_rssm_trainable(self._settings)
-        env = build_rover_env(self._settings)
-        adapter = RoverObsAdapter(battery_v=self._settings.rover.sim.mujoco.battery_voltage_const_v)
-        generator = SimEpisodeGenerator(
-            env, adapter, n_episodes=tcfg.n_episodes, seq_len=tcfg.sequence_length, seed=0
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = build_rssm_trainable(self._settings)
+    env = build_rover_env(self._settings)
+    adapter = RoverObsAdapter(battery_v=self._settings.rover.sim.mujoco.battery_voltage_const_v)
+    generator = SimEpisodeGenerator(
+        env, adapter, n_episodes=tcfg.n_episodes, seq_len=tcfg.sequence_length, seed=0
+    )
+    checkpoint = Path(tcfg.weights_dir) / tcfg.rssm_checkpoint_name
+
+    def _run() -> list[float]:
+        batch = generator.generate()
+        trainer = RSSMPretrainer(
+            model,
+            lr=tcfg.learning_rate,
+            grad_clip=tcfg.rssm_grad_clip,
+            amp=self._config.use_amp,
+            device=device,
         )
-        checkpoint = Path(tcfg.weights_dir) / tcfg.rssm_checkpoint_name
+        return trainer.train([batch], epochs=tcfg.epochs, checkpoint_path=checkpoint)
 
-        def _run() -> list[float]:
-            batch = generator.generate()
-            trainer = RSSMPretrainer(
-                model, lr=tcfg.learning_rate, grad_clip=tcfg.rssm_grad_clip,
-                amp=self._config.use_amp, device=device,
-            )
-            return trainer.train([batch], epochs=tcfg.epochs, checkpoint_path=checkpoint)
-
-        logger.info("rssm_training_started", n_episodes=tcfg.n_episodes, device=str(device))
-        history = await asyncio.to_thread(_run)
-        env.close()
-        logger.info("rssm_training_done", first_loss=history[0], last_loss=history[-1])
+    logger.info("rssm_training_started", n_episodes=tcfg.n_episodes, device=str(device))
+    history = await asyncio.to_thread(_run)
+    env.close()
+    logger.info("rssm_training_done", first_loss=history[0], last_loss=history[-1])
 ```
 
 Ensure `from pathlib import Path` and `import asyncio` are imported at the top of `pipeline_orchestrator.py` (asyncio already is; add `Path` if missing). Confirm the AMP flag name (`self._config.use_amp`) against the actual `TrainingPipelineConfig` field during Step 1 — adjust if the field is named differently.
@@ -2086,6 +2158,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ```python
 """End-to-end: MuJoCo env -> episodes -> RSSM pretrain -> checkpoint."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -2104,7 +2177,13 @@ from mousedroid.training.sim_episode_generator import SimEpisodeGenerator
 
 def test_end_to_end_pretrain_round_trip(tmp_path: Path) -> None:
     cfg = Settings(mock_hardware=True)
-    cfg = cfg.model_copy(update={"rover": cfg.rover.model_copy(update={"sim": cfg.rover.sim.model_copy(update={"backend": "mujoco"})})})
+    cfg = cfg.model_copy(
+        update={
+            "rover": cfg.rover.model_copy(
+                update={"sim": cfg.rover.sim.model_copy(update={"backend": "mujoco"})}
+            )
+        }
+    )
     env = build_rover_env(cfg)
     model = build_rssm_trainable(cfg)
     adapter = RoverObsAdapter(battery_v=cfg.rover.sim.mujoco.battery_voltage_const_v)
@@ -2121,6 +2200,7 @@ def test_end_to_end_pretrain_round_trip(tmp_path: Path) -> None:
 
 ```python
 """Golden RSSM pretrain loss — monotone-ish decrease + final threshold (non-gating)."""
+
 from __future__ import annotations
 
 import pytest
@@ -2139,14 +2219,20 @@ def test_loss_decreases_deterministically() -> None:
     torch.manual_seed(0)
     torch.use_deterministic_algorithms(True, warn_only=True)
     cfg = Settings(mock_hardware=True)
-    cfg = cfg.model_copy(update={"rover": cfg.rover.model_copy(update={"sim": cfg.rover.sim.model_copy(update={"backend": "mujoco"})})})
+    cfg = cfg.model_copy(
+        update={
+            "rover": cfg.rover.model_copy(
+                update={"sim": cfg.rover.sim.model_copy(update={"backend": "mujoco"})}
+            )
+        }
+    )
     env = build_rover_env(cfg)
     model = build_rssm_trainable(cfg)
     adapter = RoverObsAdapter(battery_v=cfg.rover.sim.mujoco.battery_voltage_const_v)
     batch = SimEpisodeGenerator(env, adapter, n_episodes=4, seq_len=8, seed=0).generate()
-    history = RSSMPretrainer(model, lr=1e-3, grad_clip=100.0, amp=False, device=torch.device("cpu")).train(
-        [batch], epochs=20, checkpoint_path=__import__("pathlib").Path("/tmp/_golden_rssm.pt")
-    )
+    history = RSSMPretrainer(
+        model, lr=1e-3, grad_clip=100.0, amp=False, device=torch.device("cpu")
+    ).train([batch], epochs=20, checkpoint_path=__import__("pathlib").Path("/tmp/_golden_rssm.pt"))
     env.close()
     # Tolerance-based, NOT point-wise ±1% (cross-platform float / MuJoCo drift).
     assert history[-1] < history[0] * 0.95  # at least 5% reduction

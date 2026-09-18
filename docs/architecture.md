@@ -758,20 +758,25 @@ class ESP32CommProtocol(Protocol):
     async def emergency_stop(self) -> None: ...
     async def disconnect(self) -> None: ...
 
+
 # src/mousedroid/factory/hardware.py
 def build_esp32_driver(cfg: Settings) -> ESP32CommProtocol:
     inner: ESP32CommProtocol
     if cfg.mock_hardware:
         from mousedroid.comms.mock_driver import MockESP32Driver
+
         inner = MockESP32Driver(cfg.esp32)
     elif cfg.esp32.protocol == "serial":
         from mousedroid.comms.serial_driver import SerialESP32Driver
+
         inner = SerialESP32Driver(cfg.esp32)
     else:
         from mousedroid.comms.wifi_driver import WiFiESP32Driver
+
         inner = WiFiESP32Driver(cfg.esp32)
 
     from mousedroid.resilience.resilient_driver import ResilientESP32Driver
+
     return ResilientESP32Driver(inner, cfg.retry, cfg.circuit_breaker)
 ```
 

@@ -9,11 +9,59 @@ import torch
 from torch import Tensor
 
 from mousedroid.config.schema import MCTSConfig
-from mousedroid.constants import DEFAULT_ACTION_DIM
+from mousedroid.constants import (
+    DEFAULT_ACTION_DIM,
+    DEFAULT_ACTION_LIMIT,
+    R_D_NEWTON_ITERATIONS,
+    R_D_NEWTON_START,
+    R_D_SEQUENCE_OFFSET,
+)
 from mousedroid.logging.setup import get_logger
 from mousedroid.world_model.protocol import WorldModelProtocol
 
 _log = get_logger(__name__)
+
+_AXIS_SIGNS: tuple[float, ...] = (1.0, -1.0)
+"""Directions emitted per action axis, in order, for the spanning candidate set.
+
+Interleaving +/- per axis (rather than grouping all positives first) is what
+makes truncation drop whole axes last-first instead of stripping every reverse
+direction. The primitive count derives from ``len(...)``, so nothing downstream
+restates "two directions per axis" as a literal.
+"""
+
+
+def _low_discrepancy_points(count: int, dim: int, device: torch.device) -> Tensor:
+    """Deterministic quasirandom points in ``[0, 1)``, shape ``(count, dim)``.
+
+    Uses the R_d additive recurrence (Roberts' generalisation of the golden
+    ratio): ``x_n = frac(0.5 + n * alpha)`` where ``alpha_i = phi**-(i+1)`` and
+    ``phi`` is the positive root of ``x**(dim+1) = x + 1``. Chosen over
+    ``torch.quasirandom.SobolEngine`` because it is a handful of typed tensor
+    ops with no untyped-stub dependency, needs no engine state, and is
+    bit-reproducible across processes and platforms.
+
+    Args:
+        count: Number of points to generate.
+        dim: Dimensionality of each point.
+        device: Torch device for the returned tensor.
+
+    Returns:
+        Tensor of shape ``(count, dim)`` with values in ``[0, 1)``.
+    """
+    if dim < 1:
+        msg = f"low-discrepancy points need dim >= 1, got {dim}"
+        raise ValueError(msg)
+    phi = R_D_NEWTON_START
+    for _ in range(R_D_NEWTON_ITERATIONS):
+        numerator = phi ** (dim + 1) - phi - 1.0
+        denominator = (dim + 1) * phi**dim - 1.0
+        phi -= numerator / denominator
+    alpha = torch.tensor(
+        [phi ** -(axis + 1) for axis in range(dim)], dtype=torch.float32, device=device
+    )
+    steps = torch.arange(1, count + 1, dtype=torch.float32, device=device).unsqueeze(-1)
+    return torch.frac(R_D_SEQUENCE_OFFSET + steps * alpha)
 
 
 @dataclass
@@ -62,6 +110,7 @@ class MCTSPlanner:
             rollout_depth=cfg.rollout_depth,
             ucb_c=cfg.ucb_c,
             n_action_candidates=cfg.n_action_candidates,
+            action_candidate_strategy=cfg.action_candidate_strategy,
         )
 
     # ------------------------------------------------------------------
@@ -69,16 +118,96 @@ class MCTSPlanner:
     # ------------------------------------------------------------------
 
     def _generate_candidate_actions(self, device: torch.device) -> Tensor:
-        """Uniformly sample candidate actions in [-1, 1].
+        """Build the candidate action set the tree policy selects between.
+
+        Dispatches on ``MCTSConfig.action_candidate_strategy``. See that
+        field's description for why the default is rank-deficient and why
+        the spanning alternative is opt-in rather than a silent flip.
+
+        Returns:
+            Tensor of shape ``(n_action_candidates, action_dim)``, values in
+            ``[-DEFAULT_ACTION_LIMIT, +DEFAULT_ACTION_LIMIT]``.
+        """
+        if self._cfg.action_candidate_strategy == "per_axis":
+            return self._per_axis_candidates(device)
+        return self._shared_axis_candidates(device)
+
+    def _shared_axis_candidates(self, device: torch.device) -> Tensor:
+        """Legacy candidate set: one linspace broadcast across every axis.
+
+        Preserved byte-identically for backwards compatibility. Every row
+        satisfies ``vx == vy == omega``, so the returned matrix has rank 1 and
+        cannot express "drive straight" or "turn in place".
 
         Returns:
             Tensor of shape ``(n_action_candidates, action_dim)``.
         """
         n = self._cfg.n_action_candidates
         action_dim = self._action_dim
-        raw = torch.linspace(-1.0, 1.0, n, device=device)
+        raw = torch.linspace(-DEFAULT_ACTION_LIMIT, DEFAULT_ACTION_LIMIT, n, device=device)
         # Expand to full action space: repeat across action dims.
         actions = raw.unsqueeze(-1).expand(n, action_dim)
+        return actions
+
+    def _per_axis_candidates(self, device: torch.device) -> Tensor:
+        """Spanning candidate set: stop, per-axis unit moves, quasirandom fill.
+
+        Ordered by decreasing operational importance so that a
+        ``n_action_candidates`` smaller than the primitive count degrades
+        predictably (stop is never dropped) rather than arbitrarily:
+
+        1. the zero action (full stop);
+        2. ``+limit`` then ``-limit`` along each action axis in turn;
+        3. a deterministic low-discrepancy fill for any remaining slots.
+
+        Dimension-agnostic: no axis count, candidate count or bound is
+        hardcoded here. Built functionally — no in-place tensor writes — per
+        invariant 3 of this subsystem's contract.
+
+        The fill needs no de-duplication. ``_low_discrepancy_points`` is an
+        irrational rotation evaluated from step 1, so it never returns the
+        cube centre (step 0, the one point that would map onto the stop
+        action) and never repeats; the primitives sit exactly on 0 and
+        +/-limit, which the rotation misses for the same reason. Uniqueness is
+        asserted by the property tier rather than defended at runtime.
+
+        Returns:
+            Tensor of shape ``(n_action_candidates, action_dim)``, contiguous.
+        """
+        n = self._cfg.n_action_candidates
+        action_dim = self._action_dim
+        stop = torch.zeros(1, action_dim, device=device)
+        axes = torch.eye(action_dim, device=device) * DEFAULT_ACTION_LIMIT
+        # Interleave +axis / -axis so truncation drops whole axes last-first
+        # rather than stripping every negative direction.
+        signed = torch.stack([axes * sign for sign in _AXIS_SIGNS], dim=1).reshape(
+            len(_AXIS_SIGNS) * action_dim, action_dim
+        )
+        blocks: list[Tensor] = [stop, signed]
+
+        n_primitives = 1 + len(_AXIS_SIGNS) * action_dim
+        if n < n_primitives:
+            _log.warning(
+                "mcts_candidates_truncated",
+                n_action_candidates=n,
+                n_primitives=n_primitives,
+                action_dim=action_dim,
+                detail="fewer candidates than motion primitives; some axes unreachable",
+            )
+        elif n > n_primitives:
+            pool = _low_discrepancy_points(n - n_primitives, action_dim, device)
+            lower, upper = -DEFAULT_ACTION_LIMIT, DEFAULT_ACTION_LIMIT
+            blocks.append(pool * (upper - lower) + lower)
+
+        # ``-axes`` yields -0.0 entries; ``+ 0.0`` normalises them so the
+        # driver never emits a signed negative zero the legacy path could not.
+        actions = (torch.cat(blocks, dim=0)[:n] + 0.0).contiguous()
+        _log.debug(
+            "mcts_candidates_built",
+            strategy="per_axis",
+            shape=tuple(actions.shape),
+            n_primitives=min(n_primitives, n),
+        )
         return actions
 
     def _ucb1(self, node: _Node, parent_visits: int) -> float:

@@ -157,6 +157,11 @@ def tune_ucb(
             n_action_candidates=base_cfg.n_action_candidates,
             ucb_c=ucb_c,
             ucb_target_ms=target_ms,
+            # Tune against the candidate set the rover will actually plan over:
+            # the UCB constant trades exploration against a specific branching
+            # factor, so tuning on the legacy diagonal and deploying per_axis
+            # would ship a constant fitted to a different action space.
+            action_candidate_strategy=base_cfg.action_candidate_strategy,
         )
         planner = MCTSPlanner(cfg, rssm)
 

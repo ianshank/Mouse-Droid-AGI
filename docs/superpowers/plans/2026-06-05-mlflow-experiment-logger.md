@@ -286,8 +286,6 @@ class ObservabilityConfig(BaseModel):
         default_factory=ExperimentLoggerConfig,
         description="Per-run experiment-logger config (MLflow file backend).",
     )
-
-
 ```
 
 Then find the `Settings` field block (line ~4765-4767, currently has `offline_rl` → `ppo` → `telemetry`). INSERT the new field alphabetically between `ppo` and `telemetry`:
@@ -919,9 +917,7 @@ def test_log_metric_skips_nonfinite_value(tracking_uri: str, client: MlflowClien
     assert [(m.step, m.value) for m in history] == [(1, 0.5)]
 
 
-def test_start_phase_nests_under_parent_via_tag(
-    tracking_uri: str, client: MlflowClient
-) -> None:
+def test_start_phase_nests_under_parent_via_tag(tracking_uri: str, client: MlflowClient) -> None:
     """Nested runs are tagged with mlflow.parentRunId — the canonical pattern."""
     logger = _build_logger(tracking_uri)
     parent_id = logger.start_run(run_name="pipe")
@@ -1753,46 +1749,43 @@ WITH:
 Wrap the phase loop body in a try/except so failures mark the parent FAILED. Locate line 92 (the `for idx in range(start_idx, len(phases)):`). REPLACE the loop block (lines 92-124) with:
 
 ```python
+try:
+    for idx in range(start_idx, len(phases)):
+        phase = phases[idx]
+        phase_log = logger.bind(phase=phase, phase_index=idx)
+
+        await self._wait_for_thermal_clearance(phase_log)
+
+        base_batch = self._config.batch_sizes.get(phase, self._settings.training.batch_size)
+        tuned_batch = self._batch_tuner.tune_batch_size(phase, base_batch)
+
+        if idx > start_idx:
+            prev_phase = phases[idx - 1]
+            if not self._checkpoint_exists(prev_phase):
+                msg = f"Missing checkpoint for phase '{prev_phase}' — cannot proceed to '{phase}'"
+                raise RuntimeError(msg)
+
+        phase_log.info(
+            "phase_starting",
+            batch_size=tuned_batch,
+            amp_enabled=self._config.amp_enabled,
+        )
+
         try:
-            for idx in range(start_idx, len(phases)):
-                phase = phases[idx]
-                phase_log = logger.bind(phase=phase, phase_index=idx)
-
-                await self._wait_for_thermal_clearance(phase_log)
-
-                base_batch = self._config.batch_sizes.get(phase, self._settings.training.batch_size)
-                tuned_batch = self._batch_tuner.tune_batch_size(phase, base_batch)
-
-                if idx > start_idx:
-                    prev_phase = phases[idx - 1]
-                    if not self._checkpoint_exists(prev_phase):
-                        msg = (
-                            f"Missing checkpoint for phase '{prev_phase}' — "
-                            f"cannot proceed to '{phase}'"
-                        )
-                        raise RuntimeError(msg)
-
-                phase_log.info(
-                    "phase_starting",
-                    batch_size=tuned_batch,
-                    amp_enabled=self._config.amp_enabled,
-                )
-
-                try:
-                    await self._run_phase(phase, tuned_batch)
-                except Exception:
-                    phase_log.exception("phase_failed")
-                    raise
-
-                phase_log.info("phase_completed")
+            await self._run_phase(phase, tuned_batch)
         except Exception:
-            run_status = "FAILED"
+            phase_log.exception("phase_failed")
             raise
-        finally:
-            self._experiment_logger.end_run(status=run_status)
-            del parent_run_id  # locally bound for symmetry; logger holds state
 
-        logger.info("pipeline_completed", phases_run=phases[start_idx:])
+        phase_log.info("phase_completed")
+except Exception:
+    run_status = "FAILED"
+    raise
+finally:
+    self._experiment_logger.end_run(status=run_status)
+    del parent_run_id  # locally bound for symmetry; logger holds state
+
+logger.info("pipeline_completed", phases_run=phases[start_idx:])
 ```
 
 Modify `_run_phase()` (lines 128-149) to bracket each phase as a child run:

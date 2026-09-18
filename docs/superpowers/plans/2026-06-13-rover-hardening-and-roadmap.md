@@ -134,6 +134,7 @@ The module docstring in ``src/mousedroid/skills/builtin/__init__.py`` promises
 this test exists. It pins that every builtin spec has a publishable SKILL.md
 whose front-matter name matches the spec name, so the two never drift.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -200,6 +201,7 @@ Goal: a reusable validator that lints every command skill (frontmatter + referen
 ```python
 # tests/unit/tools/test_validate_skill_commands.py
 """Unit tests for the reusable command-skill validator."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -269,6 +271,7 @@ Paths are *discovered* from the body, never enumerated here, so the tool keeps
 working as skills evolve. Format/glob tokens ({}, *, $, <>) are excluded so
 illustrative patterns like ``weights/arm/{task}_final.pt`` are not false flags.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -339,12 +342,16 @@ def validate_command_skill(path: Path, *, repo_root: Path) -> list[SkillCommandI
 
     meta, body = _split_front_matter(text)
     if meta is None:
-        issues.append(SkillCommandIssue(path, "bad-front-matter", "missing/invalid YAML front-matter"))
+        issues.append(
+            SkillCommandIssue(path, "bad-front-matter", "missing/invalid YAML front-matter")
+        )
         meta, body = {}, text
 
     description = str(meta.get("description", "")).strip()
     if not description:
-        issues.append(SkillCommandIssue(path, "missing-description", "front-matter 'description' is empty"))
+        issues.append(
+            SkillCommandIssue(path, "missing-description", "front-matter 'description' is empty")
+        )
 
     for ref in referenced_repo_paths(body):
         if not (repo_root / ref).exists():
@@ -405,6 +412,7 @@ Locks the contract a careless edit could break: every command skill carries a
 non-empty description, references only paths that exist, and bakes in no host/IP.
 Reuses the shared validator so the rule lives in exactly one place.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -452,6 +460,7 @@ Each test runs the workflow a skill documents and asserts on what it produces.
 Arm-dependent skills are gated on the optional [arm] extras so CI hosts without
 MuJoCo skip cleanly (robot-arm is the deferred baseline per NEXT_STEPS.md).
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -468,9 +477,21 @@ def test_sim_test_skill_runs_arm_suite() -> None:
     pytest.importorskip("mujoco")  # arm extras absent -> skip, not fail
     # The command documented in .claude/commands/sim-test.md (smallest scope).
     result = subprocess.run(
-        [sys.executable, "-m", "pytest", "tests/unit/arm/", "-k", "env",
-         "-q", "--import-mode=importlib", "--no-cov"],
-        cwd=_REPO_ROOT, capture_output=True, text=True, timeout=600,
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "tests/unit/arm/",
+            "-k",
+            "env",
+            "-q",
+            "--import-mode=importlib",
+            "--no-cov",
+        ],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=600,
     )
     assert result.returncode == 0, f"sim-test 'env' scope failed:\n{result.stdout}\n{result.stderr}"
 ```
@@ -495,8 +516,8 @@ def test_train_policy_skill_emits_checkpoint(tmp_path: Path) -> None:
     assert cfg.arm is not None, "arm overlay must load from YAML, not env"
     # Build env + agent via the real arm factory (do not reimplement a loop).
     # env = build_arm_env(cfg); agent = build_sac_her_agent(cfg, env)
-    for _ in range(5):        # test-local smoke budget — a handful of steps
-        agent.update_step()   # exact API per src/mousedroid/arm/control/sac_agent.py
+    for _ in range(5):  # test-local smoke budget — a handful of steps
+        agent.update_step()  # exact API per src/mousedroid/arm/control/sac_agent.py
     agent.save(tmp_path)
     assert any(p.is_file() for p in tmp_path.rglob("*")), "save() wrote no checkpoint"
 ```
@@ -522,6 +543,7 @@ The three `.claude/commands` skills all target the *deferred* arm subsystem, so 
 ```python
 # tests/e2e/test_builtin_skill_output_e2e.py
 """E2E: a live builtin skill produces schema_out-conformant output via the delegator."""
+
 from __future__ import annotations
 
 import pytest
@@ -591,6 +613,7 @@ disallow_untyped_calls = false
 ```python
 # tests/regression/test_numpy_hygiene.py
 """Regression: no deprecated NumPy aliases creep back into src/."""
+
 from __future__ import annotations
 
 import re
@@ -602,7 +625,8 @@ _BANNED = re.compile(r"\bnp\.(float|int|bool|object|str|NaN|complex)\b")
 
 def test_no_deprecated_numpy_aliases() -> None:
     offenders = [
-        f"{p}:{i}" for p in _SRC.rglob("*.py")
+        f"{p}:{i}"
+        for p in _SRC.rglob("*.py")
         for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
         if _BANNED.search(line)
     ]
@@ -617,6 +641,7 @@ def test_no_deprecated_numpy_aliases() -> None:
 
 Update the budgets DOWN as the purge lands; never up without justification.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -627,7 +652,7 @@ _SRC = Path(__file__).resolve().parents[2] / "src" / "mousedroid"
 # NON-ZERO. The executor REPLACES these with the real counts after Tasks
 # 4.2/4.3 and may only ratchet them DOWN, never up without a documented reason.
 _MAX_TYPE_IGNORE = -1  # REPLACE with measured residual (e.g. ~8) after Task 4.2
-_MAX_NOQA = -1         # REPLACE with measured residual after Task 4.3
+_MAX_NOQA = -1  # REPLACE with measured residual after Task 4.3
 
 
 def _count(token: str) -> int:

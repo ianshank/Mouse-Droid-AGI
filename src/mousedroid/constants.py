@@ -16,6 +16,14 @@ DEFAULT_MOTOR_STATE_DIM: int = 4
 DEFAULT_ACTION_DIM: int = 3
 """Action dimension ``[vx, vy, omega]``."""
 
+DEFAULT_ACTION_LIMIT: float = 1.0
+"""Normalised per-axis action bound: planners emit actions in ``[-limit, +limit]``.
+
+This is the *latent* action convention shared by the RSSM, the MCTS planner and
+``PolicyMLP`` — not a physical limit. Physical clamping happens downstream from
+``SafetyConfig.action_min`` / ``action_max`` and the ``ESP32Config.max_*`` fields.
+"""
+
 DEFAULT_MAX_DISTANCE_M: float = 4.0
 """Default max ultrasonic range in metres (mirrors ``UltrasonicConfig.max_range_m``)."""
 
@@ -84,6 +92,28 @@ DEFAULT_AFFECT_DIM: int = 2
 
 DEFAULT_POLICY_HIDDEN_DIM: int = 64
 """Hidden layer dimensionality for PolicyMLP and ValueMLP networks."""
+
+R_D_NEWTON_ITERATIONS: int = 40
+"""Newton steps solving ``x**(dim+1) = x + 1`` for the R_d quasirandom basis.
+
+Reaches machine precision well inside this many steps for every action
+dimension a candidate set can have (residual <= 2e-15 at dim 1-12). Fixed
+rather than tolerance-based so the sequence is bit-identical across platforms.
+"""
+
+R_D_NEWTON_START: float = 2.0
+"""Newton start point for the R_d root, right of the root for every dim.
+
+``f(x) = x**(dim+1) - x - 1`` is convex on ``x > 0``, so starting to the right
+of the root makes the descent monotone.
+"""
+
+R_D_SEQUENCE_OFFSET: float = 0.5
+"""Phase offset of the R_d additive recurrence, ``frac(offset + n * alpha)``.
+
+Evaluated from step 1, so the sequence never returns the unit-cube centre —
+which is what keeps the MCTS fill from colliding with the stop action.
+"""
 
 DEFAULT_UCB_CANDIDATES: tuple[float, ...] = (0.5, 1.0, 1.41, 2.0, 3.0)
 """Default UCB exploration constants evaluated during warm-start tuning."""

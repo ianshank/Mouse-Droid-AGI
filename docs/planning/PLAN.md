@@ -42,6 +42,7 @@ class CircuitState(enum.Enum):
     OPEN = "open"
     HALF_OPEN = "half_open"
 
+
 class CircuitBreaker:
     def __init__(self, name: str, cfg: CircuitBreakerConfig) -> None: ...
     @property
@@ -50,6 +51,7 @@ class CircuitBreaker:
     def failure_count(self) -> int: ...
     async def call(self, func: Callable[..., Awaitable[T]], *args, **kwargs) -> T: ...
     def reset(self) -> None: ...
+
 
 class CircuitOpenError(Exception):
     """Raised when circuit is open and call is rejected."""
@@ -88,8 +90,10 @@ class CircuitOpenError(Exception):
 ```python
 class RetryExhaustedError(Exception):
     """All retry attempts failed."""
+
     attempts: int
     last_exception: BaseException
+
 
 async def retry_async(
     func: Callable[..., Awaitable[T]],
@@ -99,6 +103,7 @@ async def retry_async(
     **kwargs: Any,
 ) -> T: ...
 
+
 def with_retry(
     cfg: RetryConfig,
     retryable_exceptions: tuple[type[BaseException], ...] = (Exception,),
@@ -107,7 +112,7 @@ def with_retry(
 
 ### Backoff Formula
 ```python
-delay = min(cfg.base_delay_s * (cfg.exponential_base ** attempt), cfg.max_delay_s)
+delay = min(cfg.base_delay_s * (cfg.exponential_base**attempt), cfg.max_delay_s)
 jitter = random.uniform(0, delay * 0.1)  # 10% jitter
 actual_delay = delay + jitter
 ```
@@ -148,6 +153,7 @@ class ResilientESP32Driver:
 
     Implements ESP32CommProtocol — drop-in replacement.
     """
+
     def __init__(
         self,
         inner: ESP32CommProtocol,
@@ -240,8 +246,12 @@ from mousedroid.resilience.retry import RetryExhaustedError, retry_async, with_r
 from mousedroid.resilience.resilient_driver import ResilientESP32Driver
 
 __all__ = [
-    "CircuitBreaker", "CircuitOpenError", "CircuitState",
-    "RetryExhaustedError", "retry_async", "with_retry",
+    "CircuitBreaker",
+    "CircuitOpenError",
+    "CircuitState",
+    "RetryExhaustedError",
+    "retry_async",
+    "with_retry",
     "ResilientESP32Driver",
 ]
 ```
@@ -252,6 +262,7 @@ def build_esp32_driver(cfg: Settings) -> ESP32CommProtocol:
     # ... existing driver selection ...
     # NEW: wrap with resilient driver
     from mousedroid.resilience.resilient_driver import ResilientESP32Driver
+
     return ResilientESP32Driver(inner=driver, retry_cfg=cfg.retry, cb_cfg=cfg.circuit_breaker)
 ```
 
