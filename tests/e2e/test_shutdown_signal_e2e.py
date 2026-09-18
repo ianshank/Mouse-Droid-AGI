@@ -18,11 +18,13 @@ all — the ``finally`` never ran.
 from __future__ import annotations
 
 import os
-import select
 import signal
 import subprocess
 import sys
 import time
+
+if sys.platform != "win32":
+    import select
 from pathlib import Path
 
 import pytest
