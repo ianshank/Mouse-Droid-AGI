@@ -67,6 +67,14 @@ DEFAULT_LIDAR_MIN_RANGE_M: float = 0.15
 MILLISECONDS_PER_SECOND: float = 1000.0
 """Conversion factor from seconds to milliseconds."""
 
+LOG_PRECISION_DP: int = 3
+"""Decimal places for distance and elapsed-time values in log events.
+
+A log-formatting choice, not a runtime tunable: no interlock reads it, and
+changing it cannot change what the rover does. That is why it lives here
+rather than in a Pydantic schema.
+"""
+
 WEIGHT_INIT_SCALE: float = 0.01
 """Default scale factor for random weight initialisation in numpy MLPs."""
 

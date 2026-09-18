@@ -7,19 +7,35 @@ Each control-loop tick the monitor produces a frozen
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 import numpy as np
 
-from mousedroid.constants import MOTOR_STATE_BATTERY_INDEX
+from mousedroid.constants import LOG_PRECISION_DP, MOTOR_STATE_BATTERY_INDEX
 from mousedroid.logging.setup import get_logger
 from mousedroid.safety.context import SafetyContext
 
 if TYPE_CHECKING:
+    from numpy.typing import NDArray
+
     from mousedroid.config.schema import SafetyConfig
     from mousedroid.sensing.protocol import ObservationProtocol
 
 _log = get_logger(__name__)
+
+LIDAR_UNAVAILABLE_DIST_M: float = 0.0
+"""Clearance reported for a LiDAR-less tick under a fail-closed policy.
+
+Deliberately NOT a config field: this is not a tunable threshold but the
+definition of the worst case — "assume an obstacle is in contact". Every
+clearance comparison in this module and in
+:mod:`mousedroid.safety.projector` is a strict ``<`` against a ``gt=0``
+threshold, so 0.0 is guaranteed to fail all of them regardless of how the
+operator tunes ``min_forward_clearance_m``, ``lidar_brake_distance_m`` or
+``tight_quarters_dist_m``. Making it tunable would only create a way to
+configure the fail-closed path back open.
+"""
 
 
 class MouseDroidSafetyMonitor:
@@ -49,6 +65,12 @@ class MouseDroidSafetyMonitor:
         self._loop_overrun_streak = 0
         self._last_counted_tick_index: int | None = None
         self._ticks_seen = 0
+        # Observation timestamp of the last tick that carried usable LiDAR
+        # features. ``None`` until the monitor has seen either a usable scan
+        # or its first LiDAR-less tick under a fail-closed policy — see
+        # ``_evaluate_lidar_clearance`` for why it is seeded there rather
+        # than left unset.
+        self._lidar_last_valid_ts: float | None = None
 
     # -- SafetyMonitorProtocol ---------------------------------------------
 
@@ -124,6 +146,103 @@ class MouseDroidSafetyMonitor:
             streak=self._loop_overrun_streak,
         )
         return True
+
+    def _evaluate_lidar_clearance(
+        self,
+        lidar_features: NDArray[np.float32] | None,
+        timestamp: float,
+    ) -> tuple[float, bool, bool]:
+        """Judge 360-degree LiDAR clearance, failing CLOSED when data is absent.
+
+        Extracted from :meth:`evaluate` both to keep that method under the
+        ``ruff C901`` ceiling (it sat at 14 of 15 before this branch existed)
+        and because "what does an ABSENT LiDAR reading mean" is a policy
+        question worth isolating from the arithmetic of a present one.
+
+        The absent case used to be unreachable in practice, and that was the
+        bug. ``SensorManager._safe_lidar_read`` substituted
+        ``np.ones(feature_dim)`` for a failed read; features are normalised
+        range fractions, so all-ones read through here as ``1.0 *
+        lidar_max_range_m`` — a dead LiDAR reported full clearance in every
+        sector and ``lidar_clearance_ok`` stayed ``True``. The sensing layer
+        now reports ``None``, and this method decides what that means.
+
+        The generic ``sensor_stale_s`` sweep in :meth:`evaluate` is not a
+        backstop for this. It only fires for a mask slot that was valid at
+        least once, so a LiDAR that is dead *from boot* never enters
+        ``_last_valid_timestamps`` and never goes stale — it fails open
+        forever. Seeding ``_lidar_last_valid_ts`` on the first LiDAR-less
+        tick below is what closes that hole.
+
+        Args:
+            lidar_features: Normalised sector ranges for this tick, or
+                ``None``/empty when the modality produced nothing.
+            timestamp: Observation timestamp, used as the grace-window clock
+                so the window tracks sensor time rather than wall time.
+
+        Returns:
+            ``(lidar_min_dist_m, lidar_clearance_ok, is_emergency)``.
+        """
+        cfg = self._cfg
+
+        if lidar_features is not None and len(lidar_features) > 0:
+            self._lidar_last_valid_ts = timestamp
+            # Features are normalised distances (min_in_sector / max_range).
+            # Convert to metres using the maximum observed feature range.
+            lidar_min_dist_m = float(np.min(lidar_features)) * cfg.lidar_max_range_m
+            if lidar_min_dist_m < cfg.min_forward_clearance_m:
+                _log.warning(
+                    "lidar_clearance_violation",
+                    lidar_min_dist_m=round(lidar_min_dist_m, LOG_PRECISION_DP),
+                    threshold_m=cfg.min_forward_clearance_m,
+                )
+                return lidar_min_dist_m, False, True
+            return lidar_min_dist_m, True, False
+
+        # -- No usable LiDAR this tick ------------------------------------
+        policy = cfg.lidar_unavailable_policy
+        if policy == "ignore":
+            # Pre-existing behaviour, kept as the default so existing YAML
+            # deploys unchanged: the modality is simply not consulted.
+            return math.inf, True, False
+
+        if self._lidar_last_valid_ts is None:
+            # Never seen a usable scan. Start the grace clock now so a LiDAR
+            # that was dead before the first tick still trips, instead of
+            # waiting forever for a "last valid" time that never arrives.
+            self._lidar_last_valid_ts = timestamp
+
+        elapsed = timestamp - self._lidar_last_valid_ts
+        if elapsed < cfg.lidar_unavailable_grace_s:
+            # Strict ``<``, so a grace of 0.0 really is no grace: the policy
+            # fires on the very first tick without usable features rather than
+            # granting a free one. That also keeps the window independent of
+            # clock granularity — on a host whose monotonic clock ticks every
+            # ~16 ms, two 30 Hz observations can share a timestamp, and an
+            # inclusive comparison would hand a zero-grace deployment a
+            # silent reprieve whenever they did.
+            _log.debug(
+                "lidar_unavailable_grace",
+                elapsed_s=round(elapsed, LOG_PRECISION_DP),
+                grace_s=cfg.lidar_unavailable_grace_s,
+                policy=policy,
+            )
+            return math.inf, True, False
+
+        is_emergency = policy == "emergency"
+        log_unavailable = _log.error if is_emergency else _log.warning
+        log_unavailable(
+            "lidar_unavailable",
+            elapsed_s=round(elapsed, LOG_PRECISION_DP),
+            grace_s=cfg.lidar_unavailable_grace_s,
+            policy=policy,
+            reported_clearance_m=LIDAR_UNAVAILABLE_DIST_M,
+            hint=(
+                "no LiDAR features this tick — reporting worst-case clearance "
+                "rather than reading through to a fabricated distance"
+            ),
+        )
+        return LIDAR_UNAVAILABLE_DIST_M, False, is_emergency
 
     def evaluate(
         self,
@@ -219,7 +338,7 @@ class MouseDroidSafetyMonitor:
                     _log.warning(
                         "sensor_stale",
                         sensor_index=i,
-                        elapsed_s=round(elapsed, 3),
+                        elapsed_s=round(elapsed, LOG_PRECISION_DP),
                         threshold_s=self._cfg.sensor_stale_s,
                     )
                     is_emergency = True
@@ -239,22 +358,12 @@ class MouseDroidSafetyMonitor:
             is_emergency = True
 
         # -- LiDAR 360-degree clearance ------------------------------------
-        lidar_min_dist_m = float("inf")
-        lidar_clearance_ok = True
-        lidar_features = observation.lidar_features
-        if lidar_features is not None and len(lidar_features) > 0:
-            # Features are normalised distances (min_in_sector / max_range).
-            # Convert to metres using the maximum observed feature range.
-            lidar_max_range = self._cfg.lidar_max_range_m
-            lidar_min_dist_m = float(np.min(lidar_features)) * lidar_max_range
-            if lidar_min_dist_m < self._cfg.min_forward_clearance_m:
-                lidar_clearance_ok = False
-                _log.warning(
-                    "lidar_clearance_violation",
-                    lidar_min_dist_m=round(lidar_min_dist_m, 3),
-                    threshold_m=self._cfg.min_forward_clearance_m,
-                )
-                is_emergency = True
+        lidar_min_dist_m, lidar_clearance_ok, lidar_emergency = self._evaluate_lidar_clearance(
+            observation.lidar_features,
+            current_time,
+        )
+        if lidar_emergency:
+            is_emergency = True
 
         # -- Human detection (from observation if available) ---------------
         human_detected = bool(getattr(observation, "human_detected", False))

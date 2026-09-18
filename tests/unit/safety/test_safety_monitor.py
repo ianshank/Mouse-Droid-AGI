@@ -337,3 +337,209 @@ def test_floor_of_zero_restores_pre_f025_behaviour():
     m = _make_monitor(battery_critical_v=9.5, battery_implausible_below_v=0.0)
     ctx = m.evaluate(_make_obs(battery_v=0.0), loop_time_ms=10.0)
     assert ctx.is_emergency is True
+
+
+# ---------------------------------------------------------------------------
+# S-2: LiDAR reads fail CLOSED
+#
+# ``SensorManager._safe_lidar_read`` used to substitute ``np.ones(feature_dim)``
+# for a failed read. Features are normalised range fractions
+# (``min_in_sector / max_range``), so all-ones meant "maximum range in every
+# sector": the monitor computed ``1.0 * lidar_max_range_m`` and reported 12 m
+# of clearance from a dead LiDAR. The sensing layer now reports ``None`` and
+# ``SafetyConfig.lidar_unavailable_policy`` decides what that means here.
+# ---------------------------------------------------------------------------
+
+#: Long enough that the generic ``sensor_stale_s`` sweep cannot fire during a
+#: multi-tick LiDAR test. Without this, a 5-slot mask whose LiDAR slot goes
+#: 1.0 -> 0.0 would raise ``is_emergency`` through the STALENESS path, and a
+#: test could pass while the policy under test did nothing.
+_STALENESS_OUT_OF_THE_WAY: dict[str, float] = {"sensor_stale_s": 100.0}
+
+
+def _make_lidar_obs(
+    lidar_features: np.ndarray | None,
+    *,
+    timestamp: float = 0.0,
+    lidar_slot_valid: bool = False,
+) -> MouseDroidObservationBundle:
+    """Observation shaped the way ``SensorManager`` emits one with LiDAR fitted.
+
+    The mask is 5-wide because ``_compose_valid_mask`` widens it whenever a
+    LiDAR driver is attached, valid or not; slot 4 carries the LiDAR's own
+    validity.
+    """
+    motor = np.array([0.0, 0.0, 0.0, 12.0], dtype=np.float32)
+    mask = np.array([1.0, 1.0, 1.0, 1.0, float(lidar_slot_valid)], dtype=np.float32)
+    return MouseDroidObservationBundle(
+        _timestamp=timestamp,
+        _distance_m=2.0,
+        _motor_state=motor,
+        _lidar_features=lidar_features,
+        _valid_mask=mask,
+    )
+
+
+def _clear_features() -> np.ndarray:
+    """A genuine all-clear scan -- the vector the old failure path faked."""
+    return np.ones(36, dtype=np.float32)
+
+
+def test_lidar_unavailable_policy_defaults_to_ignore():
+    """The shipped default is the pre-S-2 read-through, so YAML deploys unchanged."""
+    assert SafetyConfig().lidar_unavailable_policy == "ignore"
+    assert SafetyConfig().lidar_unavailable_grace_s == 0.0
+
+
+def test_lidar_unavailable_ignore_reads_through_as_before():
+    """``ignore``: absent features are simply not consulted."""
+    m = _make_monitor()
+    ctx = m.evaluate(_make_lidar_obs(None), loop_time_ms=10.0)
+    assert ctx.lidar_min_dist_m == float("inf")
+    assert ctx.lidar_clearance_ok is True
+    assert ctx.is_emergency is False
+
+
+def test_lidar_unavailable_emergency_reports_worst_case_clearance():
+    """``emergency``: absent features mean zero clearance and a stop.
+
+    One tick is enough: ``lidar_unavailable_grace_s`` defaults to 0.0 and the
+    window is exclusive, so a zero grace grants no free tick.
+    """
+    m = _make_monitor(lidar_unavailable_policy="emergency", **_STALENESS_OUT_OF_THE_WAY)
+    ctx = m.evaluate(_make_lidar_obs(None, timestamp=0.0), loop_time_ms=10.0)
+    assert ctx.lidar_min_dist_m == 0.0
+    assert ctx.lidar_clearance_ok is False
+    assert ctx.is_emergency is True
+
+
+def test_lidar_unavailable_degrade_clamps_without_emergency():
+    """``degrade``: worst-case clearance for the projector, but no e-stop.
+
+    0.0 m is below ``lidar_brake_distance_m`` (0.30) and
+    ``tight_quarters_dist_m`` (0.50), so ``SafetyProjector`` throttles the
+    rover to a crawl while the mission keeps running.
+    """
+    m = _make_monitor(lidar_unavailable_policy="degrade", **_STALENESS_OUT_OF_THE_WAY)
+    ctx = m.evaluate(_make_lidar_obs(None, timestamp=0.0), loop_time_ms=10.0)
+    assert ctx.lidar_min_dist_m == 0.0
+    assert ctx.lidar_clearance_ok is False
+    assert ctx.is_emergency is False
+
+
+def test_lidar_empty_feature_vector_counts_as_unavailable():
+    """A zero-length vector is absence, not a scan that found no obstacles."""
+    m = _make_monitor(lidar_unavailable_policy="emergency", **_STALENESS_OUT_OF_THE_WAY)
+    empty = np.zeros(0, dtype=np.float32)
+    ctx = m.evaluate(_make_lidar_obs(empty, timestamp=0.0), loop_time_ms=10.0)
+    assert ctx.lidar_clearance_ok is False
+    assert ctx.is_emergency is True
+
+
+def test_lidar_dead_from_boot_still_trips():
+    """The hole the generic staleness sweep cannot close.
+
+    The ``sensor_stale_s`` loop in ``evaluate`` only fires for a mask slot
+    that was valid at least once: it records ``_last_valid_timestamps[i]`` on
+    a valid tick and compares against it later. A LiDAR that is dead before
+    the first tick never enters that dict, so it never goes stale and failed
+    open forever. This drives ten seconds of ticks in which the LiDAR is
+    *never* valid and asserts the interlock fires anyway.
+    """
+    m = _make_monitor(
+        lidar_unavailable_policy="emergency",
+        lidar_unavailable_grace_s=0.5,
+        # Deliberately SHORT, to prove the trip below is not the generic
+        # sweep sneaking in: slot 4 is never valid, so this is inert here.
+        sensor_stale_s=0.1,
+    )
+    contexts = [
+        m.evaluate(_make_lidar_obs(None, timestamp=t / 10.0), loop_time_ms=10.0) for t in range(100)
+    ]
+    assert contexts[0].is_emergency is False, "grace window must cover the first tick"
+    assert contexts[-1].is_emergency is True
+    assert contexts[-1].lidar_min_dist_m == 0.0
+
+
+def test_lidar_grace_window_debounces_a_single_dropped_scan():
+    """One dropped scan inside the grace window must not brake the rover."""
+    m = _make_monitor(
+        lidar_unavailable_policy="emergency",
+        lidar_unavailable_grace_s=0.5,
+        **_STALENESS_OUT_OF_THE_WAY,
+    )
+    m.evaluate(
+        _make_lidar_obs(_clear_features(), timestamp=0.0, lidar_slot_valid=True),
+        loop_time_ms=10.0,
+    )
+    dropped = m.evaluate(_make_lidar_obs(None, timestamp=0.03), loop_time_ms=10.0)
+    assert dropped.is_emergency is False
+    assert dropped.lidar_clearance_ok is True
+
+    sustained = m.evaluate(_make_lidar_obs(None, timestamp=0.9), loop_time_ms=10.0)
+    assert sustained.is_emergency is True
+
+
+def test_lidar_recovery_restarts_the_grace_clock():
+    """A flapping LiDAR that keeps recovering never accumulates grace."""
+    m = _make_monitor(
+        lidar_unavailable_policy="emergency",
+        lidar_unavailable_grace_s=0.5,
+        **_STALENESS_OUT_OF_THE_WAY,
+    )
+    t = 0.0
+    ctx = None
+    for _ in range(20):
+        m.evaluate(
+            _make_lidar_obs(_clear_features(), timestamp=t, lidar_slot_valid=True),
+            loop_time_ms=10.0,
+        )
+        t += 0.2
+        ctx = m.evaluate(_make_lidar_obs(None, timestamp=t), loop_time_ms=10.0)
+        t += 0.2
+    assert ctx is not None
+    assert ctx.is_emergency is False
+
+
+def test_fail_closed_policy_does_not_disturb_a_healthy_lidar():
+    """With real features present, every policy behaves identically."""
+    for policy in ("ignore", "degrade", "emergency"):
+        m = _make_monitor(lidar_unavailable_policy=policy, **_STALENESS_OUT_OF_THE_WAY)
+        ctx = m.evaluate(
+            _make_lidar_obs(_clear_features(), timestamp=0.0, lidar_slot_valid=True),
+            loop_time_ms=10.0,
+        )
+        assert ctx.lidar_clearance_ok is True, policy
+        assert ctx.is_emergency is False, policy
+        # 1.0 normalised * the 12.0 m default range.
+        assert ctx.lidar_min_dist_m == 12.0, policy
+
+
+def test_fail_closed_policy_still_catches_a_near_obstacle():
+    """The present-features path is untouched by the new branch."""
+    m = _make_monitor(lidar_unavailable_policy="emergency", **_STALENESS_OUT_OF_THE_WAY)
+    feats = _clear_features()
+    feats[10] = 0.01  # 0.12 m -- below the 0.20 m default clearance
+    ctx = m.evaluate(
+        _make_lidar_obs(feats, timestamp=0.0, lidar_slot_valid=True),
+        loop_time_ms=10.0,
+    )
+    assert ctx.lidar_clearance_ok is False
+    assert ctx.is_emergency is True
+
+
+def test_zero_grace_means_no_grace():
+    """``lidar_unavailable_grace_s = 0.0`` must not silently grant one tick.
+
+    The window is compared with a strict ``<``. An inclusive comparison would
+    hand a zero-grace deployment a free tick, and worse, a free tick *per
+    clock granule*: ``read_all`` timestamps observations with
+    ``time.monotonic()``, whose resolution on some hosts (~16 ms on Windows)
+    is coarser than the 30 Hz tick period, so consecutive observations can
+    legitimately share a timestamp. Both observations below do.
+    """
+    m = _make_monitor(lidar_unavailable_policy="emergency", **_STALENESS_OUT_OF_THE_WAY)
+    first = m.evaluate(_make_lidar_obs(None, timestamp=41.5), loop_time_ms=10.0)
+    second = m.evaluate(_make_lidar_obs(None, timestamp=41.5), loop_time_ms=10.0)
+    assert first.is_emergency is True
+    assert second.is_emergency is True
