@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, ClassVar, Literal
 
 from typing_extensions import Protocol, runtime_checkable
 
-from mousedroid.logging.setup import get_logger
+from mousedroid.logging.setup import get_logger, safe_log_extra
 
 if TYPE_CHECKING:
     from mousedroid.telemetry.metrics import MetricsRegistry
@@ -114,9 +114,15 @@ class PrometheusFailureRecorder:
             "reason": reason,
             "log_level": level,
         }
+        # ``extra`` is caller-controlled, so it can carry a key that structlog
+        # owns.  ``event`` is the worst case: the bound-logger signature is
+        # ``meth(event, **kw)``, so splatting a caller ``event`` raised
+        # TypeError and lost the whole log line (the metric above had already
+        # been incremented, so failures went silently uncounted in the logs).
+        # ``safe_log_extra`` namespaces those keys instead of dropping them,
+        # and ``occupied`` additionally protects this recorder's own fields.
         if extra:
-            for k, v in extra.items():
-                log_kv[k] = v
+            log_kv.update(safe_log_extra(extra, occupied=log_kv))
 
         # ``getattr`` is O(1) on a Python object and produces no dict
         # allocation; the fallback to ``_log.warning`` happens only on

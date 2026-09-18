@@ -6,7 +6,8 @@ All modules should use ``get_logger(__name__)`` — never ``print()``.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import structlog
 
@@ -82,6 +83,70 @@ def configure_logging(
     if robot_id is not None:
         structlog.contextvars.bind_contextvars(robot_id=robot_id)
     _configured = True
+
+
+# Keys owned by the ``processors`` chain in :func:`configure_logging` above, or
+# by the bound-logger call signature itself.  A caller-supplied log keyword
+# matching one of these is never merely redundant -- it either aborts the call
+# or is silently discarded:
+#
+#   event       positional parameter of every bound-logger method
+#               (``meth(event, **kw)``) -- a duplicate raises TypeError
+#   level       written by ``structlog.stdlib.add_log_level``
+#   logger      written by ``_add_logger_name``
+#   timestamp   written by ``structlog.processors.TimeStamper``
+#   stack_info  consumed by ``structlog.processors.StackInfoRenderer``
+#   stack       rendered output of ``StackInfoRenderer``
+#   exc_info    consumed by ``structlog.processors.format_exc_info``
+#   exception   rendered output of ``format_exc_info``
+#
+# Adding a processor that writes a new key means adding that key here.
+RESERVED_LOG_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "event",
+        "level",
+        "logger",
+        "timestamp",
+        "stack_info",
+        "stack",
+        "exc_info",
+        "exception",
+    }
+)
+
+EXTRA_KEY_PREFIX: Final[str] = "extra_"
+"""Prefix applied to a caller key that would collide with a reserved key."""
+
+
+def safe_log_extra(
+    extra: Mapping[str, object],
+    *,
+    occupied: Iterable[str] = (),
+) -> dict[str, object]:
+    """Namespace caller-supplied log fields that would collide with owned keys.
+
+    Renames -- rather than drops -- any key in :data:`RESERVED_LOG_KEYS` or in
+    ``occupied`` by prefixing it with :data:`EXTRA_KEY_PREFIX`, repeating the
+    prefix until the name is free.  Keys that collide with nothing are passed
+    through unchanged, so well-behaved callers see no change in field names.
+
+    Args:
+        extra: Caller-supplied structured fields.
+        occupied: Key names the caller must not overwrite -- typically the
+            keys the calling site has already placed in its own log payload.
+
+    Returns:
+        A new mapping safe to splat into a structlog bound-logger call.
+    """
+    reserved = RESERVED_LOG_KEYS.union(occupied)
+    safe: dict[str, object] = {}
+    for key, value in extra.items():
+        safe_key = key
+        # Each pass strictly lengthens the name, so this terminates.
+        while safe_key in reserved or safe_key in safe:
+            safe_key = f"{EXTRA_KEY_PREFIX}{safe_key}"
+        safe[safe_key] = value
+    return safe
 
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:
