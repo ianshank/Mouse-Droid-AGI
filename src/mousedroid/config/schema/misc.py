@@ -183,6 +183,21 @@ class LoopConfig(StrictBaseModel):
         gt=0,
         description="Max seconds per tick before triggering emergency stop",
     )
+    shutdown_grace_s: float = Field(
+        2.0,
+        gt=0,
+        description=(
+            "Seconds to wait, after a shutdown signal (SIGTERM/SIGINT), for "
+            "the control loop to wind down cooperatively before its task is "
+            "cancelled outright. The actuator halt runs either way — this "
+            "only bounds how long a wedged tick may delay it. The default "
+            "2.0 s clears the worst-case cooperative exit (one "
+            "tick_timeout_s of 1.0 s plus a sub-tick sleep) while leaving "
+            "the bulk of a service manager's stop timeout (Docker's default "
+            "is 10 s) for stop() to drain background tasks and close "
+            "transports afterwards."
+        ),
+    )
     watchdog_enabled: bool = Field(
         False,
         description="Enable watchdog notifications (systemd or file heartbeat)",

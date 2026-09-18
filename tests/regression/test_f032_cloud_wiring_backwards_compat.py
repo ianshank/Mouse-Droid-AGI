@@ -42,6 +42,8 @@ async def test_run_without_a_cloud_logging_sink_argument_is_unaffected() -> None
         def __init__(self) -> None:
             self.start = AsyncMock()
             self.run = AsyncMock()
+            # S-1: main.py drives the loop via run_until_shutdown, not run().
+            self.run_until_shutdown = AsyncMock()
             self.stop = AsyncMock()
 
     fake = _FakeOrchestrator()
@@ -52,5 +54,5 @@ async def test_run_without_a_cloud_logging_sink_argument_is_unaffected() -> None
         await _run(Settings(mock_hardware=True))  # no second argument
 
     fake.start.assert_called_once()
-    fake.run.assert_called_once()
+    fake.run_until_shutdown.assert_called_once()
     fake.stop.assert_called_once()

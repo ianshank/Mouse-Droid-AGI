@@ -32,6 +32,8 @@ class _FakeOrchestrator:
     def __init__(self, health_result: dict[str, str] | None = None) -> None:
         self.start = AsyncMock()
         self.run = AsyncMock()
+        # main.py drives the loop via run_until_shutdown (S-1), not run().
+        self.run_until_shutdown = AsyncMock()
         self.stop = AsyncMock()
         self.health_check = AsyncMock(return_value=health_result or {"status": "ok"})
 
@@ -54,7 +56,7 @@ async def test_run_default_path_touches_nothing_when_sink_is_none() -> None:
         await _run(_settings(), cloud_logging_sink=None)
 
     fake.start.assert_called_once()
-    fake.run.assert_called_once()
+    fake.run_until_shutdown.assert_called_once()
     fake.stop.assert_called_once()
 
 
@@ -69,7 +71,7 @@ async def test_run_starts_and_closes_sink_when_wired() -> None:
 
     sink.start.assert_called_once()
     sink.close.assert_called_once()
-    fake.run.assert_called_once()
+    fake.run_until_shutdown.assert_called_once()
 
 
 async def test_run_survives_sink_start_failure() -> None:
@@ -84,7 +86,7 @@ async def test_run_survives_sink_start_failure() -> None:
         await _run(_settings(), cloud_logging_sink=sink)  # must not raise
 
     fake.start.assert_called_once()
-    fake.run.assert_called_once()
+    fake.run_until_shutdown.assert_called_once()
     fake.stop.assert_called_once()
     sink.close.assert_called_once()
 
@@ -245,7 +247,7 @@ def test_cli_entry_threads_one_sink_instance_into_configure_logging_and_run(
     fake_orch = _FakeOrchestrator()
 
     async def _log_while_running() -> None:
-        # Fires from inside orch_obj.run(), i.e. strictly after _run() has
+        # Fires from inside run_until_shutdown(), i.e. strictly after _run() has
         # awaited cloud_logging_sink.start() and strictly before its outer
         # finally awaits cloud_logging_sink.close() -- the one point in
         # cli_entry()'s reachable flow where the sink is genuinely "live"
@@ -254,7 +256,7 @@ def test_cli_entry_threads_one_sink_instance_into_configure_logging_and_run(
         # sites.
         get_logger(__name__).info("orchestrator_run_started")
 
-    fake_orch.run = AsyncMock(side_effect=_log_while_running)
+    fake_orch.run_until_shutdown = AsyncMock(side_effect=_log_while_running)
 
     with (
         patch("mousedroid.main.load_settings", return_value=_settings()),
@@ -278,4 +280,4 @@ def test_cli_entry_threads_one_sink_instance_into_configure_logging_and_run(
     # Reached _run() -- the same instance's lifecycle was driven.
     fake_sink.start.assert_called_once()
     fake_sink.close.assert_called_once()
-    fake_orch.run.assert_called_once()
+    fake_orch.run_until_shutdown.assert_called_once()

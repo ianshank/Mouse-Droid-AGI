@@ -135,7 +135,11 @@ async def _run(
             raise TypeError(f"build_orchestrator returned {type(orch_obj).__name__}")
         await orch_obj.start()
         try:
-            await orch_obj.run()
+            # ``run_until_shutdown`` — not ``run`` — so a SIGTERM from
+            # ``docker stop`` / ``systemctl stop`` unwinds through the
+            # ``finally`` below instead of terminating the process outright
+            # and leaving the last velocity latched in firmware (S-1).
+            await orch_obj.run_until_shutdown()
         finally:
             await orch_obj.stop()
     finally:

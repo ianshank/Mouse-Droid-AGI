@@ -227,6 +227,25 @@ class BaseESP32Driver(ABC):
                 command_set=self._cfg.command_set,
                 window_ms=heartbeat_window_ms(self._cfg),
             )
+        elif self._cfg.heartbeat_enabled:
+            # ``heartbeat_enabled`` is True but the selected command set has
+            # no arming command (legacy firmware has none), so the chassis
+            # failsafe an operator thinks they configured does not exist.
+            # Silence here is the dangerous case: the host watchdog restarts
+            # the *container*, but only the firmware-side heartbeat stops the
+            # *wheels* after a wedged Jetson or a dropped USB link — neither
+            # of which delivers a SIGTERM the graceful-shutdown path could
+            # catch. Log-only: no frame is sent, so the legacy connect
+            # sequence stays byte-identical.
+            _log.warning(
+                "esp32_heartbeat_unavailable",
+                command_set=self._cfg.command_set,
+                remedy=(
+                    "set esp32.command_set='waveshare_stock' to arm "
+                    "CMD_HEART_BEAT_SET, or esp32.heartbeat_enabled=false "
+                    "to acknowledge running without a chassis failsafe"
+                ),
+            )
 
     def _warn_lateral_unsupported(self, vy: float) -> None:
         """Surface a dropped lateral setpoint — WARNING once, DEBUG after.
