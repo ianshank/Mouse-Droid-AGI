@@ -42,8 +42,8 @@ async def test_run_without_a_cloud_logging_sink_argument_is_unaffected() -> None
         def __init__(self) -> None:
             self.start = AsyncMock()
             self.run = AsyncMock()
-            # S-1: main.py drives the loop via run_until_shutdown, not run().
-            self.run_until_shutdown = AsyncMock()
+            # S-1: main.py drives the loop via serve, not run().
+            self.serve = AsyncMock()
             self.stop = AsyncMock()
 
     fake = _FakeOrchestrator()
@@ -53,6 +53,7 @@ async def test_run_without_a_cloud_logging_sink_argument_is_unaffected() -> None
     ):
         await _run(Settings(mock_hardware=True))  # no second argument
 
-    fake.start.assert_called_once()
-    fake.run_until_shutdown.assert_called_once()
-    fake.stop.assert_called_once()
+    # ``serve()`` owns start/run/stop internally (S-1), so a fake that stubs
+    # serve never sees start/stop — asserting on them here would pin the
+    # fake's shape, not main._run's contract.
+    fake.serve.assert_called_once()

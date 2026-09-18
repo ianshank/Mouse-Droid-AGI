@@ -150,16 +150,82 @@ async def test_request_shutdown_before_start_is_safe() -> None:
 
 
 # ---------------------------------------------------------------------------
-# run_until_shutdown — the wiring main.py calls
+# The bring-up window
+#
+# ``start()`` connects the ESP32 and brings up the sensors, which takes real
+# time on the rover — and the firmware may still hold a velocity latched from
+# a previous unclean stop, so the machine can be moving throughout. A stop
+# arriving in that window must be honoured, not raced.
 # ---------------------------------------------------------------------------
 
 
-async def test_run_until_shutdown_returns_after_cooperative_stop() -> None:
+async def test_shutdown_during_startup_is_not_overwritten_by_start() -> None:
+    """``start()`` must not clobber a stop that arrived while it was running.
+
+    It used to end with an unconditional ``self._running = True``, which
+    would overwrite the flag ``request_shutdown`` had just cleared — the
+    operator's stop was swallowed and the loop started anyway.
+    """
+    orch, _esp32 = _build_orchestrator()
+
+    orch.request_shutdown("SIGTERM")
+    await orch.start()
+
+    assert orch._running is False, "start() re-enabled a loop that was asked to stop"
+
+
+async def test_start_enables_the_loop_when_no_shutdown_was_requested() -> None:
+    """The latch must not be always-on — the ordinary path still runs."""
+    orch, _esp32 = _build_orchestrator()
+
+    await orch.start()
+
+    assert orch._running is True
+
+
+async def test_serve_halts_actuators_when_shutdown_arrives_during_startup() -> None:
+    """The window Copilot flagged: a stop during bring-up still reaches the halt.
+
+    ``serve()`` installs handlers before ``start()``, so the request is
+    latched; the loop is skipped entirely and the ``finally`` still runs
+    ``stop()`` -> ``_halt_actuators``.
+    """
+    orch, esp32 = _build_orchestrator()
+
+    real_start = orch.start
+
+    async def _start_then_signal() -> None:
+        # Stand in for a SIGTERM landing mid-bring-up.
+        orch.request_shutdown("SIGTERM")
+        await real_start()
+
+    orch.start = _start_then_signal
+    ticked = False
+
+    async def _tick() -> None:  # pragma: no cover - must never run
+        nonlocal ticked
+        ticked = True
+
+    orch.tick = _tick
+
+    await asyncio.wait_for(orch.serve(), timeout=10.0)
+
+    assert ticked is False, "control loop ran despite a shutdown during startup"
+    esp32.emergency_stop.assert_awaited()
+    esp32.disconnect.assert_awaited()
+
+
+# ---------------------------------------------------------------------------
+# serve — the wiring main.py calls
+# ---------------------------------------------------------------------------
+
+
+async def test_serve_returns_after_cooperative_stop() -> None:
     """A signalled shutdown returns normally so the caller's finally runs."""
     orch, _esp32 = _build_orchestrator()
     orch._running = True
 
-    task = asyncio.ensure_future(orch.run_until_shutdown())
+    task = asyncio.ensure_future(orch.serve())
     await asyncio.sleep(_LOOP_SETTLE_S)
 
     orch.request_shutdown("SIGTERM")
@@ -168,7 +234,7 @@ async def test_run_until_shutdown_returns_after_cooperative_stop() -> None:
     assert orch._running is False
 
 
-async def test_run_until_shutdown_does_not_swallow_loop_errors() -> None:
+async def test_serve_does_not_swallow_loop_errors() -> None:
     """A crash inside run() must still surface, not be masked as a shutdown."""
     orch, _esp32 = _build_orchestrator()
     orch._running = True
@@ -177,7 +243,7 @@ async def test_run_until_shutdown_does_not_swallow_loop_errors() -> None:
     orch.run = AsyncMock(side_effect=boom)
 
     with pytest.raises(RuntimeError, match="loop exploded"):
-        await orch.run_until_shutdown()
+        await orch.serve()
 
 
 async def test_outer_cancel_does_not_leave_the_loop_running() -> None:
@@ -205,7 +271,7 @@ async def test_outer_cancel_does_not_leave_the_loop_running() -> None:
 
     orch.run = _long_loop
 
-    task = asyncio.ensure_future(orch.run_until_shutdown())
+    task = asyncio.ensure_future(orch.serve())
     await asyncio.wait_for(started.wait(), timeout=5.0)
 
     task.cancel()
@@ -244,7 +310,7 @@ async def test_wedged_loop_is_cancelled_after_grace_window() -> None:
 
     orch.run = _never_returns
 
-    task = asyncio.ensure_future(orch.run_until_shutdown())
+    task = asyncio.ensure_future(orch.serve())
     await asyncio.sleep(_LOOP_SETTLE_S)
 
     await _deliver_sigterm(orch)
@@ -268,7 +334,7 @@ async def test_escalation_is_dropped_when_loop_exits_cleanly() -> None:
     orch, _esp32 = _build_orchestrator(shutdown_grace_s=30.0)
     orch._running = True
 
-    task = asyncio.ensure_future(orch.run_until_shutdown())
+    task = asyncio.ensure_future(orch.serve())
     await asyncio.sleep(_LOOP_SETTLE_S)
     await _deliver_sigterm(orch)
     await asyncio.wait_for(task, timeout=5.0)

@@ -81,7 +81,7 @@ _EXPECTED_PUBLIC_SURFACE = [
     "process_mission",
     "request_shutdown",
     "run",
-    "run_until_shutdown",
+    "serve",
     "start",
     "stop",
     "tick",
