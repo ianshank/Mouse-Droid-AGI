@@ -65,178 +65,161 @@ of that line are false today.
 
 No gate requires a directory to have an agent-facing file, and none checks that one is accurate.
 
-## 2. The finding that decides the design
+## 2. The two findings that decide the design
 
-**Writing `AGENTS.md` files into this repository, today, produces text Claude Code will not read.**
+### 2.1 With a root `CLAUDE.md`, nested `AGENTS.md` discovery is off — not shadowed
 
-Claude Code reads `AGENTS.md` natively from v2.1.277. But the default **Project instructions** mode
-is `claude-md-or-agents-md`, and the documented behaviour is a table:
+Claude Code reads `AGENTS.md` natively from v2.1.277, but the documented rule is: it does so "only
+when you have no `CLAUDE.md` in your working directory **or above it**". The nested-subdirectory
+bullet — "a subdirectory's `AGENTS.md`, when Claude opens a file there … and that subdirectory has
+none of the three `CLAUDE.md` files of its own" — sits **inside** that "when none count" block.
 
-| repository has | Claude reads |
+A root `CLAUDE.md` counts, being above every subdirectory. This repository has one, plus eight nested.
+So today:
+
+- **no `AGENTS.md` anywhere in this tree is read**, including the 403-line root one;
+- the only load path for a nested `AGENTS.md` is an explicit `@AGENTS.md` from a `CLAUDE.md` **in that
+  same directory**.
+
+Confirmed in the tree: **zero `@` imports in any of the nine `CLAUDE.md` files**. And confirmed
+empirically — the session that wrote this plan received `CLAUDE.md`'s contents in its instruction
+payload and not `AGENTS.md`'s.
+
+The consequence for scope is mechanical: a nested `AGENTS.md` is reachable **only** in the eight
+directories that already hold a `CLAUDE.md`. In the other 33 packages it would need a second file per
+package purely to import it.
+
+Only one remedy is committable. The `claude-md-and-agents-md` setting lives under the built-in
+`agents-md` plugin's `pluginConfigs` and is **ignored in project and local settings files** — user or
+managed only, so it cannot be a repository decision. The symlink alternative is ruled out on this
+repo's own grounds: the docs warn a symlink needs Administrator or Developer Mode on Windows and git
+checks a committed one out as plain text without `core.symlinks`, and this repo runs a `test-windows`
+job that has already caught four rounds of Windows-only breakage.
+
+### 2.2 The benefit is optionality, not a present capability gain
+
+An earlier revision justified this change by claiming the repository "already runs two non-Claude
+reviewers on its pull requests, so content that lives only in `CLAUDE.md` is invisible to the tools
+reviewing the code." **That was misleading.** Verified on #233 and #235:
+
+| check | actual description |
 |---|---|
-| `AGENTS.md`, and no `CLAUDE.md` at or above the working directory | the `AGENTS.md` |
-| `AGENTS.md` **and** a `CLAUDE.md` at or above it | **`CLAUDE.md` files only** |
-| a `CLAUDE.md` that imports `AGENTS.md` | `CLAUDE.md`, with `AGENTS.md` through the import |
+| Devin Review | `Full review skipped: trial expired and no credits remaining` |
+| CodeRabbit | `Review skipped: draft pull request`; on #233 also `manual review required for this OSS repository` |
 
-This repository has a root `CLAUDE.md` and **eight** nested ones
-(`arm`, `growth`, `hardware`, `learning`, `llm_gateway`, `orchestrator`, `telemetry`,
-`world_model`). So it sits in row two: every `AGENTS.md` added would be inert.
+Neither reviews. There is no `.coderabbit.yaml`, no Codex or Cursor configuration, and nothing under
+`.github/` consumes `AGENTS.md`.
 
-Nested discovery has the same shadow. A subdirectory's `AGENTS.md` attaches when Claude opens a
-file there **only if that subdirectory has none of the three `CLAUDE.md` files of its own** — so in
-those eight directories a sibling `AGENTS.md` is skipped even after the root is fixed.
+Put together with 2.1: **for Claude Code, content in `CLAUDE.md` and content in an `AGENTS.md` that
+`CLAUDE.md` imports are the same thing**, and no other tool currently reads this repo. The delta is
+that the day someone runs Codex, Cursor or a credited Devin here, the instructions are already in the
+file those tools look for.
 
-**Only one remedy is committable to the repository.** The `claude-md-and-agents-md` setting lives
-under the built-in `agents-md` plugin's `pluginConfigs`, and Claude Code **ignores it in project and
-local settings files** — user or managed settings only. It cannot be a repo decision, so it cannot
-be this change's mechanism. What remains is the `@AGENTS.md` import inside `CLAUDE.md`, which the
-documentation names as the way to keep one file every tool shares.
-
-The symlink alternative (`ln -s AGENTS.md CLAUDE.md`) is **ruled out on this repository's own
-grounds**: the docs warn that on Windows a symlink needs Administrator or Developer Mode and git
-checks a committed one out as plain text unless `core.symlinks` is set, leaving that clone with a
-one-line `CLAUDE.md` instead of instructions. This repo runs a `test-windows` CI job that is a
-promotion candidate, and it has already absorbed four consecutive rounds of Windows-only failures.
-A mechanism that degrades silently on that platform is not available here.
-
-**This is the repository's recurring failure mode, arriving as a request.** F-050 existed partly
-because a metric had no writer; F-052 opens on a coverage gate that runs in no workflow. Adding
-40+ documentation files that the primary agent does not load would be the same defect, self-inflicted
-and at scale. So the wiring lands before any content, and a test proves the wiring.
+That is a real benefit and a future one. Stating it that way is what lets a reviewer decline the bulk
+of this change on its merits — and the plan is ordered so that declining it still leaves the one piece
+worth having.
 
 ## 3. Scope
 
-"Each directory" read literally is **147 directories** (`src/mousedroid` 70, `tests` 70, `tools` 3,
-`scripts` 2, `training` 2, excluding `__pycache__`). That is not a documentation set, it is a drift
-surface — and the docs themselves warn that contradictory instructions across nested files make
-Claude "pick one arbitrarily".
+"Each directory" read literally is **147 directories**. Beyond the drift surface that creates, §2.1
+makes most of them unreachable. Four further constraints, all verified, push the same way:
 
-A reconciliation audit then found four more constraints that push the scope down further, not up:
+| # | constraint |
+|---|---|
+| a | `pyproject.toml:244` is `exclude = ["**/CLAUDE.md", "**/agent.md"]` — **`AGENTS.md` is absent**, so new files under `src/mousedroid/` would ship to PyPI |
+| b | `docs/planning/TECH_DEBT_REMEDIATION_PLAN.md` already rules `agent.md` **Delete/merge** as unresolved drift, and records invariants living in four places |
+| c | the root `AGENTS.md` is 23,125 bytes against `doc_hygiene.py`'s 20,000-byte budget, and widening that gate is deferred because files like it would fail |
+| d | `src/mousedroid/agents/` is scanned by the skill loader (`harness_mcp.py:394` globs `*.md` there) |
 
-| # | constraint | evidence |
-|---|---|---|
-| a | **`AGENTS.md` is not excluded from the wheel.** `pyproject.toml:244` is `exclude = ["**/CLAUDE.md", "**/agent.md"]`, with a comment explaining it stops 22 internal files shipping to PyPI. ~40 new `src/mousedroid/**/AGENTS.md` would ship. | verified |
-| b | **The repo already decided to delete these.** `docs/planning/TECH_DEBT_REMEDIATION_PLAN.md` rules on `agent.md`: *"25-line persona stub whose Key Invariants restate `CLAUDE.md` and `AGENTS.md:10-45`. Already flagged as drift … and never resolved."* Action: **Delete/merge**. It also records that invariants now live in **four** places. | verified |
-| c | **The root `AGENTS.md` is already over budget** — 23,125 bytes against `doc_hygiene.py`'s `_DEFAULT_MAX_BYTES = 20_000` (1.16×). Widening that gate to cover more docs is already deferred *because* it would land red. | verified |
-| d | **`src/mousedroid/agents/` is scanned by the skill loader.** `harness_mcp.py:394` defaults `markdown_agent_dirs` to that directory, and the loader globs `*.md`. An `AGENTS.md` there is picked up and skipped only by the no-front-matter branch. | verified |
+**In scope, in value order:**
 
-**So the scope splits across two surfaces, by what each is for:**
+1. **One import line** — root `CLAUDE.md` gains `@AGENTS.md`, plus the `pyproject.toml` exclude. This
+   makes 403 lines of existing, already-maintained instruction load for the first time. It ships
+   alone.
+2. **Eight `AGENTS.md`**, in the directories §2.1 permits, each importing-side wired and capped at 30
+   lines. Plus a decision on `tests/`: it is high-traffic and has no `CLAUDE.md`, so it needs a
+   one-line importer or it is dropped.
+3. **One generated `docs/architecture/package-map.md`** covering all 41 packages — purpose, imports,
+   dependents and a mermaid subgraph per package, built from the `ast`-parsed import graph.
 
-- **`AGENTS.md` — agent instructions, ~9 files.** The eight directories that already hold a
-  `CLAUDE.md` (those are the high-traffic subsystems, and the only ones where a sibling `AGENTS.md`
-  is otherwise shadowed) plus `tests/`. Tight, capped, diagram included, wheel-excluded.
-- **Folder-function documentation for all 41 packages — one generated map, zero agent tokens.**
-  `docs/architecture/package-map.md`, **generated from the import graph** rather than hand-written, so
-  it cannot drift and costs nothing on any agent invocation.
-
-That second surface is what actually answers "describing the functions of each folder" for every
-folder, and it answers it better than 41 hand-written files: generated content cannot go stale, and
-`docs/` is where this repository's other 50 mermaid diagrams already live.
-
-**Out of scope:**
-
-- Sub-packages below the first level (`src/mousedroid/hardware/lidar/`, `tests/unit/world_model/`).
-  A package inherits its parent's file through nested discovery; a file per leaf directory buys
-  nothing and multiplies contradiction risk.
-- **A hand-written `AGENTS.md` in each of the 41 packages.** Refused on constraints (a)-(d) above
-  plus the token evidence in §7. The need it serves is met by the generated package map instead. If
-  the literal per-package version is wanted anyway, §7 records what it costs.
-- `__pycache__`, `.git`, and any generated tree.
-- Rewriting the eight nested `CLAUDE.md` contracts. Their invariants stay authoritative; this change
-  moves *folder-purpose* description into `AGENTS.md` and leaves *contracts* where they are (design
-  D-2).
-- The root `AGENTS.md` (403 lines) is not rewritten, only reconciled against the root `CLAUDE.md`.
+**Out of scope:** an `AGENTS.md` in the 33 packages without a `CLAUDE.md` (unreachable per §2.1);
+renaming the eight contracts (~25 references including `CHANGELOG.md` and three openspec bundles that
+are historical records); hand-drawn diagrams and a CI renderer (§5); sub-packages below the first
+level.
 
 ## 4. Success criteria
 
-1. A test proves Claude Code actually loads the new files: root `CLAUDE.md` contains an
-   `@AGENTS.md` import, and each of the eight `CLAUDE.md`-bearing directories imports its sibling.
-   The test fails if a directory gains an `AGENTS.md` that nothing imports and nothing would read.
-2. Exactly one agent-facing folder-purpose file per in-scope package, named `AGENTS.md`. Zero
-   `agent.md` files remain.
-3. Every `AGENTS.md` mermaid fence parses. A diagram that does not render is a broken diagram.
-4. Every backticked repo path inside an `AGENTS.md` resolves on disk — the rule
-   `tools/validate_skill_commands.py` already enforces for skills, extended to these files.
-5. No statement in an `AGENTS.md` contradicts the `CLAUDE.md` in the same directory or the root.
-6. A new package without an `AGENTS.md` fails a gate, so the set cannot silently rot.
-7. `make gates` and `make test` pass; the three suppression budgets are unchanged.
-8. Nothing claims a diagram or description that the tree does not support — verified by a subagent
-   pass whose brief is to disprove, not confirm.
+1. `tests/regression/test_f053_aqa.py` fails if any `AGENTS.md` in the tree lacks a same-directory
+   `CLAUDE.md` importing it with the bare `@AGENTS.md` form. **This is the criterion the plan exists
+   for**: an unimported `AGENTS.md` is read by nothing.
+2. The root `AGENTS.md` loads, proven by that import being present and by the known contradictions it
+   surfaces being fixed.
+3. `pyproject.toml`'s wheel exclude covers all three agent-facing patterns, asserted by a test.
+4. `docs/architecture/package-map.md` regenerates byte-identically — a stale map fails.
+5. Zero `agent.md` files remain; the three live references to them are updated first.
+6. Every `AGENTS.md` is ≤30 lines and restates no invariant from its sibling `CLAUDE.md`.
+7. Every backticked repo path in a new file resolves on disk.
+8. `make gates` and `make test` pass; the three suppression budgets are unchanged.
 
-## 5. Why this is not just "write 45 files"
+## 5. Why the diagrams are generated, not written
 
-Two properties have to hold or the work is worse than not doing it.
+The request asked for mermaid. Hand-drawing one diagram per file fails two ways here.
 
-**Accuracy that survives.** A folder description listing files churns on every commit. The 16
-existing `agent.md` files already show the failure: each carries a `Key Files` list, and those lists
-are unverified by any test. Descriptions here are written against the folder's **Protocol boundary
-and dataflow role**, which changes when architecture changes, not when a file is added.
+**There is no renderer to gate them with.** No `mermaid` or `mmdc` reference in `pyproject.toml`,
+`.github/workflows/ci.yml`, `scripts/ci.sh` or the `Makefile`, and no Python mermaid parser installed.
+A "does it render" gate means adding a Node toolchain to a Python-only CI — a far larger change than a
+plan task.
 
-**Diagrams that mean something.** 45 hand-drawn mermaid diagrams with no gate is 45 future lies.
-Each diagram is scoped to the folder's own inputs, outputs and Protocol seam — the same thing the
-C4 component docs assert at a higher level — and is parse-gated.
+**And an ungated diagram is a future lie.** The repository already carries ~50 mermaid fences across
+21 files under `docs/`, validated by nothing.
 
-## 6. Verified clean / verified true — recorded so the plan stays falsifiable
+So the generator emits every diagram from the parsed import graph. A diagram cannot be wrong, because
+it is derived from the imports it depicts; one regenerate-and-diff test covers all 41; and correctness
+is proven by the generator's unit tests against a fixture tree rather than by rendering. That is 41
+provably accurate diagrams instead of 9 unchecked ones.
+
+## 6. Verified — recorded so the plan stays falsifiable
 
 | claim | evidence |
 |---|---|
-| Standard filename is `AGENTS.md`, uppercase | agents.md spec; Linux Foundation Agentic AI Foundation stewardship since Dec 2025 |
-| Claude Code reads it natively from v2.1.277 | https://code.claude.com/docs/en/memory, AGENTS.md section |
-| With a `CLAUDE.md` present, AGENTS.md is **not** read by default | same page, the three-row table |
-| A subdir `CLAUDE.md` shadows a sibling `AGENTS.md` | same page, "When Claude Code reads AGENTS.md" |
-| The both-files setting is not committable | same page: "Claude Code ignores it in project and local settings files" |
-| `@path` imports: relative to the importing file, max 4 hops, backticked paths not imported | same page, "Import additional files" |
+| Standard filename is `AGENTS.md`, uppercase; Linux Foundation Agentic AI Foundation since Dec 2025; 30+ agents read it | agents.md spec and its stewardship |
+| **But no such agent reads this repository today** | Devin: trial expired, no credits. CodeRabbit: skipped. No Codex/Cursor config. No `AGENTS.md` consumer in `.github/` |
+| Claude Code reads `AGENTS.md` natively from v2.1.277 | `code.claude.com/docs/en/memory` |
+| With a `CLAUDE.md` at or above the cwd, **no** `AGENTS.md` is read — nested discovery included | same page, the three-row table plus the "when none count" block |
+| Zero `@` imports in any of the nine `CLAUDE.md` files, so the 403-line root `AGENTS.md` is dead text | grep |
+| The both-files setting is not committable | same page: "ignored in project and local settings files" |
 | Symlink degrades on Windows | same page, "Share one file with other coding tools" |
-| 16 `agent.md`, 9 `CLAUDE.md`, 1 root `AGENTS.md` | `git ls-files` |
-| Zero mermaid in any `agent.md`; none under `src/` | grep for fences |
-| 147 directories if taken literally; 41 top-level packages | `find` |
+| `pyproject.toml:244` omits `**/AGENTS.md` | read |
+| Root `AGENTS.md` 23,125 bytes vs `_DEFAULT_MAX_BYTES = 20_000` | `wc -c`, `tools/doc_hygiene.py:28` |
+| 40 of 41 packages have an `__init__.py` docstring; only `src/mousedroid/telemetry` lacks one | scripted check |
+| No mermaid renderer anywhere in the toolchain; ~50 fences under `docs/` validated by nothing | grep |
+| 16 `agent.md`, 9 `CLAUDE.md`, 1 root `AGENTS.md`; none of the 16 has a diagram; `src/` has none | `git ls-files`, grep |
+| `src/mousedroid/llm_gateway/agent.md:6` is false in both halves | `protocol.py:65` returns `GoalVector`; `src/mousedroid/config/schema/llm.py:96` includes cloud `anthropic` |
+| Renaming the eight contracts touches ~25 references | grep across `--include=*.py --include=*.md --include=*.yaml --include=*.sh` |
 
-## 7. The evidence against doing this, and why the plan still proceeds
+## 7. The evidence against, and the condition that would change the recommendation
 
-The standards search turned up a finding that argues against the request as literally stated, and it
-would be dishonest to bury it in a design section.
+Current practice says these files should be short and sparse, and names folder description as the
+anti-pattern: the test for any line is *would a competent developer who had never seen this repo get
+this wrong?* Guidance is to stay under ~150 lines. Reported measurements are worse than neutral —
+auto-generated `AGENTS.md` at ~3% **lower** task success for >20% higher inference cost; human-written
+~4% better at up to 19% more cost.
 
-**Current practice says these files should be short and sparse, and that folder descriptions are the
-named anti-pattern.** The prevailing test for any line is: *would a competent developer who had never
-seen this repo get this wrong?* If no, delete it — it costs context tokens on every invocation. The
-guidance is to stay under ~150 lines, and the explicitly named mistake is "treating AGENTS.md like
-documentation with long explanations, architecture philosophy, design rationale, and project
-history." "Describing the functions of each folder" is close to that description.
+The plan answers with structure rather than dismissal: eight files at ≤30 lines, the delete test as a
+review gate, and the bulk of the folder documentation moved to a generated doc that costs no agent
+tokens at all.
 
-**There is measured evidence of harm.** Reported results: auto-generated `AGENTS.md` files *reduce*
-task success by ~3% while raising inference cost over 20%; human-written ones improve success only
-marginally (~4%) at up to 19% more cost. Neither figure is a ringing endorsement of adding 45 files.
+**What would change the recommendation.** If the audience is humans reading the repository rather
+than agents acting on it, the whole `AGENTS.md` layer is unnecessary and Phase 5's generated map is
+the entire answer — it lives in `docs/architecture/` beside the existing C4 diagrams and costs
+nothing on any invocation. Given §2.2, that is a live possibility rather than a rhetorical one, and a
+reviewer should feel free to take Phase 1 plus Phase 5 and drop Phases 2-4.
 
-**No standard or best-practice source backs mermaid in `AGENTS.md`.** The spec is silent on diagrams;
-the best-practice writing does not mention them. The argument for including them here is mine, not
-cited: a six-line flowchart states a dataflow more cheaply than the paragraph it replaces, so it can
-*reduce* tokens rather than add them — but that is reasoning, not evidence, and it is stated as such.
-
-**Why the plan proceeds anyway, and what it changes in response.**
-
-1. **Nested discovery makes the cost local, not global.** A per-package file attaches only when
-   Claude opens a file in that package. The per-session tax is the root file alone. That is the
-   structural difference between 45 files and one 45-section file, and it is why the D-4 scope rule
-   matters beyond tidiness.
-2. **The delete test becomes a gate, not advice.** Task 3.3 forbids restating anything a competent
-   developer would already do — which is what makes the 16 existing `agent.md` files low-value today:
-   "Use structlog for logging, never print()" is already in the root `CLAUDE.md` and in `ruff`'s `T20`
-   rule, so restating it per folder is pure cost.
-3. **A hard line budget.** 40 lines per file, diagram included — well inside the ~150 the guidance
-   suggests, and a quarter of what the existing root `AGENTS.md` spends.
-4. **The diagram must earn its tokens.** It replaces prose rather than supplementing it. A file
-   carrying both a flowchart and a paragraph describing the same flow fails review.
-
-**What would change my recommendation.** If the intent is documentation for humans reading the
-repository, `docs/architecture/` is the better home and already holds the C4 diagrams — no token cost
-on any agent invocation. `AGENTS.md` is the right home only if the intent is instructions agents act
-on. The plan assumes the latter because the request named `Agent.md`; if it is the former, say so and
-the same content lands in `docs/architecture/` with a much simpler plan.
-
-## 7. Authoritative counterparts
+## 8. Authoritative counterparts
 
 - `features.yaml` — F-053
 - `scripts/validations/F-053.sh` — the harness-executed proof
-- `CLAUDE.md` + `AGENTS.md` (root) — the import seam
+- root `CLAUDE.md` + `AGENTS.md` — the import seam
+- `scripts/generate_package_map.py` + `docs/architecture/package-map.md`
 - `tests/regression/test_f053_aqa.py` / `test_f053_backwards_compat.py`
-- `.claude/skills/agents-md-authoring/SKILL.md` — the repeatable procedure (design D-6)
+- `.claude/skills/agents-md-authoring/SKILL.md`
