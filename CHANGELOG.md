@@ -8,72 +8,94 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Safety — a `NaN` velocity from the LLM became a full-scale motion command
+### Safety — a non-finite velocity was transmitted to the motors as full scale
 
-Every `LLMGatewayProtocol` implementation bounded its velocity fields with
-`max(-1.0, min(1.0, value))`. That expression returns the **upper** bound for
-`NaN`: all NaN comparisons are False, so `min(1.0, nan)` keeps `1.0` and the
-enclosing `max` passes it through. `json.loads` accepts the bare `NaN`,
-`Infinity` and `-Infinity` literals by default, and the decoded payload is a
-well-formed dict, so the `isinstance(doc, dict)` guard in the two hardened
-gateways passed and `float()` did not raise. A model emitting `{"vx": NaN}`
-was therefore translated into a **full-scale forward velocity target** —
-silently, with no warning and no degraded flag, because nothing raised.
+`max(lo, min(hi, value))` returns the **upper** bound for `NaN`, because every NaN comparison is
+False: `min(hi, nan)` keeps `hi` and the enclosing `max` passes it through. That idiom sat on
+every layer of the motor path, so a `NaN` arriving from any source was bounded *upward* into the
+largest command the layer could express, silently and without raising.
 
-The direction is what made this serious. `CHARTER.md` §3's cloud-egress
-carve-out leans on this clamp *by name* as the compensating control for a
-prompt-injection filter it openly concedes is "best-effort … rather than a
-complete defense": "actuation blast radius stays bounded downstream by
-config-clamped velocity limits regardless of filter outcome". Blast radius
-was still bounded by `max_velocity_mps`, so this was fail-open to the
-*ceiling* rather than unbounded — but a malformed field resolved to maximum
-permitted motion instead of none.
+The worst instance was the terminal one. `comms/_utils.py::clamp` is the single shared guard for
+**both** codecs — the last check before a frame goes on the wire. Executed against the real
+builder before the fix:
 
-`GOAL_VECTOR_MIN`, `GOAL_VECTOR_MAX` and a NaN-safe `clamp_unit()` now live
-once in `llm_gateway/protocol.py`, beside the `GoalVector` they constrain;
-`LLMGateway`, `AnthropicLLMGateway` and `OpenAICompatibleLLMGateway` all
-import it instead of carrying their own copy — the defect shipped in three
-places precisely because the expression was duplicated three times. Every
-non-finite input now resolves to `0.0`, matching how these parsers already
-treat non-JSON, non-object and non-numeric fields. **Deliberate behaviour
-change:** `±Infinity` previously clamped to `±1.0` and is now `0.0`.
+```
+build_velocity_cmd(nan, nan, nan) -> {'T': 1, 'vx': 255, 'vy': 255, 'omega': 255}
+```
+
+Full-scale PWM on all three axes. It did not raise: a reader might assume `int(nan)` would have
+thrown `ValueError` and failed safe, but the clamp resolved the NaN to `1.0` before `int()` ever
+saw it. `WaveshareStockCodec.build_velocity` emits `max_velocity_mps` / `max_omega_rads` the same
+way — and that is the codec `NEXT_STEPS.md` item 3 is about to switch the rover to.
+
+Two sibling paths shared the defect. `common/tools/motor_tools.py::_clamp` guards the MCP
+`set_velocity` tool, whose arguments come from a language model, making it the only LLM-reachable
+`send_velocity` in the tree (gated by `mcp.enabled: false` in both shipped configs).
+`orchestrator/_action_mixin.py::_execute_action`, on the live 30 Hz tick, had **no bound at all** —
+`float(action[0]) * max_v`, resting on an invariant its own docstring merely *assumed*.
+
+One rule now holds at every layer: **a non-finite velocity is a malformed velocity, and a
+malformed velocity means no motion.** `clamp` and `_clamp` return `0.0` and log at error;
+`_execute_action` zeroes every axis when any component is non-finite and logs
+`action_non_finite_zeroed` — all three axes rather than only the offending one, because a NaN in
+any component means the policy output is untrustworthy and driving the rest on that basis is not
+safer. Every finite result, every saturation case and every frame shape is unchanged; `clamp`'s
+five call sites were checked first and none depended on the old behaviour.
+
+Pinned by `tests/regression/test_velocity_clamp_actuation_{aqa,backwards_compat}.py`, which
+exercise the real codec entry points end to end rather than only the helper, and include a
+source-level gate that no module on the motor path may carry the two-sided idiom without a finite
+check. Proved against pre-fix semantics: 22 red, 19 green, the greens being exactly the finite and
+saturation cases that must not change.
+
+### Safety — a `NaN` velocity from the LLM became a full-scale goal target
+
+The same idiom in the three `LLMGatewayProtocol` implementations. `json.loads` accepts the bare
+`NaN`, `Infinity` and `-Infinity` literals by default, the decoded payload is a well-formed dict
+so the `isinstance(doc, dict)` guard passed, and `float()` did not raise — so a model emitting
+`{"vx": NaN}` produced `vx_target=1.0` with no warning and no degraded flag.
+
+Scope, stated precisely: **this one does not actuate.** Every `vx_target` consumer in the tree is
+a structlog field, the REST `POST /api/v1/mission` response body, or an MCP tool result. No
+production path drives the motors from an LLM-derived `GoalVector`; the only module that applies a
+goal as a velocity is `orchestrator/autonomous.py`, parked with zero production callers (ADR-016).
+The live effect was therefore that a `NaN` came back to a language model as a confident `1.0`.
+It is fixed anyway because it sits on the seam that goal-conditioned planning would connect to
+actuation.
+
+`GOAL_VECTOR_MIN`, `GOAL_VECTOR_MAX` and a NaN-safe `clamp_unit()` now live once in
+`llm_gateway/protocol.py`, beside the `GoalVector` they constrain; all three implementations
+import it rather than carrying their own copy — the defect shipped in three places precisely
+because the expression was duplicated three times. **Deliberate behaviour change:** `±Infinity`
+previously clamped to `±1.0` and is now `0.0`.
 
 Noted for the record: the repo has two same-named `GoalVector` types.
-`interfaces/protocols.py::GoalVector` is a pydantic `BaseModel` whose
-`ge`/`le` constraints reject `NaN` outright; the LLM motion path uses the
-unvalidated frozen dataclass in `llm_gateway/protocol.py`.
+`interfaces/protocols.py::GoalVector` is a pydantic `BaseModel` whose `ge`/`le` constraints reject
+`NaN` outright; the LLM path uses the unvalidated frozen dataclass in `llm_gateway/protocol.py`.
 
 ### Fixed — valid JSON that was not an object crashed the default LLM gateway
 
-`LLMGateway._parse_response` caught `(json.JSONDecodeError, KeyError,
-TypeError)`. But `dict.get` cannot raise `KeyError`, and a non-dict always
-raises `AttributeError`, which the tuple did not name. So `[1, 2, 3]`,
-`null`, `7` and `"go forward"` — all valid JSON — raised out of the parser,
-while plain garbage (`"not json at all"`) was handled safely. The inversion
-was the tell: input that was *not* JSON was safe; input that *was* JSON was
-not.
+`LLMGateway._parse_response` caught `(json.JSONDecodeError, KeyError, TypeError)`. But `dict.get`
+cannot raise `KeyError`, and a non-dict always raises `AttributeError`, which the tuple did not
+name. So `[1, 2, 3]`, `null`, `7` and `"go forward"` — all valid JSON — raised out of the parser,
+while plain garbage (`"not json at all"`) was handled safely. The inversion was the tell: input
+that was *not* JSON was safe; input that *was* JSON was not.
 
-Its two sibling implementations both guard this, and
-`OpenAICompatibleLLMGateway._parse_goal_vector` documents a "never raises"
-invariant as a contract — so the hardening had been applied to two of three
-implementations and the **default** backend (`LLMConfig.backend` defaults
-`llama_cpp`) was the one left without it. `llama_cpp` is also the documented
-off-network `fallback_backend`, and a quantised local GGUF model is a likelier
-source of a bare list than Claude is, so the degraded path is where it would
-have bitten. The `FallbackLLMGateway` composite does contain the exception
-when one is configured, but `fallback_backend` defaults to `none`, so the
-default configuration had no composite to catch it.
+Its two siblings both guard this, and `OpenAICompatibleLLMGateway._parse_goal_vector` documents a
+"never raises" invariant as a contract — so the hardening had been applied to two of three
+implementations and the **default** backend (`LLMConfig.backend` defaults `llama_cpp`) was the one
+left without it. `llama_cpp` is also the documented off-network `fallback_backend`, and a
+quantised local GGUF model is a likelier source of a bare list than Claude is, so the degraded path
+is where it would have bitten. The `FallbackLLMGateway` composite does contain the exception when
+one is configured, but `fallback_backend` defaults to `none`, so the default configuration had no
+composite to catch it.
 
-`_parse_response` now takes the `isinstance(data, dict)` guard its siblings
-have, logs `llm_parse_non_object`, and narrows its `except` to
-`(TypeError, ValueError)`.
+`_parse_response` now takes the `isinstance(data, dict)` guard its siblings have, logs
+`llm_parse_non_object`, and narrows its `except` to `(TypeError, ValueError)`.
 
-Both defects were found by the 2026-09-19 peer review
-(`docs/analysis/positioning-safety-peer-review-2026-09-19.md`, D-0 and D-8)
-and are pinned by `tests/regression/test_goal_vector_clamp_aqa.py` +
-`test_goal_vector_clamp_backwards_compat.py`. The pins were proved against
-pre-fix semantics: 14 red, 18 green, the greens being exactly the
-finite-clamp cases that must not change.
+All five defects were found by the 2026-09-19 peer review
+(`docs/analysis/positioning-safety-peer-review-2026-09-19.md`, D-0, D-8 and D-17..D-19) and are
+pinned by two regression pairs, each proved red against pre-fix semantics before it counted.
 
 
 ### Safety — the chassis heartbeat failsafe reads as armed while being dormant

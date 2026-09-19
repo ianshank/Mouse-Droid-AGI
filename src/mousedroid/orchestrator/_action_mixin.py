@@ -5,6 +5,7 @@ Handles VLA/cognitive policy dispatch, action validation, and safety projection.
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, cast
 
 import numpy as np
@@ -332,4 +333,21 @@ class _ActionMixin(_OrchestratorState):
         vx = float(action[0]) * max_v
         vy = float(action[1]) * max_v if action.shape[0] > 1 else 0.0
         omega = float(action[2]) * max_omega if action.shape[0] > 2 else 0.0
+        # The docstring above *assumes* ``[-1, 1]``; nothing on this path
+        # enforced it. A non-finite action scaled straight through to
+        # ``send_velocity``, where the terminal clamp resolved it to the
+        # upper bound — so a sick model commanded maximum speed instead of
+        # stopping. Zero every axis rather than only the offending one: a
+        # NaN in any component means the policy output is untrustworthy,
+        # and driving the remaining axes on that basis is not safer. Logged
+        # at error because this is a model-health signal, not a value to
+        # silently drop.
+        if not (math.isfinite(vx) and math.isfinite(vy) and math.isfinite(omega)):
+            _log.error(
+                "action_non_finite_zeroed",
+                vx=repr(vx),
+                vy=repr(vy),
+                omega=repr(omega),
+            )
+            vx = vy = omega = 0.0
         await self._esp32.send_velocity(vx, vy, omega)

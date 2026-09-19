@@ -23,6 +23,7 @@ be exactly the wrong behaviour. ``read_encoders`` is read-only.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -56,7 +57,18 @@ class MotorToolDeps:
 
 
 def _clamp(value: float, *, lower: float, upper: float) -> float:
-    """Clamp ``value`` into ``[lower, upper]``."""
+    """Clamp ``value`` into ``[lower, upper]``. Non-finite resolves to ``0.0``.
+
+    This guards the only LLM-reachable ``send_velocity`` call in the tree:
+    ``set_velocity`` is an MCP tool, so its arguments come from a model.
+    A bare ``max(lower, min(upper, value))`` returns ``upper`` for ``NaN``
+    (every NaN comparison is False), so a model emitting ``NaN`` was
+    transmitted as ``max_velocity_mps`` / ``max_omega_rads`` — full
+    commanded speed — rather than stopping. Non-finite now means no motion.
+    """
+    if not math.isfinite(value):
+        _log.error("motor_tool_non_finite_velocity", value=repr(value))
+        return 0.0
     return max(lower, min(upper, value))
 
 

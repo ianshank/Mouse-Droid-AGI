@@ -30,9 +30,22 @@
 
 ---
 
-## 1. The four things that matter most
+## 1. The five things that matter most
 
-1. **The convergent diagnosis is a restatement of the project constitution, not a discovery.**
+1. **The last bound before the motors fails open: a `NaN` velocity is transmitted as full
+   scale.** `comms/_utils.py::clamp` is `max(lo, min(hi, value))`, which returns `hi` for `NaN`
+   because every NaN comparison is False. It is the terminal guard on the motor path, shared by
+   **both** codecs. Executed: `build_velocity_cmd(nan, nan, nan)` returned
+   `{'T': 1, 'vx': 255, 'vy': 255, 'omega': 255}` — full-scale PWM on all three axes, with no
+   exception raised, because the clamp resolved the NaN to `1.0` before `int()` ever saw it. The
+   stock codec, which `NEXT_STEPS.md` item 3 is about to flip to, emits `max_velocity_mps` the
+   same way. Two sibling paths share the defect: `motor_tools.py::_clamp` guards `set_velocity`,
+   an MCP tool and therefore the only LLM-reachable `send_velocity` in the tree, and
+   `_action_mixin.py::_execute_action` on the live 30 Hz tick had **no bound at all**, relying on
+   an invariant its own docstring merely *assumed*. **All three fixed in this change (§9).**
+   [Certain — §8.4]
+
+2. **The convergent diagnosis is a restatement of the project constitution, not a discovery.**
    `docs/CHARTER.md` §1 already reads: *"an edge-AI / robotics engineering project, **not a
    product and not a claim of general intelligence**"*, and names the integration gap itself —
    *"the honest axis is integration … meta-learning and scaling are implemented and tested but
@@ -41,7 +54,7 @@
    pre-existing, ratified, self-disclosed positions. Three models agreeing on the contents of a
    document all three read is not independent corroboration. [Certain — §2]
 
-2. **The one thing it says to do first cannot be done: the ESP32 is physically dead.**
+3. **The one thing it says to do first cannot be done: the ESP32 is physically dead.**
    Kimi K3's closing line — *"If you do only one thing this month, do the ESP32 watchdog and
    independent E-stop"* — is the synthesis's strongest single recommendation, and it targets a
    microcontroller that `NEXT_STEPS.md` P0 item 2 records as needing *"diagnosis + repair"*, and
@@ -52,7 +65,7 @@
    The review's "cheapest item on the list" is gated on bench work none of the three models
    detected. [Certain — §3, C4]
 
-3. **The odometry argument is mis-stated, and the correction reverses the work order.** All three
+4. **The odometry argument is mis-stated, and the correction reverses the work order.** All three
    models call missing odometry "the top physical blocker" because drift *"breaks RSSM/MCTS
    displacement prediction"*. The RSSM predicts no displacement: `RSSM.imagine_step` returns
    `(new_h, new_z, predicted_reward)` and `RSSM.decode` reconstructs an observation embedding,
@@ -68,7 +81,7 @@
    estimate to be measured against yet. Fix the objective and the goal type before the sensor.
    [Certain — §8.1]
 
-4. **Every human-safety path in the repo is unreachable code.** `ObservationProtocol` and
+5. **Every human-safety path in the repo is unreachable code.** `ObservationProtocol` and
    `MouseDroidObservationBundle` define no `human_detected` / `human_dist_m` field;
    `MouseDroidSafetyMonitor.evaluate` reads them via
    `getattr(observation, "human_detected", False)`, and nothing in `src/` ever assigns either. So
@@ -109,7 +122,7 @@
 | C4 | "Final authority should be the ESP32: heartbeat, command TTL, firmware-side clamps, motors disabled on boot, E-stop independent of Jetson/Docker/Python/Wi-Fi/LLM" | **RIGHT TARGET, BLOCKED HARDWARE, AND ONE PART IS FREE TODAY** | (a) heartbeat **exists but is still dormant**: `ESP32Config.command_set` defaults `"legacy"` and **no `config/*.yaml` sets it**, so `LegacyCommandCodec.connect_commands` returns `[]`. (b) command TTL / motion lease: **does not exist** — `_last_velocity` has no expiry. (c) firmware-side clamps: **no firmware sources exist in this repo at all** (zero `*.ino` / `*.cpp` / `*.h`); every clamp is host-side and pre-transmit, and there is **no acceleration limit on the production path**. (d) motors disabled on boot: **does not exist** — `_LifecycleMixin.start` connects and never issues a stop; `orchestrator/CLAUDE.md` states the consequence outright (*"the rover can be moving throughout bring-up"*). **This is the one C4 item that needs no firmware and no working ESP32 — one host-side stop after `connect()`.** (e) hardware E-stop: **does not exist**; `emergency_stop` is a software command over the same serial link the Jetson owns. All of (a)–(c) and (e) are gated on F-008 |
 | C5 | "Safety must move out-of-process with independent authority" | **CONFIRMED as a gap — with a correction the review inverts** | No independent authority exists. But the review frames this as purely absent; the repo ships something *worse than absent* in the same slot — see D-5, where the only out-of-process authority that does exist (`systemd`) **automatically restarts the motion system** |
 | C6 | "Adopt an explicit ODD with declared exclusions; ISO 3691-4 / UL 4600 vocabulary" | **CONFIRMED ABSENT — genuine greenfield, and the strongest unique contribution in the synthesis** | Repo-wide search for `ODD` / `operational design domain` / `operating zone` / `restricted zone` / `geofence` → nothing but the prior review's own note that none exists. `ISO ?3691` / `UL ?4600` / `GSN` / `assurance case` / `ISO ?13849` / `IEC ?61508` → **zero hits repo-wide**. Nearest analogue is `RoboticsLawChecker._check_law2`'s `allowed_zone_min/max`, which clips the **action vector**, not a position, and is never populated — flagging it because it is the symbol someone will reach for first |
-| C7 | "Constrain the LLM to a typed, allowlisted mission schema with bounded parameter ranges and operator approval" | **RIGHT, AND MORE URGENT THAN ARGUED** | Operator approval is already CHARTER §3's default posture. The review's stated rationale is prompt injection and motor authority; the actual reason is that **the existing bounded-range clamp is broken in the fail-open direction** — a `NaN` velocity field resolved to *full scale* on all three gateways (D-0, executed in §8.2). The review would have scored this as "already handled — values are clamped to [-1,1]" |
+| C7 | "Constrain the LLM to a typed, allowlisted mission schema with bounded parameter ranges and operator approval" | **RIGHT CONCLUSION, WRONG PATH — the threat model is aimed at a seam that does not actuate** | All three models worry about the LLM holding motor authority via the *mission* path. It does not: no LLM-derived `GoalVector` reaches `send_velocity` anywhere in the production orchestrator (§8.4). The path that genuinely gives a model motor authority is the MCP `set_velocity` tool, which none of the three audited — and which carried the fail-open clamp (D-19). Operator approval is already CHARTER §3's default posture. And the bounded-range argument cuts the other way from how the review uses it: the existing clamps were **the thing manufacturing the maximum command** (D-17/D-18/D-19). The review would have scored all of this as "already handled — values are clamped" |
 
 ---
 
@@ -134,7 +147,10 @@ Ordered by severity. Each is live on `2469588` unless marked fixed.
 
 | ID | Severity | Defect | Evidence |
 |---|---|---|---|
-| **D-0** | **Critical** | ~~**A `NaN` velocity field from the LLM becomes a full-scale motion command.**~~ **FIXED IN THIS CHANGE (§9).** All three gateways bounded velocity with `max(-1.0, min(1.0, v))`, which returns the **upper bound** for `NaN` (all NaN comparisons are False, so `min(1.0, nan)` keeps `1.0`). `json.loads` accepts the bare `NaN` literal by default, and the decoded payload is a well-formed dict, so the `isinstance` guard passes and `float()` does not raise — the result was `vx_target=1.0`, silently, with no warning and no degraded flag. CHARTER §3's cloud-egress carve-out leans on this clamp **by name** as the compensating control for a filter it concedes is *"best-effort … rather than a complete defense"*. Blast radius was bounded by `max_velocity_mps` downstream, so this is fail-open to the *ceiling*, not unbounded — but the direction is wrong | `llm_gateway/{gateway,anthropic_gateway,openai_compatible}.py`; executed in §8.2 |
+| **D-17** | **Critical** | ~~**The terminal bound before the motors fails open on `NaN`.**~~ **FIXED IN THIS CHANGE (§9).** `comms/_utils.py::clamp` is `max(lo, min(hi, value))` and is the single shared guard for **both** codecs. Executed: `build_velocity_cmd(nan, nan, nan)` → `{'T': 1, 'vx': 255, 'vy': 255, 'omega': 255}` — full-scale PWM on every axis, no exception, because the clamp resolved the NaN to `1.0` before `int()` saw it. `WaveshareStockCodec.build_velocity` emits `max_velocity_mps` / `max_omega_rads` the same way, and that is the codec `NEXT_STEPS.md` item 3 is about to switch to. The repo's own on-device learning with hot-swappable weight slots is a plausible NaN source | `comms/_utils.py::clamp`, `::build_velocity_cmd`, `comms/command_set.py::WaveshareStockCodec.build_velocity`; executed in §8.4 |
+| **D-18** | **High** | ~~**`_execute_action` had no bound at all on the live 30 Hz tick.**~~ **FIXED IN THIS CHANGE (§9).** `vx = float(action[0]) * max_v` with no range or finiteness check; the docstring says the action is *"assumed already restricted"*, and nothing on the path enforced it. `MouseDroidNavigationAgent.act` clamps with `torch.max(torch.min(...))`, but the cognitive and VLA branches are separate action sources with their own guarantees, and an out-of-range action scaled straight through | `orchestrator/_action_mixin.py::_execute_action` |
+| **D-19** | **High** | ~~**The only LLM-reachable `send_velocity` in the tree failed open on `NaN`.**~~ **FIXED IN THIS CHANGE (§9).** `motor_tools.py::_clamp` carried the same idiom and guards the MCP `set_velocity` tool, whose arguments come from a model. Executed: `_clamp(nan, lower=-0.5, upper=0.5)` → `0.5`; `_clamp(nan, lower=-1.5, upper=1.5)` → `1.5`. Gated by a default-OFF toggle (`mcp.enabled: false` in both shipped configs, `Settings.mcp = None`), which is why this is High rather than Critical — it is one opt-in flip from live | `common/tools/motor_tools.py::_clamp`, `::_set_velocity` |
+| **D-0** | **Medium** (latent High) | ~~**The LLM gateways' clamp turned `NaN` into the upper bound.**~~ **FIXED IN THIS CHANGE (§9).** Same idiom, same mechanism: `json.loads` accepts the bare `NaN` literal, the decoded payload is a well-formed dict so the `isinstance` guard passes, `float()` does not raise, and the clamp returns `1.0`. **Correction — an earlier draft of this row rated this Critical and described it as "a full-scale motion command". That was wrong.** Tracing every `vx_target` consumer shows the LLM-derived `GoalVector` is consumed *only* by structlog fields, the REST `POST /api/v1/mission` response body, and an MCP tool result: **no production path actuates on it.** It is applied as a velocity only in `orchestrator/autonomous.py`, which is parked with zero production callers (ADR-016) — and even there via the *other*, pydantic-validated `GoalVector`. The live blast radius is therefore an observability and API surface, not motion: a `NaN` comes back to a language model as a confident `1.0` (same family as D-14). It is latent High because it sits directly on the seam the roadmap plans to connect to actuation — goal-conditioned planning is exactly what §1 item 4 recommends building | `llm_gateway/{gateway,anthropic_gateway,openai_compatible}.py`; executed in §8.2, trace in §8.4 |
 | **D-1** | **Critical** | **Human detection is structurally impossible; five safety mechanisms and three config budgets are dead code.** No `human_detected` / `human_dist_m` field exists on `ObservationProtocol` or `MouseDroidObservationBundle`; `evaluate` reads them through `getattr(..., False)` and nothing ever assigns them. A typed protocol field would have failed `mypy --strict`; the `getattr` default is what hides it | `sensing/protocol.py`, `sensing/bundle.py`, `safety/monitor.py::evaluate`, `agents/navigation.py::act`, `safety/projector.py::project` |
 | **D-2** | **High** | **`three_laws.py` is never called on the motion path — and wiring it would not help.** `factory/cognitive.py::build_cognitive_core` constructs `ConstitutionalChecker` with **no `law_checker` argument**, so `check` takes the `else: safe = action.copy()` branch in every production build; the only wiring site is offline training. A second, independent gate sits behind it: `CognitiveCore.tick_fast` filters context to the hard whitelist `("battery_v", "obstacle_dist_m", "mcts_sims")`, dropping every key Laws 1–3 need. `ThreeLawsConfig.enabled` defaults `True`, so config reads "enforcement on" while nothing enforces — the S-11 defect class again | `factory/cognitive.py`, `cognitive/cognitive_core.py::tick_fast`, `cognitive/constitutional_rl.py` |
 | **D-3** | **High** | **The S-2 LiDAR fail-closed fix shipped inert on exactly the rig that needs it.** `SafetyConfig.lidar_unavailable_policy` defaults `"ignore"` and **no YAML sets it** — including `config/jetson_lidar_only.yaml`, which also sets `ultrasonic: null`. On that stack `_safe_distance_read` returns `distance_fallback_m` = **999.0**, so `forward_clearance_ok` is *always* True, and `_evaluate_lidar_clearance` returns `(inf, True, False)` for a dead LiDAR. `c6f701d` built the mechanism correctly and left every shipped deployment on the fail-open branch | `config/schema/reward_safety.py`, `config/jetson_lidar_only.yaml`, `sensing/manager.py`, `safety/monitor.py` |
@@ -263,7 +279,45 @@ change. With the fix in place: **32 passed**. Full gateway suite: **231 passed**
 `ruff check` clean, `ruff format --check` clean, `mypy --strict` clean on all four changed
 modules. [Certain]
 
-### 8.4 Baseline
+### 8.4 Where a velocity actually goes
+
+Three `send_velocity` call sites exist in `src/`: `_action_mixin.py::_execute_action` (the 30 Hz
+tick, fed by the policy action tensor), `motor_tools.py::_set_velocity` (the MCP tool), and
+`power_chain.py` (the smoke helper). **Not one is fed by a `GoalVector`.** Every `vx_target`
+consumer in the tree is a structlog field, a REST response body (`_rest_handlers.py`), or an MCP
+tool result (`common/tools/registry.py`) — never an actuation call. `orchestrator/autonomous.py`
+is the only module that applies a goal as a velocity, it is parked with zero production callers
+(ADR-016), and it uses the *other* `GoalVector` (the pydantic `BaseModel`) fed by
+`CompositeLLMGateway`, whose `_dispatch_primary_translation` is itself a stub returning
+rule-based mock output from `constants.py` literals. [Certain]
+
+The terminal chain, executed:
+
+```
+clamp(benign 0.2) -> 0.2    -> int(*MAX_PWM) = 51
+clamp(over   9.9) -> 1.0    -> int(*MAX_PWM) = 255
+clamp(NaN       ) -> 1.0    -> int(*MAX_PWM) = 255   <== FULL-SCALE PWM ON THE WIRE, no exception
+```
+
+and end-to-end through the real codec, pre-fix:
+
+```
+build_velocity_cmd(nan, nan, nan) -> {'T': 1, 'vx': 255, 'vy': 255, 'omega': 255}
+```
+
+Post-fix the same call returns `{'T': 1, 'vx': 0, 'vy': 0, 'omega': 0}`. Note a reader might
+assume `int(nan)` would have raised `ValueError` and failed safe; it could not, because the clamp
+resolved the NaN to `1.0` before `int()` ever saw it. That case is pinned. [Certain]
+
+### 8.5 The actuation pins detect the defect
+
+With pre-fix semantics restored and the symbols kept, the two new regression files go
+**22 failed, 19 passed** — the 19 being exactly the finite and saturation cases that must not
+change. With the fix: **41 passed**. Regression + comms tiers: **1527 passed**; the 10 failures
+and 21 collection errors reproduce identically on a clean tree (`torch` / `cv2` / `hypothesis`
+absent from this sandbox). `ruff` and `mypy --strict` clean. [Certain]
+
+### 8.6 Baseline
 
 `python scripts/select_next.py` → `F-008  USB-C rover smoke passes on the physical Jetson
 (priority=critical, tier=hardware)`. Unchanged by this review.
@@ -272,8 +326,25 @@ modules. [Certain]
 
 ## 9. Changes made alongside this review
 
-Two software-only defects, both strictly fail-safer, neither needing a CHARTER carve-out (a
-carve-out gates *expansion* of the no-motion posture; these reduce commanded motion).
+Five software-only defects, all strictly fail-safer, none needing a CHARTER carve-out (a
+carve-out gates *expansion* of the no-motion posture; every one of these reduces commanded
+motion). One shared rule now holds everywhere a velocity is bounded: **a non-finite velocity is a
+malformed velocity, and a malformed velocity means no motion.**
+
+**D-17 — the terminal bound before the motors.** `comms/_utils.py::clamp` returns `0.0` for
+non-finite input and logs `velocity_clamp_non_finite` at error. Every finite result is unchanged,
+the signature is unchanged, and all five call sites were checked first — they are the two
+`build_velocity` paths and nothing else, so no caller depended on the NaN-to-bound behaviour.
+This is the highest-stakes edit in the change: it is what emitted PWM 255.
+
+**D-18 — the live 30 Hz tick.** `_action_mixin.py::_execute_action` now zeroes **every** axis when
+any of `vx`/`vy`/`omega` is non-finite, and logs `action_non_finite_zeroed` at error. All three
+axes rather than only the offending one: a NaN in any component means the policy output is
+untrustworthy, and driving the remaining axes on that basis is not safer. Error level because a
+non-finite action is a model-health signal, not a value to drop silently.
+
+**D-19 — the MCP tool.** `motor_tools.py::_clamp` gets the same guard, logging
+`motor_tool_non_finite_velocity`. This is the only LLM-reachable `send_velocity` in the tree.
 
 **D-0 — NaN no longer becomes full scale.** `llm_gateway/protocol.py` gains `GOAL_VECTOR_MIN`,
 `GOAL_VECTOR_MAX` and a NaN-safe `clamp_unit()`, defined once beside the type it constrains. All
@@ -289,8 +360,14 @@ previously clamped to `±1.0` and is now `0.0`; pinned explicitly so it is not i
 already had, and its `except` now names `(TypeError, ValueError)` instead of the unreachable
 `KeyError`.
 
-Pinned by a regression pair per the house convention:
+Pinned by two regression pairs per the house convention:
 
+- `tests/regression/test_velocity_clamp_actuation_{aqa,backwards_compat}.py` — the actuation
+  contract, exercising the real codec entry points end to end rather than only the helper, both
+  codecs, the MCP tool and the tick guard. Includes a source-level gate that no module on the
+  motor path may carry the two-sided idiom without a finite check, and an explicit pin that the
+  legacy path never raised (a reader might assume `int(nan)` would have failed safe; it could
+  not, because the clamp resolved the NaN before `int()` saw it).
 - `tests/regression/test_goal_vector_clamp_aqa.py` — the contract (non-finite → no motion; NaN is
   not the upper bound; finite behaviour unchanged; the bare two-sided idiom may not reappear in
   any gateway module). That last gate found a **fourth** inline clamp during authoring —
@@ -301,6 +378,18 @@ Pinned by a regression pair per the house convention:
 - `tests/regression/test_goal_vector_clamp_backwards_compat.py` — what must not have changed
   (every finite value, the four pre-existing parser behaviours, non-numeric fields), plus the
   five valid-JSON-non-object inputs that used to raise.
+
+Both pairs were proved against pre-fix semantics rather than assumed: the gateway pair goes
+14 red / 18 green, the actuation pair 22 red / 19 green, the greens in each being exactly the
+finite cases that must not change.
+
+**A note on how this change reached its final shape, because it bears on how the review should be
+read.** The first pass found the idiom in the LLM gateways, rated it Critical, and fixed it there.
+Only the second pass traced every `send_velocity` call site — and found that the gateways are the
+one place the idiom does *not* actuate, while three paths that do actuate carried it untouched.
+D-0's row records that correction in place. The generalisable lesson is the one the review levels
+at the external synthesis in §1 item 2: a finding that has not been traced to its consumers is a
+hypothesis, not a result.
 
 Not fixed here, recorded for triage: **D-1 through D-7 and D-9 through D-16.** D-1 (human
 detection) and D-5 (automatic restart of a motion system) are the two that should be triaged
