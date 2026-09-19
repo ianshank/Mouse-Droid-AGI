@@ -28,7 +28,11 @@ WEIGHTS_DIR="weights/"
 FORCE=false
 SELECTED_REPOS=()
 
-# All HuggingFace repos containing MouseDroid model weights
+# All HuggingFace repos reserved for MouseDroid model weights.
+# NOTE: "ianshank/mousedroid-dual-stream-rssm" is currently EMPTY -- it holds
+# only .gitattributes and README.md, no weights and no observe_step.onnx.
+# Downloading it is a no-op; it stays listed so a future push is picked up
+# without editing this script.
 ALL_REPOS=(
     "ianshank/mousedroid-weights"
     "ianshank/mousedroid-dual-stream-rssm"

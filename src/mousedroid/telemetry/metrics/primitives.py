@@ -63,6 +63,16 @@ _GROWTH_DISTILL_OUTCOMES: frozenset[str] = frozenset({"completed", "skipped_no_b
 #   * api — the resolved Piper synthesis API whose call raised.
 _VOICE_SPEAKER_DEGRADED_SUBSYSTEMS: frozenset[str] = frozenset({"usb_speaker", "rocky_fallback"})
 _VOICE_TTS_APIS: frozenset[str] = frozenset({"synthesize", "synthesize_wav", "synthesize_wav_file"})
+#: Runtime drop-guard for
+#: ``mousedroid_model_artifact_sha256_mismatches_total{artifact}``. Mirrors
+#: :data:`mousedroid.config.schema._primitives.ModelArtifactLiteral`, the
+#: compile-time half of the same guard. Labelling by artifact kind rather than
+#: by the operator-configurable ``repo_id`` caps the family at two series, so a
+#: YAML edit cannot open a new one; repo and revision travel in the structured
+#: log event beside each increment. A regression test asserts the two sets
+#: never diverge.
+_MODEL_ARTIFACT_KINDS: frozenset[str] = frozenset({"world_model_onnx", "bdi_weights"})
+
 #: Runtime drop-guard for ``mousedroid_tick_phase_ms{phase}``. Mirrors
 #: :data:`mousedroid.config.schema._primitives.TickPhaseLiteral`, which is the
 #: compile-time half of the same guard — mypy rejects a mistyped phase at the

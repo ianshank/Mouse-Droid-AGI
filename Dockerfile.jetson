@@ -68,6 +68,44 @@ RUN pip install --no-cache-dir pyserial>=3.5 python-prctl 2>&1 \
 # CfC liquid neural network (dual-stream world model — non-fatal)
 RUN pip install --no-cache-dir "ncps>=0.0.7" 2>&1 \
     || echo "WARNING: ncps install failed (dual-stream CfC disabled)"
+# ONNX Runtime for the world-model engine (openspec task 2.5 — non-fatal).
+#
+# Why this is needed at all: `pip install -e "."` above resolves no extras, so
+# until now the only ONNX Runtime in this image was the CPU wheel `piper-tts`
+# pulls in transitively (Stage 5). `common/onnx_session.py::resolve_providers`
+# returns `("CPUExecutionProvider",)` on an empty intersection with only an INFO
+# log, so `engine: onnx_trt` would have run SLOWER than the torch baseline while
+# looking healthy. Silent is the defect; the version floors stay in
+# pyproject.toml's [onnx_world_model] extra so there is one source of truth.
+#
+# Why the probe rather than an unconditional install: NVIDIA publishes the
+# aarch64/L4T `onnxruntime-gpu` wheels on its own index, not on PyPI, and the
+# `dustynv/l4t-pytorch:r36.4.0` base image is expected to ship one already —
+# this was NOT knowable from the repository tree (task 2.5 says to record the
+# answer, so the build log is where it gets recorded). Reinstalling over a
+# working L4T build risks replacing it with a CPU-only PyPI wheel, which is the
+# exact failure this stage exists to prevent. So: keep what the base image has
+# when it already offers a GPU provider, and only install the extra otherwise.
+#
+# Non-fatal, matching every other optional stage in this file: the default
+# `engine: torch` path does not need ONNX Runtime at all, and the task-2.1
+# ceiling gate closed against enabling `onnx_trt`, so a missing GPU wheel must
+# not fail the image build. The final probe prints the resolved provider list so
+# the build log carries the evidence either way. The accelerated-provider names
+# come from ``common/onnx_session.DEFAULT_ORT_PROVIDERS`` rather than being spelt
+# again here, so the probe cannot drift from the chain the runtime requests.
+RUN python -c "import onnxruntime as ort; \
+        from mousedroid.common.onnx_session import DEFAULT_ORT_PROVIDERS as D; \
+        ps = ort.get_available_providers(); \
+        print('ORT_BASE_IMAGE_PROVIDERS=' + ','.join(ps)); \
+        accel = [p for p in D if p != 'CPUExecutionProvider']; \
+        raise SystemExit(0 if any(p in ps for p in accel) else 1)" \
+    && echo "INFO: base image already provides a GPU-capable ONNX Runtime; leaving it in place" \
+    || pip install --no-cache-dir -e ".[onnx_world_model]" 2>&1 \
+    || echo "WARNING: onnx_world_model extra install failed (engine: onnx_trt unavailable; engine: torch unaffected)"
+RUN python -c "import onnxruntime as ort; \
+        print('ORT_RESOLVED_PROVIDERS=' + ','.join(ort.get_available_providers()))" 2>&1 \
+    || echo "WARNING: onnxruntime not importable (engine: onnx_trt unavailable; engine: torch unaffected)"
 RUN pip install --no-cache-dir Jetson.GPIO>=2.1 2>&1 \
     || echo "WARNING: Jetson.GPIO install failed (expected on non-Jetson hosts)"
 # picamera2 may fail without libcamera system libs — graceful skip

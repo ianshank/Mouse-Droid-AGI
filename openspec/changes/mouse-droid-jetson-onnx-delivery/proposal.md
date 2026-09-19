@@ -33,6 +33,50 @@ gain caps at ~1.25-1.6× *regardless of the primitive speedup*. This change targ
 That number is a desk calculation, and rev C computes it before Phase 2 rather than after a
 rover campaign.
 
+### The ceiling, computed — and the gate it closes
+
+`scripts/analyze_observe_step_ceiling.py` derives it from `MCTSConfig` and `LoopConfig` with no
+literals, and reproduces the spike's two published constants exactly (`"500-650"`, `"~40%"` at
+`scripts/spike_step_distillation.py:59-60`) as its correctness anchor:
+
+| quantity | value |
+| --- | --- |
+| `imagine_step` calls per `plan()` at `n_simulations_base=50` | **259 - 628** |
+| of which the rollout leg | 250 calls = **39.8% - 96.5%** |
+| `observe_step` : `imagine_step` calls per tick | **1 : 259** to **1 : 628** |
+| equal-per-call-cost share of the tick's RSSM work | **0.159% - 0.385%** |
+| end-to-end ceiling at that share | **1.0016x - 1.0039x** |
+| share required to reach even 1.25x end-to-end | **>= 20% of tick time**, at any primitive speedup |
+
+The derivation is `total_min = n_action_candidates + n_simulations * rollout_depth`,
+`total_max = total_min + max(0, n_simulations - n_action_candidates) * n_action_candidates`. The
+`0` lower bound on re-expansions is proved from `mcts.py`: `_ucb1` returns `+inf` for an unvisited
+node (`:223-224`) and `_select_child` keeps the *first* strictly-better score (`:238-244`), so the
+first `min(budget, n_action_candidates)` simulations each land on a distinct unvisited root child
+and never reach the re-expansion at `:318-319`.
+
+**So the gate at task 2.1 closes: this does not justify I/O binding, FP16 and a TensorRT cache.**
+Against this repository's own bar — 1.25x, the *low* end of the sibling rollout leg's ceiling —
+`observe_step` would have to occupy at least a fifth of every tick. The structural reference point
+is two orders of magnitude below that. Per the task's own instruction ("Concluding 'not worth it'
+on this calculation is a successful outcome, not a failed one"), rev C therefore lands **Phases
+2.4-2.6, 3, 4, 7 and 8 only**, and Phases 5 and 6 — the rover baseline campaign and the
+provider-options / I/O-binding / FP16 work — are not built.
+
+Two honest qualifications, both recorded as `unknown_inputs` in the analyzer's report:
+
+1. **The conclusion is conditional, not measured.** No measured `observe_step` share exists in
+   this repository — `reports/` and `smoke-reports/` still carry zero `tick_phase` or
+   `observe_step` values. The 0.159%-0.385% band is a structural *equal-per-call-cost* reference
+   point, not a measurement, and the analyzer exits refusing to conclude unless a share is
+   supplied (`--observe-share`). What kills the optimization is not the exact share but the
+   distance: the required share is ~52x-126x the reference point.
+2. **This is why Phase 3 still lands.** The instrumentation is what would make the number
+   measurable rather than derived, and it is worth having on its own terms — the
+   `mousedroid_world_model_observe_step_seconds` family has had no production writer and
+   `WorldModelObserveStepLatencyHigh` could not fire. Closing the optimization gate does not
+   close the observability gap; it is the reason to fix it cheaply instead of expensively.
+
 Four facts reorder everything:
 
 1. **The stage is unmeasured.** `reports/` holds three files and `smoke-reports/` two;
@@ -125,6 +169,14 @@ at worst.
   field names without the `_total` suffix that `primitives.py:422-429` appends at render.
 - `docs/architecture/ADR-019-onnx-runtime-provider-policy.md` + a row in
   `docs/architecture/adr-log.md`, superseding the ADR-008 clauses it changes.
+
+**Out of scope by the task 2.1 gate.** The bullets above that belong to Phases 5-6 — the typed
+ONNX runtime options, the `resolve_providers` widening, `_registry_onnx_runtime.py`,
+ADR-019 and the rover baseline campaign — are **not built by this change**, because the computed
+ceiling does not justify them (see "The ceiling, computed" above). They stay described here as
+the design that *would* be correct if a measurement ever moves the share, and `design.md` keeps
+their sections for that reason. What lands is instrumentation (Phase 3), narrative correction
+(Phase 4), artifact integrity (Phase 7) and delivery hardening (Phase 8).
 
 **Evidence (F-050)**
 

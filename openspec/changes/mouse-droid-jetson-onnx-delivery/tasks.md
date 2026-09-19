@@ -41,16 +41,38 @@ Narrow pytest selections use the `Makefile::regression` form —
 `pyproject.toml:392` already carries `-v --import-mode=importlib --strict-markers` and the
 coverage plugin's `fail_under = 90` (`:411`) fails any narrow run without `--no-cov`.
 
+## Scope after the task 2.1 gate
+
+Task 2.1 is a real exit and it fired. `scripts/analyze_observe_step_ceiling.py` computes the
+end-to-end ceiling for accelerating `observe_step` at **1.0016x-1.0039x** at the structural
+equal-per-call-cost reference point, and shows `observe_step` would have to occupy **>= 20% of
+tick time** to reach even 1.25x — the *low* end of the sibling rollout leg's own ceiling. The
+reference point is 0.159%-0.385%. See `proposal.md` -> "The ceiling, computed".
+
+So, per 2.1's own instruction, this change lands **Phases 1, 2 (2.1-2.6), 3, 4, 7 and 8** and does
+**not** build I/O binding, FP16 or a TensorRT engine cache. Tasks left unbuilt are prefixed
+`**NOT BUILT (task 2.1 gate):**` in place rather than deleted, because the design behind them is
+sound and becomes live again the moment a *measured* share contradicts the derivation. `design.md`
+keeps their sections for the same reason.
+
+Concluding "not worth it" here is the successful outcome 2.1 describes, not a failure. What is
+still worth landing, and does land: the instrumentation that would turn the derived number into a
+measured one (Phase 3 — the
+`mousedroid_world_model_observe_step_seconds` family had no production writer at all, so
+`WorldModelObserveStepLatencyHigh` could never fire), the false operator-facing claims
+(Phase 4), artifact integrity (Phase 7) and delivery hardening (Phase 8) — the last two justified
+in the proposal independently of any speedup.
+
 **Phase 1 — Governance and catalog (no runtime change)**
 
-- [ ] 1.1 **One commit**, because task 1.2's scripts must land with the catalog entries
+- [x] 1.1 **One commit**, because task 1.2's scripts must land with the catalog entries
       (see 1.2). Reserve `F-050` (runtime + performance evidence) and `F-051` (PC-to-rover
       delivery) in `features.yaml` with `status: "in_progress"`, `implemented_in: null`,
       `depends_on: ["F-008"]` for F-051 and `["F-002"]` for F-050. Required fields per
       `features.schema.json`: `id, name, category, priority, status, verification,
       depends_on`. IDs are next-free, not sequential — ADR-013:63-74 makes F-009–F-014 and
       F-033 intentional holes.
-- [ ] 1.2 `scripts/validations/F-050.sh` and `F-051.sh` **must exist and be non-empty in
+- [x] 1.2 `scripts/validations/F-050.sh` and `F-051.sh` **must exist and be non-empty in
       this same commit**: `tests/regression/test_harness_spec_aqa.py:125-137`
       (`test_referenced_validation_scripts_exist`) has no status filter and runs in the
       blocking `test` job. They will not be *executed* while status is `in_progress` —
@@ -65,20 +87,20 @@ coverage plugin's `fail_under = 90` (`:411`) fails any narrow run without `--no-
       `bash scripts/validations/_run_always_on_pytest.sh F-0NN <paths>`. Do not restate
       `--import-mode=importlib --no-cov -q` — the helper appends them and fails when
       `passed < 1`.
-- [ ] 1.3 Register the bundle in `openspec/project.md`'s Changes table
+- [x] 1.3 Register the bundle in `openspec/project.md`'s Changes table
       (change-id, status, F-number, landed, authoritative artifacts).
-- [ ] 1.4 `docs/architecture/ADR-019-onnx-runtime-provider-policy.md` naming the ADR-008
+- [ ] 1.4 **NOT BUILT (task 2.1 gate):** ADR-019 documents a provider-options surface that is no longer being added, and it would supersede ADR-008 clauses this change no longer touches. An ADR with nothing to decide is worse than none. Original: `docs/architecture/ADR-019-onnx-runtime-provider-policy.md` naming the ADR-008
       clauses it supersedes (config surface, provider proof, parity scope), plus a row in
       `docs/architecture/adr-log.md` —
       `test_doc_reconciliation_aqa.py::test_every_adr_on_disk_has_a_row_in_the_adr_log`
       fails without it.
-- [ ] 1.5 Amend `src/mousedroid/world_model/CLAUDE.md` invariant 3 to scope
+- [ ] 1.5 **NOT BUILT (task 2.1 gate):** the invariant-3 rescope exists to permit I/O-binding's in-place device buffers. No I/O-binding code lands, so the world-model invariant stays as written. Original: Amend `src/mousedroid/world_model/CLAUDE.md` invariant 3 to scope
       "No In-Place Tensor Mutation" to the PyTorch autograd graph, per design D-12. This
       lands before any I/O-binding code.
 
 **Phase 2 — Preconditions (gate for everything after)**
 
-- [ ] 2.1 **Compute the consumer ceiling on paper, first.** This is a desk calculation and
+- [x] 2.1 **Compute the consumer ceiling on paper, first.** This is a desk calculation and
       needs no rover. `scripts/spike_step_distillation.py:57-61` already implements the
       method and states the result for the rollout leg: "MCTS plan() makes ~500-650
       imagine_step calls; rollouts are ~40% of them, so end-to-end planner gain caps at
@@ -88,20 +110,20 @@ coverage plugin's `fail_under = 90` (`:411`) fails any narrow run without `--no-
       FP16 and a cache, stop here and land only Phases 2.4-2.6, 3, 4, 7 and 8. Concluding
       "not worth it" on this calculation is a successful outcome, not a failed one.
 
-- [ ] 2.2 State in the proposal, not as a caveat: the production world model **loads no
+- [x] 2.2 State in the proposal, not as a caveat: the production world model **loads no
       trained weights**. `build_world_model` returns `DualStreamRSSM(cfg.model)`
       (`factory/world_model.py:108`) or `RSSM(cfg.model)` (`:113`) freshly constructed; there
       is no `load_state_dict` in that module or in `orchestrator/`; and
       `factory/telemetry.py:315` `build_weight_update_loader` unconditionally returns `None`.
       A numerical-parity gate against random weights is vacuous. Not this change's to fix —
       but it must be said.
-- [ ] 2.3 State that production runs **plain `RSSM`, not `DualStreamRSSM`**:
+- [x] 2.3 State that production runs **plain `RSSM`, not `DualStreamRSSM`**:
       `config/jetson_production.yaml` has no `model:` block, so `cfc_hidden_dim` is `0` and
       `factory/world_model.py:91` falls through to `RSSM`. Only
       `config/jetson_dual_stream.yaml:29` sets `64`, self-gated at `:8` behind human review
       of training metrics. So a torch-vs-ONNX A/B compares two architectures. Any benchmark
       must run both arms on `config/jetson_dual_stream.yaml` or report the confound.
-- [ ] 2.4 **Off-loop warmup, before any `engine: onnx_trt` code lands.** `observe_step`
+- [x] 2.4 **Off-loop warmup, before any `engine: onnx_trt` code lands.** `observe_step`
       warms lazily (`dual_stream_rssm_onnx.py:223-224`), `_update_world_model` is synchronous
       (`_world_model_state_mixin.py:28`), and `run()` wraps the tick in
       `asyncio.wait_for(..., tick_timeout_s)` defaulting to `1.0`
@@ -111,7 +133,7 @@ coverage plugin's `fail_under = 90` (`:411`) fails any narrow run without `--no-
       `await asyncio.to_thread(wm.warmup)` and a test that a slow warmup does not reach the
       tick. `loop_overrun_warmup_ticks: 30` does not cover this — it gates the safety
       monitor's `max_loop_time_ms`, not `tick_timeout_s`.
-- [ ] 2.5 **Install `onnxruntime-gpu` in `Dockerfile.jetson`.** It runs
+- [x] 2.5 **Install `onnxruntime-gpu` in `Dockerfile.jetson`.** It runs
       `pip install --no-cache-dir -e "."` with no extras and says so at `:88`; the only
       transitive ORT is the CPU wheel `piper-tts` pulls (`:146`). Since
       `resolve_providers` silently returns `("CPUExecutionProvider",)` on an empty
@@ -120,12 +142,12 @@ coverage plugin's `fail_under = 90` (`:411`) fails any narrow run without `--no-
       `onnx_require_primary_provider` defaulting **true** in the FP16 overlay. Record whether
       `dustynv/l4t-pytorch:r36.4.0` already ships a GPU-enabled ORT — not knowable from the
       tree.
-- [ ] 2.6 Correct two false comments: `factory/world_model.py:267-270` ("the safety
+- [x] 2.6 Correct two false comments: `factory/world_model.py:267-270` ("the safety
       monitor's CfC inspection") and `composite.py:135` ("keeps the safety monitor wired").
       `get_safety_trace` has zero production callers, and `build_planner` — named at
       `ADR-008:80` — does not exist; the real builder is `factory/cognitive.py:34`. Fold into
       the Phase 3 narrative sweep.
-- [ ] 2.7 Size the memory budget before enabling caches. `docker-compose.jetson.yml:145-153`
+- [ ] 2.7 **NOT BUILT (task 2.1 gate):** no caches are enabled, so there is no engine-build peak to size. The container resource budget itself is still recorded, under task 8.0. Original: Size the memory budget before enabling caches. `docker-compose.jetson.yml:145-153`
       is `memory: 6G` with no `memswap_limit`/`shm_size`/`pids_limit`, against 7.4 GB usable
       and ~4.6 GB measured available. `config/jetson_production.yaml:66` sets
       `workspace_gb: 2.0` — 2 GiB of TensorRT builder workspace for a ~574 k-parameter graph
@@ -137,7 +159,7 @@ coverage plugin's `fail_under = 90` (`:411`) fails any narrow run without `--no-
       though its attribution to the world model looks wrong — the world model is CPU-resident
       today (no `set_default_device`, no live `.to(cuda)`, latents on CPU at
       `orchestrator.py:468-477`).
-- [ ] 2.8 Bind only `new_h` and `new_z` to persistent device buffers.
+- [ ] 2.8 **NOT BUILT (task 2.1 gate):** there are no persistent device buffers to bind. Original: Bind only `new_h` and `new_z` to persistent device buffers.
       `_world_model_state_mixin.py:41` discards `obs_embed` and `surprise`
       (`self._h, self._z, _, _ = …`), and `SafetyContext.surprise` is never assigned from the
       world model (`safety/context.py:21` default `0.0` is its only value), so
@@ -146,17 +168,17 @@ coverage plugin's `fail_under = 90` (`:411`) fails any narrow run without `--no-
 
 **Phase 3 — Make the stage measurable**
 
-- [ ] 3.1 Failing tests first: `build_world_model` accepts `metrics=` and threads it to
+- [x] 3.1 Failing tests first: `build_world_model` accepts `metrics=` and threads it to
       `DualStreamRSSMOnnx`; the PyTorch engine emits the same observe-step histogram;
       construction still does not load a session
       (`test_dual_stream_rssm_onnx.py:111` must stay green).
-- [ ] 3.2 `src/mousedroid/factory/world_model.py`: `build_world_model(cfg, *, metrics=None)`
+- [x] 3.2 `src/mousedroid/factory/world_model.py`: `build_world_model(cfg, *, metrics=None)`
       threaded to `_build_onnx_world_model` → `DualStreamRSSMOnnx(metrics=...)`. Update all
       call sites: `factory/orchestrator.py:121`, `factory/on_device_learning.py:102,274,304`,
       `validation/pillars.py:184`.
-- [ ] 3.3 `src/mousedroid/factory/orchestrator.py`: move `build_metrics_registry(cfg)`
+- [x] 3.3 `src/mousedroid/factory/orchestrator.py`: move `build_metrics_registry(cfg)`
       (currently `:210`) above the `build_world_model` call (currently `:121`).
-- [ ] 3.4 `src/mousedroid/telemetry/metrics/_registry_onnx_runtime.py` (new, per ADR-017's
+- [ ] 3.4 **NOT BUILT (task 2.1 gate):** `onnx_session_build_seconds` / `onnx_copy_seconds` measure I/O-binding copies and engine builds. Neither exists now. The observe-step histogram this change does wire (3.6) already had its registry field and its alert. Original: `src/mousedroid/telemetry/metrics/_registry_onnx_runtime.py` (new, per ADR-017's
       package split): `onnx_session_build_seconds{provider,cache_state,precision}` and
       `onnx_copy_seconds{direction,mode}`. Registry field names carry **no** `_total` /
       no double suffix — `primitives.py:422-429` appends `_total` at render. Bucket
@@ -165,25 +187,25 @@ coverage plugin's `fail_under = 90` (`:411`) fails any narrow run without `--no-
       module-level `frozenset` in `primitives.py` paired with a `Literal` alias in
       `config/schema/_primitives.py`. Seed `generate_metrics_sample()` (`registry.py`) or
       `test_prometheus_alerts_yml.py` and `test_grafana_dashboard_json.py` go red.
-- [ ] 3.5 `src/mousedroid/world_model/dual_stream_rssm_onnx.py`: time `pack_observation`
+- [ ] 3.5 **NOT BUILT (task 2.1 gate):** same reason as 3.4 — the spans being timed are the ONNX copy path. Original: `src/mousedroid/world_model/dual_stream_rssm_onnx.py`: time `pack_observation`
       (`:236`) and the tensor conversions (`:262-269`) as `onnx_copy_seconds` spans. The
       existing `observe_world_model_observe_step_seconds` keeps its `session.run` scope
       (`:255-258`) so `alerts.yml:388-421` and `registry.py:221` stay valid.
-- [ ] 3.6 `src/mousedroid/world_model/dual_stream_rssm.py` **and
+- [x] 3.6 `src/mousedroid/world_model/dual_stream_rssm.py` **and
       `src/mousedroid/world_model/rssm.py`**: emit the same observe-step histogram from both
       PyTorch engines. `rssm.py` is the one that matters for the current production overlay —
       `build_world_model` returns plain `RSSM` when `cfc_hidden_dim` is 0
       (`factory/world_model.py:109-113`), so instrumenting only the dual-stream class leaves
       production uninstrumented. Emitting from both so the engines are comparable in production and
       not only inside the Jetson-gated advisory test.
-- [ ] 3.7 Do **not** add a deadline-miss counter. `mousedroid_tick_overruns_total`
+- [x] 3.7 Do **not** add a deadline-miss counter. `mousedroid_tick_overruns_total`
       (`_registry_core.py:91`) is already written live at
       `_telemetry_experience_mixin.py:114-126` against
       `safety.loop_soft_budget_factor / loop.control_hz`, and
       `mousedroid_tick_phase_ms{phase="world_model"}` (`orchestrator.py:522`) already gives
       per-phase attribution.
 
-- [ ] 3.8 Close the pre-existing hole this change lands inside:
+- [x] 3.8 Close the pre-existing hole this change lands inside:
       `tests/unit/factory/test_factory_world_model_engine.py` is the **only** test file that
       constructs `WorldModelConfig`, and it executes in **no** CI job — it
       `importorskip`s `onnx`/`onnxruntime` (`:22-24`) so it skip-alls in the blocking `test`
@@ -192,7 +214,7 @@ coverage plugin's `fail_under = 90` (`:411`) fails any narrow run without `--no-
       Either add `tests/unit/factory/` to that job's path list or add always-on integration
       coverage for `build_world_model`'s dispatch through a stubbed ORT seam. Without this,
       eight new config fields land completely unpinned.
-- [ ] 3.9 Fill the missing tiers: a `tests/property/` test for provider and mode resolution
+- [ ] 3.9 **NOT BUILT (task 2.1 gate):** provider and mode resolution is unchanged, so there is no new behaviour to pin. The property tier instead covers the ceiling derivation (`tests/property/test_observe_step_ceiling_properties.py`). Original: Fill the missing tiers: a `tests/property/` test for provider and mode resolution
       (order preservation, idempotence, strict implies raise-or-exact-match — there is no
       ONNX property test today), a `tests/integration/` test exercising the new fields
       through the factory with a stubbed ORT, and a `tests/smoke/` assertion that the new
@@ -202,7 +224,7 @@ coverage plugin's `fail_under = 90` (`:411`) fails any narrow run without `--no-
 
 **Phase 4 — Correct the narrative and reach the ONNX path**
 
-- [ ] 4.1 `narrative-correction-sweep` over the claim that `config/jetson_production.yaml`
+- [x] 4.1 `narrative-correction-sweep` over the claim that `config/jetson_production.yaml`
       can enable `engine: onnx_trt`. It cannot: `factory/world_model.py:246-253` raises
       when `cfg.model.cfc_hidden_dim <= 0`, the schema default is `0`
       (`world_model.py:205`), and only `config/jetson_dual_stream.yaml:29` sets `64`.
@@ -213,12 +235,12 @@ coverage plugin's `fail_under = 90` (`:411`) fails any narrow run without `--no-
       claim, plus a second one two lines up ("continue to use the PyTorch `DualStreamRSSM`",
       when production builds `RSSM`). Prove the sweep against the original wording before
       ticking.
-- [ ] 4.2 Correct every live surface claiming the Hugging Face repo carries the artifact.
+- [x] 4.2 Correct every live surface claiming the Hugging Face repo carries the artifact.
       Verified against the Hub: `ianshank/mousedroid-dual-stream-rssm` holds only
       `.gitattributes` (1519 B) and `README.md` (877 B). Touch `ADR-008` (migration step 2
       invites `onnx_path: null`), `docs/architecture.md:1119`,
       `docs/planning/NEXT_STEPS.md:344`.
-- [ ] 4.3 `tests/regression/test_f050_aqa.py` + `test_f050_backwards_compat.py` — the
+- [x] 4.3 `tests/regression/test_f050_aqa.py` + `test_f050_backwards_compat.py` — the
       mandated pair, spelled out in full per `regression-pair-scaffold/SKILL.md:152-161`.
       AQA: every new field's `FieldInfo.default` and non-empty `description`, validator
       rejections, the artifact contract (a missing HF filename is a named failure, never a
@@ -226,7 +248,12 @@ coverage plugin's `fail_under = 90` (`:411`) fails any narrow run without `--no-
       defaults unchanged, a typo'd key raises under `extra="forbid"`
       (`_primitives.py:115-133`).
 
-**Phase 5 — Rover baseline (gate for Phases 6-7)**
+**Phase 5 — Rover baseline — NOT BUILT (task 2.1 gate).** The baseline campaign existed to
+decide whether to build I/O binding. Task 2.1 answered that on paper for less than the cost
+of a bench session, which is exactly what 5.6 warns about: three CPU-side spikes are already
+open with no operator committed to closing them. Do not open a fourth. The tasks below stay
+recorded as the campaign that *would* be correct if a measured share ever contradicts the
+derivation.
 
 - [ ] 5.1 Sequenced behind F-008 — hardware readiness preempts in-flight software streams
       (F-024 rule). Run while F-008 is bench-blocked only with operator agreement on bench
@@ -267,7 +294,12 @@ coverage plugin's `fail_under = 90` (`:411`) fails any narrow run without `--no-
       criterion is UNMET until this section is filled**". Three CPU-side spikes, none closed
       on hardware. Do not open a fourth without an operator committed to closing it.
 
-**Phase 6 — Provider options and proof**
+**Phase 6 — Provider options and proof — NOT BUILT (task 2.1 gate).** This is the
+optimization itself: I/O binding, FP16, engine and timing caches, CUDA device options. The
+ceiling does not pay for the surface. Two items here are worth noting as *landed elsewhere*:
+6.6's off-loop warmup landed as task 2.4 (it is a correctness fix, not an optimization — a
+cold lazy build e-stops the rover), and 6.11's FP16 overflow sites are moot while FP16 is
+unselectable.
 
 - [ ] 6.1 Failing tests first, extending the two files that already exist rather than
       creating them: `tests/unit/common/test_onnx_session.py` (already pins every branch of

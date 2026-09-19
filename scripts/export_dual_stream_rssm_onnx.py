@@ -16,9 +16,20 @@ CLI usage::
 
     python scripts/export_dual_stream_rssm_onnx.py \\
         --checkpoint weights/dual_stream_rssm/final.pt \\
-        --config config/jetson_production.yaml \\
+        --config config/jetson_dual_stream.yaml \\
         --output weights/dual_stream_rssm/observe_step.onnx \\
         --opset 17
+
+``--config`` must name an overlay that sets ``model.cfc_hidden_dim > 0``
+(the export is built from ``DualStreamRSSM``, which requires the CfC
+stream). Only ``config/jetson_dual_stream.yaml`` does;
+``config/jetson_production.yaml`` carries no ``model:`` block, so its
+``cfc_hidden_dim`` is the schema default ``0``. The same constraint
+applies to the runtime: ``world_model.engine = "onnx_trt"`` cannot be
+enabled from ``config/jetson_production.yaml`` -- the factory raises
+``ValueError`` at boot. ``config/jetson_dual_stream.yaml`` self-gates
+the CfC stream behind human review ("Only enable (64+) after human
+review of training metrics").
 
 This script also exposes ``build_export_shim``, ``build_example_inputs``,
 and ``run_export`` as library entry points so unit tests can exercise
@@ -31,6 +42,8 @@ from __future__ import annotations
 import argparse
 import inspect
 import logging
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -340,23 +353,53 @@ def run_export(
 # ---------------------------------------------------------------------------
 
 
-def _load_checkpoint(model: DualStreamRSSM, ckpt_path: Path) -> None:
-    """Load model weights from a checkpoint file.
+def _load_checkpoint(
+    model: DualStreamRSSM,
+    ckpt_path: Path,
+    *,
+    expected_sha256: str | None = None,
+) -> None:
+    """Load model weights from a checkpoint file, verifying digest first.
 
     Supports both raw ``state_dict()`` checkpoints (``torch.save(model.state_dict())``)
     and dict-wrapped checkpoints (``torch.save({"model_state_dict": ...})``).
     The exporter never trains — ``map_location='cpu'`` is unconditional.
+
+    ``weights_only=True`` is unconditional. The previous version wrapped it in
+    ``except TypeError`` and silently retried with the legacy (arbitrary
+    pickle) loader — a fail-open fallback whose trigger condition cannot occur
+    here: ``pyproject.toml`` requires ``torch>=2.1`` and the kwarg has existed
+    since 1.13, so the fallback could only ever fire on an unsupported
+    interpreter, where running unverified pickle is the worst response. A real
+    ``TypeError`` now surfaces instead of being swallowed.
+
+    Args:
+        model: Model whose ``state_dict`` is replaced.
+        ckpt_path: ``.pt`` checkpoint to load.
+        expected_sha256: Hex digest the checkpoint must match before it is
+            read. ``None`` skips verification — the published artifact records
+            whichever digest was actually loaded, so an unverified export is
+            visible in the sidecar rather than indistinguishable from a
+            verified one.
+
+    Raises:
+        FileNotFoundError: Checkpoint absent.
+        ValueError: Digest supplied and did not match.
     """
+    from mousedroid.utils.weights_manager import verify_sha256
+
     if not ckpt_path.exists():
         msg = f"checkpoint not found: {ckpt_path}"
         raise FileNotFoundError(msg)
-    # weights_only=True is the supported safe-load mode on torch 2.5+; older
-    # torch raises TypeError and we fall back to the legacy loader.
-    state: object
-    try:
-        state = torch.load(ckpt_path, map_location="cpu", weights_only=True)
-    except TypeError:  # pragma: no cover — older torch
-        state = torch.load(ckpt_path, map_location="cpu")
+    if expected_sha256 is not None and not verify_sha256(
+        ckpt_path, expected_sha256, log_event_prefix="world_model_checkpoint"
+    ):
+        msg = (
+            f"refusing to export from '{ckpt_path}': SHA-256 verification "
+            f"failed against the digest passed via --checkpoint-sha256."
+        )
+        raise ValueError(msg)
+    state: object = torch.load(ckpt_path, map_location="cpu", weights_only=True)
     if isinstance(state, dict) and "model_state_dict" in state:
         payload = cast(dict[str, Tensor], state["model_state_dict"])
     else:
@@ -401,6 +444,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=_DEFAULT_OPSET,
         help=f"ONNX opset version (default {_DEFAULT_OPSET}).",
+    )
+    parser.add_argument(
+        "--checkpoint-sha256",
+        type=str,
+        default=None,
+        help=(
+            "Hex SHA-256 the --checkpoint must match before it is loaded. "
+            "Verified with the same helper the OTA weight path uses; a "
+            "mismatch aborts the export. Omit to export without verifying — "
+            "the metadata sidecar records the checkpoint digest either way, "
+            "so a promotion reviewer can tell the two cases apart."
+        ),
     )
     parser.add_argument(
         "--push-to-hf",
@@ -450,7 +505,7 @@ def _build_model_from_cli(args: argparse.Namespace) -> tuple[DualStreamRSSM, Mod
         raise ValueError(msg)
     model = DualStreamRSSM(cfg)
     if args.checkpoint is not None:
-        _load_checkpoint(model, args.checkpoint)
+        _load_checkpoint(model, args.checkpoint, expected_sha256=args.checkpoint_sha256)
     return model, cfg
 
 
@@ -492,6 +547,97 @@ def _push_to_hf(
     )
 
 
+def _resolve_git_sha() -> str | None:
+    """Return the current commit SHA, or ``None`` when it cannot be resolved.
+
+    Shells out to a fixed ``git rev-parse HEAD`` argv — no shell, no
+    interpolation, nothing operator-supplied. The executable is resolved to an
+    absolute path through :func:`shutil.which` rather than relying on argv[0]
+    PATH lookup, so the invocation carries no partial executable path.
+    Returns ``None`` rather than raising when git is absent or the tree is not
+    a repository: a sidecar with ``git_sha: null`` is honest and still useful,
+    whereas aborting a successful export over provenance metadata is not.
+    """
+    git_binary = shutil.which("git")
+    if git_binary is None:
+        _log.warning("world_model_export_git_sha_unresolved", reason="git_not_on_path")
+        return None
+    try:
+        proc = subprocess.run(
+            [git_binary, "rev-parse", "HEAD"],
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+    except OSError as exc:
+        _log.warning("world_model_export_git_sha_unresolved", error_type=type(exc).__name__)
+        return None
+    if proc.returncode != 0:
+        _log.warning(
+            "world_model_export_git_sha_unresolved",
+            returncode=proc.returncode,
+        )
+        return None
+    return proc.stdout.strip() or None
+
+
+def _resolve_metadata_filename(args: argparse.Namespace) -> str:
+    """Resolve the sidecar filename from config, never from a literal here.
+
+    ``cfg.world_model.onnx_metadata_filename`` owns the name. Without
+    ``--config`` the schema default is read from ``WorldModelConfig`` itself,
+    so the two paths cannot disagree.
+    """
+    from mousedroid.config.schema import WorldModelConfig
+
+    if args.config is not None:
+        from mousedroid.config.loader import load_settings
+
+        return load_settings(args.config).world_model.onnx_metadata_filename
+    return WorldModelConfig.model_validate({}).onnx_metadata_filename
+
+
+def _write_metadata_sidecar(args: argparse.Namespace, cfg: ModelConfig) -> Path:
+    """Write the export-metadata sidecar beside the produced ``.onnx``.
+
+    Args:
+        args: Parsed CLI namespace (``--output``, ``--opset``, ``--checkpoint``,
+            ``--config``).
+        cfg: Model config the graph was exported from.
+
+    Returns:
+        Path of the written sidecar.
+    """
+    from mousedroid.common.hashing import digest_file_sha256
+    from mousedroid.world_model.onnx_export_metadata import (
+        build_export_metadata,
+        collect_tool_versions,
+        write_export_metadata,
+    )
+
+    output_path: Path = args.output
+    checkpoint: Path | None = args.checkpoint
+    metadata = build_export_metadata(
+        cfg=cfg,
+        opset=args.opset,
+        artifact_filename=output_path.name,
+        artifact_sha256=digest_file_sha256(output_path),
+        checkpoint_path=str(checkpoint) if checkpoint is not None else None,
+        checkpoint_sha256=(digest_file_sha256(checkpoint) if checkpoint is not None else None),
+        git_sha=_resolve_git_sha(),
+        tool_versions=collect_tool_versions(),
+    )
+    sidecar_path = output_path.parent / _resolve_metadata_filename(args)
+    write_export_metadata(metadata, sidecar_path)
+    _log.info(
+        "world_model_export_metadata_written",
+        path=str(sidecar_path),
+        artifact_sha256=metadata["artifact"],
+        checkpoint_present=checkpoint is not None,
+    )
+    return sidecar_path
+
+
 def _resolve_hf_repo(args: argparse.Namespace) -> tuple[str, str]:
     """Resolve (repo_id, filename) for HF upload.
 
@@ -523,6 +669,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     model, cfg = _build_model_from_cli(args)
     run_export(model=model, cfg=cfg, output_path=args.output, opset=args.opset)
+    _write_metadata_sidecar(args, cfg)
     if args.push_to_hf:
         repo_id, filename = _resolve_hf_repo(args)
         _push_to_hf(args.output, repo_id=repo_id, filename=filename)

@@ -30,12 +30,17 @@ from mousedroid.world_model.cfc_cell import CfCWrapper
 from mousedroid.world_model.encoder import MultimodalEncoder
 from mousedroid.world_model.latent_utils import kl_divergence, sample_gaussian
 from mousedroid.world_model.observation_packer import pack_observation
+from mousedroid.world_model.observe_step_timing import (
+    ObserveStepLatencySink,
+    ObserveStepTimingMixin,
+    observe_step_latency,
+)
 from mousedroid.world_model.stream_fusion import StreamFusion
 
 _log = get_logger(__name__)
 
 
-class DualStreamRSSM(nn.Module):
+class DualStreamRSSM(ObserveStepTimingMixin, nn.Module):
     """Dual-stream RSSM with GRU (slow dynamics) + CfC (fast dynamics).
 
     Architecture::
@@ -50,7 +55,12 @@ class DualStreamRSSM(nn.Module):
         cfg: Model configuration with all dimension parameters.
     """
 
-    def __init__(self, cfg: ModelConfig) -> None:
+    def __init__(
+        self,
+        cfg: ModelConfig,
+        *,
+        metrics: ObserveStepLatencySink | None = None,
+    ) -> None:
         super().__init__()
         if cfg.cfc_hidden_dim <= 0:
             raise ValueError(
@@ -58,6 +68,11 @@ class DualStreamRSSM(nn.Module):
                 "Use RSSM instead for pure-GRU mode."
             )
         self._cfg = cfg
+        # Keyword-only with a ``None`` default so every existing
+        # ``DualStreamRSSM(cfg.model)`` call site keeps working unchanged. Stored
+        # as a plain attribute (not a submodule) so it never enters
+        # ``state_dict`` and cannot perturb a checkpoint round-trip.
+        self._metrics = metrics
         recurrent_input_dim = cfg.latent_dim + cfg.action_dim
         combined_dim = cfg.hidden_dim + cfg.cfc_hidden_dim
 
@@ -179,8 +194,42 @@ class DualStreamRSSM(nn.Module):
     # Public API (WorldModelProtocol)
     # ------------------------------------------------------------------
 
-    @torch.no_grad()
     def observe_step(
+        self,
+        observation: ObservationProtocol,
+        prev_action: Tensor,
+        h: Tensor,
+        z: Tensor,
+    ) -> tuple[Tensor, Tensor, Tensor, float]:
+        """Process one real observation step, timed when a sink is wired.
+
+        Thin timing wrapper over :meth:`_observe_step_impl` so this PyTorch
+        engine populates the same
+        ``mousedroid_world_model_observe_step_seconds`` histogram the ONNX
+        runtime does. Before this, that family had exactly one writer —
+        :class:`~mousedroid.world_model.dual_stream_rssm_onnx.DualStreamRSSMOnnx`
+        — so a default ``engine="torch"`` deployment emitted no samples at all,
+        the two engines could not be compared, and the
+        ``WorldModelObserveStepLatencyHigh`` alert had nothing to evaluate.
+
+        ``@torch.no_grad()`` stays on the implementation rather than here, so
+        the inference boundary is declared exactly where the tensor work
+        happens (CLAUDE.md invariant 7).
+
+        Args:
+            observation: Sensor bundle implementing ``ObservationProtocol``.
+            prev_action: Previous action, shape ``(1, action_dim)``.
+            h: Previous hidden state.
+            z: Previous latent sample.
+
+        Returns:
+            ``(new_h, new_z, obs_embed, surprise)``.
+        """
+        with observe_step_latency(self._metrics, engine="dual_stream_rssm"):
+            return self._observe_step_impl(observation, prev_action, h, z)
+
+    @torch.no_grad()
+    def _observe_step_impl(
         self,
         observation: ObservationProtocol,
         prev_action: Tensor,

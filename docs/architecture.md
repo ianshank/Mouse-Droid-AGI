@@ -1116,7 +1116,11 @@ CfC loss weight ramps linearly from 0.1→1.0 over 10k steps.
 **Human activation gate:** CfC disabled by default in production (`cfc_hidden_dim=0`).
 Activate via: `MOUSEDROID_MODEL__CFC_HIDDEN_DIM=64 docker compose up -d`
 
-**HuggingFace:** Trained weights at `ianshank/mousedroid-dual-stream-rssm` (experimental).
+**HuggingFace:** `ianshank/mousedroid-dual-stream-rssm` is reserved but **empty** —
+it holds only `.gitattributes` and `README.md`, no weights and no
+`observe_step.onnx`. Nothing can be downloaded from it, so the ONNX world-model
+engine needs a locally exported artifact and an explicit
+`world_model.onnx_path` (see `docs/architecture/ADR-008-world-model-onnx-engine.md`).
 
 ---
 

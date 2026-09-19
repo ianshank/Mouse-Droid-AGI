@@ -80,6 +80,15 @@ OBSERVE_STEP_BATCH_DIM_NAME: Final[str] = "batch"
 ``torch.onnx.export`` ``dynamic_axes={name: {0: BATCH_DIM_NAME}}``."""
 
 
+OBSERVE_STEP_ARTIFACT_SUFFIX: Final[str] = ".onnx"
+"""File extension the exported ``observe_step`` artifact must carry.
+
+Lives here, with the rest of the artifact's contract, so the factory's
+"never substitute a ``.pt`` for an ``.onnx``" guard and the export script's
+sidecar naming read the same constant instead of each spelling the extension.
+"""
+
+
 def required_input_names() -> tuple[str, str, str, str, str, str]:
     """Return the 6 input names always present in the exported graph."""
     return (

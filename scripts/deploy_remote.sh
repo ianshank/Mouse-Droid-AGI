@@ -3,20 +3,52 @@
 # Runs from the local machine (WSL2/Linux/macOS) to deploy code to the Jetson.
 #
 # Usage: bash scripts/deploy_remote.sh [jetson-host] [--full|--code-only|--config-only]
+#                                     [--confirm-dirty]
 #
 # Host resolution order:
 #   1. First positional argument
 #   2. ~/.mousedroid/jetson_host file
 #   3. mDNS/avahi discovery via jetson_discover.sh
+#
+# Rover-local work (F-051): the sync below is `rsync --delete`, so it is fenced
+# by scripts/rover_wip_guard.sh. A dirty target REFUSES the sync. With
+# --confirm-dirty the operator's uncommitted work is first archived off the
+# rover and committed to a rover/wip-<date> branch, and only then synced over.
+# `git clean` is never run, and rsync-delete never runs over unpreserved work.
+#
+# Environment variables (all optional):
+#   MOUSEDROID_REMOTE_USER            SSH user (default: jetson)
+#   MOUSEDROID_REMOTE_SRC             Rsync destination on the rover
+#                                     (default: /opt/mousedroid/src)
+#   MOUSEDROID_CONFIG_DIR             Remote config dir (default: /etc/mousedroid)
+#   MOUSEDROID_DEPLOY_CONFIRM_DIRTY   1/true = same as --confirm-dirty
+#   MOUSEDROID_DEPLOY_ARCHIVE_DIR     Where rover WIP archives land on THIS
+#                                     machine (default: ~/.mousedroid/rover-wip)
+#   MOUSEDROID_ROVER_WIP_BRANCH       Forwarded to the guard (branch override)
+#   MOUSEDROID_ROVER_WIP_DATE         Forwarded to the guard (date stamp)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "${SCRIPT_DIR}")"
 REMOTE_USER="${MOUSEDROID_REMOTE_USER:-jetson}"
-REMOTE_SRC="/opt/mousedroid/src"
-REMOTE_CONFIG="/etc/mousedroid"
+# Env-overridable, same idiom as docker_deploy.sh's MOUSEDROID_INSTALL_DIR /
+# MOUSEDROID_CONFIG_DIR. Defaults are unchanged; making them knobs is what lets
+# the WIP guard below be exercised against a throwaway checkout in
+# tests/unit/scripts/test_deploy_remote_guard.py instead of only on a rover.
+REMOTE_SRC="${MOUSEDROID_REMOTE_SRC:-/opt/mousedroid/src}"
+REMOTE_CONFIG="${MOUSEDROID_CONFIG_DIR:-/etc/mousedroid}"
 DEPLOY_MODE="code-only"
 HOST=""
+WIP_GUARD="${SCRIPT_DIR}/rover_wip_guard.sh"
+ARCHIVE_DIR="${MOUSEDROID_DEPLOY_ARCHIVE_DIR:-${HOME}/.mousedroid/rover-wip}"
+
+# Guard exit codes — mirrored from rover_wip_guard.sh's documented contract.
+GUARD_EXIT_DIRTY=3
+
+case "${MOUSEDROID_DEPLOY_CONFIRM_DIRTY:-}" in
+    1|true|TRUE|yes|YES) CONFIRM_DIRTY=true ;;
+    *)                   CONFIRM_DIRTY=false ;;
+esac
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -50,6 +82,30 @@ remote_sudo() {
         "${REMOTE_USER}@${HOST}" sudo -- "$@"
 }
 
+# Run scripts/rover_wip_guard.sh ON THE ROVER by piping it over ssh.
+#
+# Piped rather than invoked from ${REMOTE_SRC}: the guard has to run BEFORE the
+# sync that would put it there, so it cannot be assumed present, and a stale
+# copy already on the rover is exactly the wrong thing to trust with this
+# decision. The local copy is the one that ships.
+#
+# The remote arg list is %q-quoted because ssh flattens its arguments into one
+# string that the remote shell re-parses; passing "$@" raw would split on any
+# space in a path. The guard's stdout is left alone (it carries the archive in
+# --archive - mode); its messages are on stderr.
+remote_guard() {
+    local env_prefix=""
+    if [[ -n "${MOUSEDROID_ROVER_WIP_BRANCH:-}" ]]; then
+        env_prefix+="MOUSEDROID_ROVER_WIP_BRANCH=$(printf '%q' "${MOUSEDROID_ROVER_WIP_BRANCH}") "
+    fi
+    if [[ -n "${MOUSEDROID_ROVER_WIP_DATE:-}" ]]; then
+        env_prefix+="MOUSEDROID_ROVER_WIP_DATE=$(printf '%q' "${MOUSEDROID_ROVER_WIP_DATE}") "
+    fi
+    ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
+        "${REMOTE_USER}@${HOST}" \
+        "${env_prefix}bash -s -- $(printf '%q ' "$@")" < "${WIP_GUARD}"
+}
+
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
@@ -69,13 +125,23 @@ parse_args() {
                 DEPLOY_MODE="config-only"
                 shift
                 ;;
+            --confirm-dirty)
+                CONFIRM_DIRTY=true
+                shift
+                ;;
             --help|-h)
                 echo "Usage: bash scripts/deploy_remote.sh [jetson-host] [--full|--code-only|--config-only]"
+                echo "                                    [--confirm-dirty]"
                 echo ""
                 echo "Modes:"
                 echo "  --full         Full setup: system + hardware + rsync + deploy + restart"
                 echo "  --code-only    (default) Rsync code + pip reinstall + restart service"
                 echo "  --config-only  Update config files + restart service"
+                echo ""
+                echo "Rover-local work:"
+                echo "  A dirty sync target is REFUSED (rsync --delete would destroy it)."
+                echo "  --confirm-dirty  Archive the rover's uncommitted work off-device and"
+                echo "                   commit it to rover/wip-<date>, then sync."
                 exit 0
                 ;;
             -*)
@@ -142,8 +208,73 @@ check_connectivity() {
 # Rsync project code
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Rover WIP preservation (F-051 / campaign step B1) — runs BEFORE any rsync
+# ---------------------------------------------------------------------------
+# Two artifacts, not one. The rover/wip-<date> branch keeps the operator
+# working; the off-device archive is what survives the rover. A microSD that
+# dies takes the branch with it, so a branch alone is not preservation.
+#
+# Fail-closed everywhere: an unreachable guard, an unreadable target, an
+# unverifiable archive and an unconfirmed dirty target all stop the run before
+# rsync --delete can touch anything.
+preserve_remote_wip() {
+    log_step "Checking the sync target for uncommitted rover-local work"
+    if [[ ! -f "${WIP_GUARD}" ]]; then
+        die "WIP guard missing: ${WIP_GUARD} — refusing to rsync --delete unguarded"
+    fi
+
+    local guard_status=0
+    remote_guard inspect "${REMOTE_SRC}" || guard_status=$?
+
+    if [[ "${guard_status}" -eq 0 ]]; then
+        log_step "Sync target is clean — proceeding"
+        return 0
+    fi
+
+    if [[ "${guard_status}" -ne "${GUARD_EXIT_DIRTY}" ]]; then
+        die "WIP guard could not clear the sync target (exit ${guard_status}). \
+Refusing to rsync --delete. Fix the reported cause on the rover \
+(ownership drift is the usual one) and re-run; do not bypass this."
+    fi
+
+    if [[ "${CONFIRM_DIRTY}" != true ]]; then
+        die "REFUSING: ${REMOTE_USER}@${HOST}:${REMOTE_SRC} has uncommitted work \
+and rsync --delete would destroy it. Re-run with --confirm-dirty (or \
+MOUSEDROID_DEPLOY_CONFIRM_DIRTY=1) to archive it off the rover and commit it \
+to a rover/wip-<date> branch first."
+    fi
+
+    mkdir -p "${ARCHIVE_DIR}"
+    local archive
+    archive="${ARCHIVE_DIR}/rover-wip-$(date -u '+%Y%m%dT%H%M%SZ').tar.gz"
+    log_step "Archiving rover-local work off-device -> ${archive}"
+    if ! remote_guard preserve "${REMOTE_SRC}" --archive - > "${archive}"; then
+        rm -f "${archive}"
+        die "Preserving rover-local work FAILED — nothing has been synced."
+    fi
+
+    # Verify the transfer landed intact before anything destructive runs. A
+    # truncated stream is a plausible ssh failure mode and a truncated archive
+    # is not a backup.
+    if [[ ! -s "${archive}" ]] || ! tar -tzf "${archive}" >/dev/null 2>&1; then
+        die "Rover WIP archive is empty or corrupt: ${archive} — refusing to sync."
+    fi
+    local member
+    for member in ./status.txt ./head.txt ./diff-ignore-whitespace.patch ./untracked.tar; do
+        if ! tar -tzf "${archive}" | grep -qx -- "${member}"; then
+            die "Rover WIP archive is missing ${member}: ${archive} — refusing to sync."
+        fi
+    done
+    log_step "Rover WIP archived and verified: ${archive}"
+}
+
 rsync_code() {
     log_section "Syncing project code"
+    # MUST stay the first statement here: both --full and --code-only reach the
+    # rsync below through this function.
+    preserve_remote_wip
+
     log_step "Ensuring remote directory exists"
     remote_sudo bash -c "mkdir -p ${REMOTE_SRC} && chown -R ${REMOTE_USER}:${REMOTE_USER} ${REMOTE_SRC}"
 
@@ -280,6 +411,7 @@ print_summary() {
     echo "  Source:      ${PROJECT_DIR}"
     echo "  Remote src:  ${REMOTE_SRC}"
     echo "  Remote cfg:  ${REMOTE_CONFIG}"
+    echo "  Dirty-sync:  confirm=${CONFIRM_DIRTY} (archives -> ${ARCHIVE_DIR})"
     echo "  Started:     ${DEPLOY_START}"
     echo "  Finished:    $(ts)"
     echo ""

@@ -1008,3 +1008,48 @@ landing regardless of whether the latency work ever does.
     Round 2's pin 48 and pin 6 had this right. What *is* true is the narrower point that the
     registry-side field name carries no suffix, which is why pin 6 requires the registry name
     be declared without one.
+
+## Implementation record — the task 2.1 gate fired
+
+Four review rounds argued the consumer case was unproven. Implementation computed it, and the
+number settles it. `scripts/analyze_observe_step_ceiling.py` derives the bound from `MCTSConfig`
+and `LoopConfig` with no literals and reproduces `scripts/spike_step_distillation.py:59-60`'s two
+published constants exactly (`"500-650"` imagine_step calls, `"~40%"` rollout share) as its
+correctness anchor.
+
+96. **The ceiling is 1.0016x-1.0039x.** `plan()` issues 259-628 `imagine_step` calls at
+    `n_simulations_base=50`; `observe_step` is one call per tick. At equal per-call cost that is
+    0.159%-0.385% of the tick's RSSM work, so Amdahl caps end-to-end gain at 1.0016x-1.0039x
+    *at any primitive speedup*. To clear 1.25x — the **low** end of the sibling rollout leg's own
+    ceiling, and the bar the ratified rubric at
+    `docs/analysis/alayaworld-distillation-spike.md:65-75` used to return DEFER — `observe_step`
+    would have to occupy at least **20% of tick time**. That is 52x-126x the structural reference
+    point. The rubric returns DEFER again, for the same reason and by a wider margin.
+97. **The conclusion is conditional and the analyzer says so.** No measured `observe_step` share
+    exists in this repository; `reports/` and `smoke-reports/` still carry zero `tick_phase` or
+    `observe_step` values, re-checked after Phase 3 landed. The analyzer exits refusing to
+    conclude unless `--observe-share` is supplied, and records seven `unknown_inputs`. What
+    decides the gate is not the exact share but the *distance* to the required one.
+98. **Two review findings turned out to be load-bearing bugs, found by the tests, not the review.**
+    (a) Wiring `MetricsRegistry` onto an `nn.Module` broke `copy.deepcopy(self._base_rssm)` at
+    `learning/on_device/rssm_refiner.py:241` with `TypeError: cannot pickle '_thread.lock'
+    object` — caught by `tests/integration/test_on_device_sim_soak.py`. Fixed with
+    `ObserveStepTimingMixin`, whose state hooks drop the sink on copy; that is also the correct
+    semantics, since an off-loop refinement candidate must not write to the production histogram.
+    (b) `tests/_script_loader.py` never registered the module in `sys.modules` before
+    `exec_module`, so any script declaring a `@dataclass` with a bare-identifier annotation under
+    `from __future__ import annotations` died inside `dataclasses._process_class`. Both were
+    latent before this change and neither appears in rounds 1-4.
+99. **What the gate does *not* close.** Phase 3's instrumentation lands anyway: the
+    `mousedroid_world_model_observe_step_seconds` family had **no** production writer, so
+    `WorldModelObserveStepLatencyHigh` (`config/prometheus/alerts.yml:388-421`) could never fire.
+    That is an observability defect independent of any speedup, and fixing it is what would turn
+    pin 97's derived number into a measured one. Phases 7 and 8 — artifact integrity and delivery
+    hardening — were justified in the proposal independently of the optimization and land on that
+    basis, not on this one.
+100. **Task 6.6 was mis-filed and is now task 2.4.** Off-loop warmup reads as part of the
+     optimization but is a correctness fix: `observe_step` warms lazily, `_update_world_model` is
+     synchronous, and `asyncio.wait_for` cannot preempt a synchronous call, so a cold engine build
+     on the first tick e-stops the rover rather than merely being slow. It landed with Phase 2,
+     before the gate closed, and stays landed after it — the hazard exists for any future engine
+     with a session to build, optimized or not.

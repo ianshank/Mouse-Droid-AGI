@@ -599,6 +599,7 @@ jobs:
               run: |
                   pytest tests/unit/world_model \
                          tests/unit/training/test_export_dual_stream_rssm_onnx.py \
+                         tests/unit/factory/test_factory_world_model_engine.py \
                     -v --tb=short \
                     -m "not slow" \
                     --no-cov \

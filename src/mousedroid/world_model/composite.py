@@ -19,7 +19,9 @@ caller has to construct them in parallel.
 
 The class conforms to :class:`WorldModelProtocol` and (when the
 imagine engine implements it) :class:`SafetyTraceProtocol` so the
-safety monitor + orchestrator can keep their existing typed seams.
+orchestrator can keep its existing typed seam. ``SafetyTraceProtocol``
+conformance is structural only -- ``get_safety_trace`` has no
+production caller (:mod:`mousedroid.safety.monitor` never calls it).
 """
 
 from __future__ import annotations
@@ -65,8 +67,10 @@ class CompositeWorldModel:
     Safety-trace delegation:
         When ``imagine_engine`` implements :class:`SafetyTraceProtocol`,
         the composite's :meth:`get_safety_trace` forwards. This keeps
-        the safety monitor working with ``engine="onnx_trt"`` without
-        special-casing the composite type.
+        the protocol satisfied under ``engine="onnx_trt"`` without
+        special-casing the composite type. It wires no live consumer:
+        ``get_safety_trace`` has no production caller today (see
+        :meth:`get_safety_trace`).
     """
 
     def __init__(
@@ -131,8 +135,13 @@ class CompositeWorldModel:
         ``DualStreamRSSM`` (the typical imagine engine) implements
         :class:`SafetyTraceProtocol`; ``DualStreamRSSMOnnx`` does not
         (the ONNX export doesn't carry the get_safety_trace head).
-        Delegating to the PyTorch engine keeps the safety monitor wired
-        whichever engine combination the operator picks.
+        Delegating to the PyTorch engine keeps the protocol satisfied
+        whichever engine combination the operator picks. Note this
+        method currently has **no production caller**:
+        :mod:`mousedroid.safety.monitor` never invokes it, and the only
+        callers in the tree are tests. It is kept for
+        :class:`SafetyTraceProtocol` conformance and future CfC-trace
+        consumers, not because anything is wired through it today.
 
         Raises:
             AttributeError: If the imagine engine doesn't implement

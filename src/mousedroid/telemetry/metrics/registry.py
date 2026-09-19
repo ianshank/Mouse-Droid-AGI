@@ -219,6 +219,13 @@ def generate_metrics_sample() -> str:
     # representative of the Orin Nano <10 ms target with TensorRT EP; lands
     # in the (0.005, 0.01] bucket of the default schema configuration.
     registry.observe_world_model_observe_step_seconds(0.008)
+    # Artifact-integrity refusals — seed one series per artifact kind so
+    # promtool / Grafana / alert evaluation see the family from the first
+    # scrape. Required, not optional: a rule or panel added against a family
+    # this helper never renders fails test_prometheus_alerts_yml.py /
+    # test_grafana_dashboard_json.py rather than the rule's own review.
+    registry.inc_model_artifact_sha256_mismatch("world_model_onnx")
+    registry.inc_model_artifact_sha256_mismatch("bdi_weights")
 
     # Tier C1 — exercise the cloud weight-update OTA metric families so
     # promtool / Grafana / alert evaluation all see non-empty series from

@@ -26,14 +26,28 @@ class WorldModelConfig(StrictBaseModel):
     Drives :func:`mousedroid.factory.build_world_model` dispatch. The
     default (``engine="torch"``) preserves byte-identical behavior with
     pre-B2 deployments: existing ``config/*.yaml`` files without a
-    ``world_model:`` block load unchanged and continue to use the
-    PyTorch :class:`~mousedroid.world_model.dual_stream_rssm.DualStreamRSSM`.
+    ``world_model:`` block load unchanged. Those overlays build the plain
+    :class:`~mousedroid.world_model.rssm.RSSM`, **not**
+    :class:`~mousedroid.world_model.dual_stream_rssm.DualStreamRSSM` --
+    ``ModelConfig.cfc_hidden_dim`` defaults to ``0``, so
+    ``build_world_model`` falls through past the dual-stream branch.
 
-    Flip ``engine="onnx_trt"`` in ``config/jetson_production.yaml`` to
-    serve ``observe_step`` from an exported ``.onnx`` via
-    ``onnxruntime`` + TensorRT execution provider. ``imagine_step`` (MCTS
-    rollouts) always runs on the PyTorch model regardless of engine; the
-    factory wires both paths.
+    ``engine="onnx_trt"`` serves ``observe_step`` from an exported
+    ``.onnx`` via ``onnxruntime`` + TensorRT execution provider, but it
+    **requires** ``model.cfc_hidden_dim > 0``: the export is built from
+    ``DualStreamRSSM``, and the factory raises ``ValueError`` at boot
+    otherwise. It therefore cannot be enabled from
+    ``config/jetson_production.yaml``, which carries no ``model:`` block.
+    Only ``config/jetson_dual_stream.yaml`` sets ``cfc_hidden_dim: 64``,
+    and that overlay self-gates it behind human review of training
+    metrics ("Only enable (64+) after human review of training
+    metrics"). ``imagine_step`` (MCTS rollouts) always runs on the
+    PyTorch model regardless of engine; the factory wires both paths.
+
+    No ``.onnx`` artifact is published yet: the ``onnx_repo_id`` default
+    holds only ``.gitattributes`` and ``README.md``, so the Hub fallback
+    resolves nothing and ``onnx_path`` must point at a locally exported
+    file (see ``scripts/export_dual_stream_rssm_onnx.py``).
     """
 
     engine: Literal["torch", "onnx_trt"] = Field(
@@ -78,6 +92,58 @@ class WorldModelConfig(StrictBaseModel):
         1,
         ge=0,
         description="Dummy inferences run during ONNX session warmup.",
+    )
+    onnx_revision: str = Field(
+        "main",
+        min_length=1,
+        description=(
+            "HuggingFace Hub revision (branch, tag, or commit SHA) the "
+            "factory pins when fetching the .onnx artifact and its SHA-256 "
+            "manifest. Pinned so two rovers resolving the same config cannot "
+            "silently load two different graphs after an upstream push. "
+            "Default 'main' reproduces the pre-pin resolution exactly "
+            "(hf_hub_download's own default), so existing YAML keeps its "
+            "behaviour; operators pin a 40-char commit SHA for a reviewed "
+            "promotion."
+        ),
+    )
+    onnx_sha256_manifest_filename: str = Field(
+        "sha256.txt",
+        min_length=1,
+        description=(
+            "Filename inside the HF repo (and, once fetched, inside "
+            "onnx_cache_dir) carrying the expected hex-encoded SHA-256 digest "
+            "for the .onnx artifact. Accepts either a bare digest or "
+            "sha256sum's '<digest>  <filename>' lines. SAFETY-CRITICAL: the "
+            "artifact is refused when the local SHA does not match this "
+            "manifest. Mirrors "
+            "CloudWeightUpdateConfig.sha256_manifest_filename."
+        ),
+    )
+    onnx_require_sha256_manifest: bool = Field(
+        False,
+        description=(
+            "Fail closed when no SHA-256 manifest can be resolved for the "
+            ".onnx artifact. Default False preserves today's behaviour: an "
+            "unverifiable artifact is loaded after a "
+            "'world_model_onnx_manifest_unavailable' warning, because the "
+            "published repo carries no manifest yet. A digest that IS "
+            "resolvable is always enforced regardless of this flag -- this "
+            "switch only governs the absent-manifest case. Set True on a "
+            "rover once the artifact and its manifest are both published."
+        ),
+    )
+    onnx_metadata_filename: str = Field(
+        "observe_step.metadata.json",
+        min_length=1,
+        description=(
+            "Filename of the export-metadata sidecar written beside the "
+            ".onnx artifact (checkpoint digest, config digest, git SHA, "
+            "opset, graph input/output names, shapes, dtypes, tool "
+            "versions). Written by "
+            "scripts/export_dual_stream_rssm_onnx.py; read by operators and "
+            "promotion records to answer 'which checkpoint is this graph?'."
+        ),
     )
 
 

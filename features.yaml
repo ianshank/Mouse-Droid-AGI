@@ -1417,3 +1417,68 @@ features:
       No CHARTER carve-out in this slice. Do not enable on Jetson.
 
 
+  - id: "F-050"
+    epic: "Jetson deployment"
+    name: "World-model observe-step instrumentation + ONNX provider proof"
+    description: >-
+      Give the observe-step histogram a production writer by threading a
+      MetricsRegistry through build_world_model to every call site, emit it from
+      both PyTorch engines (RSSM and DualStreamRSSM) so the engines are
+      comparable, and add copy-span metrics so the family sums to wall-clock.
+      Observe the active ONNX execution provider after session construction
+      instead of predicting it, carry provider options through provider
+      resolution, and validate the graph's input set against the loading config
+      at warmup. Correct the live surfaces that tell operators to flip
+      engine='onnx_trt' in an overlay where it raises.
+    category: "infrastructure"
+    priority: "high"
+    status: "in_progress"
+    tier: "fast"
+    verification:
+      - "build_world_model accepts metrics= and threads it to the ONNX runtime"
+      - "Every build_world_model call site passes or defaults the registry"
+      - "Observed providers come from session.get_providers(), not the pre-build intersection"
+      - "resolve_providers carries (name, options) pairs without losing the primary"
+      - "Graph input set is compared against all_input_names_for_cfg at warmup"
+      - "No live surface tells operators to enable onnx_trt from jetson_production.yaml"
+      - "Existing config/*.yaml load unchanged; no new world_model: YAML key"
+    validation_command: "bash scripts/validations/F-050.sh"
+    implemented_in: null
+    depends_on: ["F-002"]
+    notes: >-
+      Preconditions recorded in openspec/changes/mouse-droid-jetson-onnx-delivery:
+      the production world model loads no trained weights and jetson_production.yaml
+      builds plain RSSM (cfc_hidden_dim 0), so latency A/B and parity gates are
+      blocked until a trained DualStream checkpoint exists. Optimization work
+      (I/O binding, FP16) is gated on the consumer-ceiling calculation in
+      scripts/analyze_observe_step_ceiling.py and the three-part rubric in
+      docs/analysis/alayaworld-distillation-spike.md. CUDA Graph is out of scope.
+
+  - id: "F-051"
+    epic: "Jetson deployment"
+    name: "PC-to-rover delivery hardening + offline rollback drill"
+    description: >-
+      Harden the existing PC-side delivery path rather than adding a sixteenth
+      deploy script: refuse a dirty target and preserve rover-local work before
+      any destructive sync, make the promotion health check prove telemetry,
+      provider and digest instead of warning, persist the TensorRT cache in a
+      named volume outside the promotion boundary, and pin the GitHub trust
+      boundary that is already satisfied so it stays that way.
+    category: "infrastructure"
+    priority: "medium"
+    status: "in_progress"
+    tier: "fast"
+    verification:
+      - "deploy_remote.sh refuses a dirty target and preserves work before rsync --delete"
+      - "Promotion health check fails on dead telemetry, wrong provider or digest mismatch"
+      - "TensorRT cache persists across container recreation via a named volume"
+      - "All workflows keep contents:read, no secrets.* and no pull_request_target"
+      - "Rollback restores the prior image tag and commit without network access"
+    validation_command: "bash scripts/validations/F-051.sh"
+    implemented_in: null
+    depends_on: ["F-008", "F-050"]
+    notes: >-
+      Sequenced behind F-008 per the F-024 rule that hardware readiness preempts
+      in-flight software streams; the on-rover promotion and rollback drill are
+      operator steps. Evidence closes out as a declared local-only chain because
+      reports/endurance is gitignored by policy.
