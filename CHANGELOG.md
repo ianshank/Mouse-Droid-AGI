@@ -8,6 +8,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Security — the TensorRT engine cache no longer unpickles from a directory anyone can write
+
+`efficiency/tensorrt.py::load_compiled` falls back to `torch.load(..., weights_only=False)` when a
+cached engine is not TorchScript — which is the *normal* path for a torch2trt engine, not an error
+path. That is arbitrary pickle deserialization, i.e. code execution on load, and the comment
+guarding it asserted the cache directory "should have restricted permissions (0700)". Nothing
+enforced that: `_save_compiled`'s `mkdir` passed no `mode=`, so the directory landed at the umask
+default (`0o755` on a stock host); there was no `chmod` anywhere in `src/`; there was no validator
+on `JetsonConfig.tensorrt_cache_dir`; and `docker-compose.jetson.yml` bind-mounts the default
+location from the host, so it outlives the image.
+
+The directory is now created `0o700` with an explicit `chmod` — `mkdir`'s `mode` is masked by the
+umask, so mode alone would have left the same false claim in a new place — and verified private
+before any pickle load. A cache that fails the check is treated as a **miss and rebuilt**, never
+raised on: a cache is an optimization, so declining to trust an entry must mean rebuild it. Raising
+would have dropped every existing deployment to eager PyTorch through
+`OptimizedInference._ensure_compiled`'s `except Exception`, logged once at warning level — a silent
+performance cliff. The rebuild also self-heals the permissions. A direct `load_compiled` call on an
+untrusted directory raises the named `UntrustedEngineCacheError` rather than executing the pickle.
+
+The permission mode is deliberately **not configurable**, following `EmergencyLatchConfig`'s absent
+fail-open knob: a knob would only be a way to configure the fail-closed path back open.
+
+Rated **latent rather than live**, and the rating is recorded in the tests: nothing in `src/`
+constructs `OptimizedInference` (the only caller of `compile_model`) or calls
+`build_tensorrt_compiler`, and `vulture` already reports both as unused. Two regression pins assert
+that, so the day someone wires the seam the rating is revisited deliberately.
+
+### Fixed — a stale TensorRT engine could be loaded as current after a runtime upgrade
+
+`_model_fingerprint` hashed only the model: class name, architecture string, input shapes,
+precision, parameter count. Nothing about the runtime that produced the engine. `compile_model`
+treats a matching `engine_<fingerprint>.pth` as a cache hit, so an engine built under one TensorRT,
+CUDA or driver survived a base-image bump, a JetPack upgrade or a GPU swap and was loaded as
+current — producing wrong numbers rather than a crash.
+
+The key now includes torch version, `torch.version.cuda`, TensorRT version, torch2trt version and
+GPU compute capability. Components that cannot be determined are recorded as `"unavailable"` rather
+than omitted, because omitting one collides the key of a host that cannot report it with one that
+can. This invalidates every previously cached engine by design: old keys never match, so a stale
+engine is ignored rather than mis-loaded, at the cost of one recompile per model after an upgrade.
+
+### Changed — `jetson.tensorrt_enabled` now documents that it is inert
+
+Four shipped configs set `tensorrt_enabled: true` while nothing constructs a compiler, so an
+operator reading them concluded TensorRT acceleration was on while models ran in eager PyTorch.
+Corrected as a field description rather than a default flip — the flag expresses the right intent
+for the day the seam is wired.
+
 ### Safety — an emergency stop now survives a restart, and only a human clears it
 
 `MouseDroidSafetyMonitor.evaluate` opened `is_emergency = False` and recomputed it

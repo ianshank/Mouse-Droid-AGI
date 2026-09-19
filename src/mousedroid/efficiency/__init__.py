@@ -6,6 +6,8 @@ from mousedroid.efficiency.tensorrt import (
     JetsonTensorRTCompiler,
     MockTensorRTCompiler,
     TensorRTCompilerProtocol,
+    UntrustedEngineCacheError,
+    cache_dir_is_private,
 )
 
 __all__ = [
@@ -14,4 +16,6 @@ __all__ = [
     "MockTensorRTCompiler",
     "PowerProfiler",
     "TensorRTCompilerProtocol",
+    "UntrustedEngineCacheError",
+    "cache_dir_is_private",
 ]
