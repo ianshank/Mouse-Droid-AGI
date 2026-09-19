@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Final
 
 from mousedroid.config.schema import ModelConfig
-from mousedroid.constants import N_SENSOR_MODALITIES_WITH_IMU
+from mousedroid.constants import JSON_SIDECAR_INDENT, N_SENSOR_MODALITIES_WITH_IMU
 from mousedroid.world_model.onnx_io import (
     OBSERVE_STEP_BATCH_DIM_NAME,
     OBSERVE_STEP_INPUT_AUDIO,
@@ -283,7 +283,7 @@ def write_export_metadata(metadata: Mapping[str, object], path: Path) -> None:
         path: Destination file; parent directories are created.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(dict(metadata), indent=2, sort_keys=True)
+    payload = json.dumps(dict(metadata), indent=JSON_SIDECAR_INDENT, sort_keys=True)
     path.write_text(payload + "\n", encoding="utf-8")
 
 
