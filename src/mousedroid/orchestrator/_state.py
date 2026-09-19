@@ -70,6 +70,7 @@ if TYPE_CHECKING:
     from mousedroid.orchestrator.mission_dispatcher import MissionDispatcherProtocol
     from mousedroid.orchestrator.mission_lifecycle import MissionLifecycle
     from mousedroid.safety.context import SafetyContext
+    from mousedroid.safety.latch import EmergencyLatchProtocol
     from mousedroid.safety.projector_protocol import SafetyActionProjectorProtocol
     from mousedroid.safety.protocol import SafetyMonitorProtocol
     from mousedroid.sensing.manager import SensorManager
@@ -145,6 +146,7 @@ class _OrchestratorState:
     _memory_export_every_n: int
     _clock: ClockProtocol
     _failure_recorder: FailureRecorder
+    _emergency_latch: EmergencyLatchProtocol | None
     _liveness_tracker: Any | None
     _mock_telemetry_source: Any | None
     _metrics: MetricsRegistry | None

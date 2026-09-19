@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
     from mousedroid.config.schema import SafetyConfig
+    from mousedroid.safety.latch import EmergencyLatchProtocol
     from mousedroid.sensing.human_presence import HumanPresenceProtocol
     from mousedroid.sensing.protocol import ObservationProtocol
 
@@ -63,8 +64,13 @@ class MouseDroidSafetyMonitor:
         cfg: SafetyConfig,
         *,
         human_presence: HumanPresenceProtocol | None = None,
+        latch: EmergencyLatchProtocol | None = None,
     ) -> None:
         self._cfg = cfg
+        # ``None`` keeps the pre-latch path exactly as it was: no latch
+        # object, no file, and ``_apply_emergency_latch`` returns on its
+        # first line.
+        self._latch = latch
         if human_presence is None:
             # Local import: keeps ``mousedroid.safety`` from growing a runtime
             # edge into ``sensing`` (whose package __init__ pulls in the full
@@ -135,6 +141,30 @@ class MouseDroidSafetyMonitor:
                 "factory.safety.build_human_presence_detector"
             ),
         )
+
+    def _apply_emergency_latch(
+        self, live_emergency: bool, causes: tuple[str, ...]
+    ) -> tuple[bool, bool]:
+        """Merge the live verdict with the latch (peer review D-5).
+
+        A tuple return rather than an inline ``or`` so :meth:`evaluate`
+        gains no branch: it is measured at 13 against the ``ruff C901``
+        ceiling of 15, and every branch here would count against it.
+
+        Returns:
+            ``(is_emergency, emergency_latched)``. When no latch is wired
+            the first element is ``live_emergency`` unchanged and the
+            second is ``False``, which is byte-identical to pre-latch
+            behaviour.
+        """
+        if self._latch is None:
+            return live_emergency, False
+        if live_emergency and self._latch.trip(
+            causes[0] if causes else "unspecified", causes=causes
+        ):
+            _log.error("estop_latch_tripped", causes=list(causes))
+        latched = self._latch.is_latched
+        return live_emergency or latched, latched
 
     # -- SafetyMonitorProtocol ---------------------------------------------
 
@@ -331,6 +361,7 @@ class MouseDroidSafetyMonitor:
             A frozen :class:`SafetyContext` with all fields populated.
         """
         is_emergency = False
+        causes: list[str] = []
 
         # -- Forward clearance ---------------------------------------------
         forward_clearance_ok = observation.distance_m >= self._cfg.min_forward_clearance_m
@@ -341,6 +372,7 @@ class MouseDroidSafetyMonitor:
                 threshold_m=self._cfg.min_forward_clearance_m,
             )
             is_emergency = True
+            causes.append("forward_clearance_violation")
 
         # -- Battery voltage -----------------------------------------------
         battery_voltage: float = float(observation.motor_state[MOTOR_STATE_BATTERY_INDEX])
@@ -383,6 +415,7 @@ class MouseDroidSafetyMonitor:
                     threshold=battery_critical_v,
                 )
                 is_emergency = True
+                causes.append("battery_critical")
             elif battery_warn_v > 0 and battery_voltage < battery_warn_v:
                 _log.warning(
                     "battery_low",
@@ -406,6 +439,7 @@ class MouseDroidSafetyMonitor:
                         threshold_s=self._cfg.sensor_stale_s,
                     )
                     is_emergency = True
+                    causes.append("sensor_stale")
 
         # -- Valid sensor count (uses original mask; staleness is an additional emergency trigger)
         valid_sensor_count = int(np.sum(observation.valid_mask > 0.0))
@@ -416,10 +450,12 @@ class MouseDroidSafetyMonitor:
                 required=self._cfg.min_valid_sensors,
             )
             is_emergency = True
+            causes.append("insufficient_valid_sensors")
 
         # -- Loop timing ---------------------------------------------------
         if self._evaluate_loop_timing(loop_time_ms, tick_index):
             is_emergency = True
+            causes.append("loop_overrun")
 
         # -- LiDAR 360-degree clearance ------------------------------------
         lidar_min_dist_m, lidar_clearance_ok, lidar_emergency = self._evaluate_lidar_clearance(
@@ -428,6 +464,7 @@ class MouseDroidSafetyMonitor:
         )
         if lidar_emergency:
             is_emergency = True
+            causes.append("lidar_emergency")
 
         # -- Human detection (from observation if available) ---------------
         presence = self._human_presence.sample(observation)
@@ -436,6 +473,9 @@ class MouseDroidSafetyMonitor:
 
         if human_detected and human_dist_m < self._cfg.min_forward_clearance_m:
             is_emergency = True
+            causes.append("human_proximity")
+
+        is_emergency, emergency_latched = self._apply_emergency_latch(is_emergency, tuple(causes))
 
         ctx = SafetyContext(
             ultrasonic_dist_m=observation.distance_m,
@@ -444,6 +484,7 @@ class MouseDroidSafetyMonitor:
             valid_sensor_count=valid_sensor_count,
             loop_time_ms=loop_time_ms,
             is_emergency=is_emergency,
+            emergency_latched=emergency_latched,
             human_detected=human_detected,
             human_dist_m=human_dist_m,
             lidar_min_dist_m=lidar_min_dist_m,

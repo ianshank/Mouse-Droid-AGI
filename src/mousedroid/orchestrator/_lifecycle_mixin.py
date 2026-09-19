@@ -29,6 +29,10 @@ class _LifecycleMixin(_OrchestratorState):
         # exposes this, but that is an on-demand API response, not a boot
         # artefact — this is the one boot-time touch-point.
         _log.info("mock_hardware_resolved", value=self._cfg.mock_hardware)
+        # Before anything can move: orchestrator/CLAUDE.md notes the firmware
+        # may still hold a velocity from a previous unclean stop, so a latch
+        # must be known before connect() (D-5).
+        await self._load_emergency_latch()
         if self._hailo_runtime is not None:
             await self._hailo_runtime.start()
         await self._esp32.connect()
@@ -405,6 +409,49 @@ class _LifecycleMixin(_OrchestratorState):
             sleep_time = max(0.0, control_period - elapsed)
             if sleep_time > 0:
                 await self._clock.sleep(sleep_time)
+
+    async def _load_emergency_latch(self) -> None:
+        """Read a latched emergency stop left by a previous run (D-5).
+
+        A latched rover **starts** rather than refusing to. Exiting
+        non-zero would meet ``Restart=on-failure`` / ``RestartSec=5`` on a
+        unit with no ``StartLimitBurst`` and crash-loop forever; a
+        crash-looping process never reaches ``_halt_actuators`` and so
+        never sends ``emergency_stop()``, leaving the wheels with nobody
+        driving the brake. It would also kill the telemetry that tells the
+        operator why.
+
+        Instead the latch makes ``evaluate`` return ``is_emergency`` on
+        every tick, so the existing emergency branch in ``tick()`` holds
+        the rover still. That branch already e-stops, publishes telemetry
+        and returns before action selection -- **the existing emergency
+        path is the no-motion mode**, so no new branch is needed. This is
+        consistent with CHARTER section 3: a latched rover holds the
+        default no-motion posture rather than leaving it.
+        """
+        if self._emergency_latch is None:
+            return
+        if not await self._emergency_latch.load():
+            return
+        record = self._emergency_latch.record
+        _log.error(
+            "estop_latch_active_at_boot",
+            reason=record.reason,
+            causes=list(record.causes),
+            tripped_at_iso=record.tripped_at_iso,
+            rearm_cmd=("python -m mousedroid.cli.rearm --operator <you> --confirm-area-clear"),
+        )
+
+    async def _persist_emergency_latch(self) -> None:
+        """Write the latch record if it changed. Never raises into the loop."""
+        if self._emergency_latch is None:
+            return
+        try:
+            await self._emergency_latch.persist()
+        except Exception:
+            # The motors are already stopped; losing the record must not
+            # also take down the orchestrator that is holding them stopped.
+            _log.exception("estop_latch_persist_failed")
 
     async def _halt_on_connect(self) -> None:
         """Command zero velocity before the first tick (peer review C4(d)).

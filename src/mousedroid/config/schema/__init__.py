@@ -134,6 +134,7 @@ from mousedroid.config.schema.misc import (
     RobotConfig,
 )
 from mousedroid.config.schema.reward_safety import (
+    EmergencyLatchConfig,
     RewardConfig,
     SafetyConfig,
     SafetyProjectorConfig,
@@ -221,6 +222,7 @@ __all__ = [
     "DualStreamTrainingConfig",
     "ESP32CommandSetLiteral",
     "ESP32Config",
+    "EmergencyLatchConfig",
     "ExperienceConfig",
     "ExperimentLoggerConfig",
     "FaceDisplayConfig",

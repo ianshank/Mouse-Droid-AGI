@@ -10,7 +10,7 @@ from __future__ import annotations
 from itertools import pairwise
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from mousedroid.config.schema._primitives import (
     Self,
@@ -136,6 +136,84 @@ class SafetyProjectorConfig(StrictBaseModel):
         ge=0,
         description=("Maximum angular velocity magnitude (rad/s) permitted in tight quarters."),
     )
+
+
+class EmergencyLatchConfig(StrictBaseModel):
+    """Latch an emergency stop until an operator clears it (peer review D-5).
+
+    ``MouseDroidSafetyMonitor.evaluate`` opens ``is_emergency = False`` and
+    recomputes it from scratch every tick, so the instant a triggering
+    condition clears the next tick resumes driving with no human in the
+    loop. The production units compound it: ``scripts/mousedroid.service``
+    and ``scripts/mousedroid-docker.service`` both set
+    ``Restart=on-failure``, and ``docker-compose.jetson.yml`` sets
+    ``restart: unless-stopped``, so a fault can also be cleared by a
+    restart. ISO 3691-4 requires that an emergency stop is **not** reset
+    automatically -- only by deliberate human action.
+
+    Deliberately absent, and they must stay absent:
+
+    * **No ``max_latch_age_s``.** An age-based auto-clear *is* an automatic
+      restart after an emergency stop. ``tripped_at_iso`` is recorded for
+      the operator; nothing in ``src/`` compares it to now.
+    * **No fail-open knob.** A corrupt or unreadable latch file is read as
+      LATCHED, because a corrupt file is evidence that something wrote a
+      latch and the write or the media failed. This follows the
+      ``LIDAR_UNAVAILABLE_DIST_M`` precedent in ``safety/monitor.py``:
+      making it tunable would only create a way to configure the
+      fail-closed path back open.
+    """
+
+    enabled: bool = Field(
+        False,
+        description=(
+            "Hold ``is_emergency`` until an operator clears it with "
+            "``python -m mousedroid.cli.rearm``. Default False is "
+            "byte-identical to pre-latch behaviour: no latch object is "
+            "built, evaluate() recomputes from scratch each tick as before, "
+            "and no state file is ever created. Latching is strictly "
+            "fail-safer, so invariant 6 would permit defaulting True -- it "
+            "ships False on operational grounds only, because a default-on "
+            "latch on a fleet without the re-arm CLI and runbook deployed "
+            "turns the first transient sensor dropout into a rover that "
+            "will not move and an operator with no documented way to fix "
+            "it. Ratchet it on in a separate change once the runbook is "
+            "out, the same shape as the #135 soak gate."
+        ),
+    )
+    state_dir: str = Field(
+        "estop_latch",
+        description=(
+            "Directory holding the latch record, resolved as "
+            "``<ExperienceConfig.path>/<state_dir>/``. Relative on purpose: "
+            "an operator override of the experience root is inherited for "
+            "free, and the experience root is a persistent Docker named "
+            "volume on the container path and a real directory on bare "
+            "metal, so the latch survives both restart modes. Rejected at "
+            "YAML load if absolute or containing '..', under both POSIX "
+            "and Windows separator semantics."
+        ),
+    )
+    fsync: bool = Field(
+        True,
+        description=(
+            "fsync the latch file and its directory after the atomic "
+            "replace. os.replace gives atomicity, not durability: without "
+            "this a power cut immediately after an emergency stop can lose "
+            "the latch from page cache, which is precisely the scenario the "
+            "latch exists for. Set False only on tmpfs or test hosts."
+        ),
+    )
+
+    @field_validator("state_dir")
+    @classmethod
+    def _validate_state_dir(cls, v: str) -> str:
+        """Keep the latch record inside the experience root."""
+        from mousedroid.config.schema.learning import _validate_relative_slot_dir
+
+        return _validate_relative_slot_dir(
+            v, config_name="safety.emergency_latch", field_name="state_dir"
+        )
 
 
 class SafetyConfig(StrictBaseModel):
@@ -311,6 +389,15 @@ class SafetyConfig(StrictBaseModel):
         0.5,
         gt=0,
         description="Delay between sensor recovery attempts (s)",
+    )
+    emergency_latch: EmergencyLatchConfig = Field(
+        default_factory=_settings_default_factory(EmergencyLatchConfig),
+        description=(
+            "Emergency-stop latch block (peer review D-5). Default "
+            "``emergency_latch.enabled=false`` preserves byte-identical "
+            "pre-latch behaviour -- no latch is built and no state file is "
+            "written."
+        ),
     )
     projector: SafetyProjectorConfig = Field(
         default_factory=_settings_default_factory(SafetyProjectorConfig),

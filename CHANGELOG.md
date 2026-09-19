@@ -8,6 +8,97 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Safety — an emergency stop now survives a restart, and only a human clears it
+
+`MouseDroidSafetyMonitor.evaluate` opened `is_emergency = False` and recomputed it
+from scratch every tick, so the instant a triggering condition cleared, the next tick
+resumed driving with no human in the loop. The shipped deployment compounded it:
+`scripts/mousedroid.service` and `scripts/mousedroid-docker.service` both set
+`Restart=on-failure`, and `docker-compose.jetson.yml` sets `restart: unless-stopped`
+— so a fault could also be cleared by a restart. That is the single most quotable
+prohibition in ISO 3691-4, the standard the external review recommends this project
+adopt: an emergency stop must not be reset automatically, only by deliberate human
+action, and the reset must not by itself command motion.
+
+New `safety/latch.py` holds the stop. `FileEmergencyLatch.trip()` is synchronous and
+touches no filesystem — `evaluate` runs at 30 Hz *and* is called from the MCP tool
+bridge on an async request path, so a blocking write there would land on both;
+`persist()`, `load()` and `rearm()` are async and push their syscalls through
+`asyncio.to_thread`. The record is written atomically (temp + `os.replace`) and
+durably (`fsync` on the file and its directory), because `os.replace` gives atomicity
+but not durability and a Jetson losing power is the exact scenario.
+
+**It fails closed, deliberately inverting a neighbouring precedent.**
+`learning/on_device/slot_store.py::load_active` returns `None` on a corrupt manifest,
+which is right there — "no active slot" is the safe answer. Here the safe answer is
+the opposite: a corrupt, truncated, unreadable or future-versioned record is evidence
+that *something wrote a latch* and the write or the media failed, so all of those read
+as **latched**. Absence of the file is the only unlatched state.
+
+There is no TTL and there must never be one — an age-based auto-clear *is* an
+automatic restart after an emergency stop. `tripped_at_iso` is recorded for the
+operator; nothing compares it to now. There is likewise no fail-open knob, following
+the `LIDAR_UNAVAILABLE_DIST_M` precedent: making it tunable would only create a way to
+configure the fail-closed path back open. Both absences are pinned by tests.
+
+`evaluate` gained no branch. It sits at 13 against the `ruff C901` ceiling of 15, so
+the merge lives in `_apply_emergency_latch`, which returns a tuple; the seven trip
+sites each append a cause named after the log event already emitted there
+(`forward_clearance_violation`, `battery_critical`, `sensor_stale`,
+`insufficient_valid_sensors`, `loop_overrun`, `lidar_emergency`, `human_proximity`),
+so a latch record greps straight into the journal. `SafetyContext` gains one appended
+`emergency_latched` field; `is_emergency` remains the single field every consumer
+gates motion on and is now `live_emergency or latched`.
+
+**A latched rover starts, in no-motion, rather than refusing to start.** Exiting
+non-zero would meet `Restart=on-failure` on a unit with no `StartLimitBurst` and
+crash-loop forever; a crash-looping process never reaches `_halt_actuators` and so
+never sends `emergency_stop()`, leaving the wheels with nobody driving the brake — and
+it would kill the telemetry that tells the operator why. Because the latch makes
+`evaluate` return `is_emergency` every tick, the existing emergency branch in `tick()`
+holds the rover still: **that branch already is the no-motion mode**, so no new branch
+was needed. Consistent with CHARTER §3 — a latched rover holds the default no-motion
+posture rather than leaving it.
+
+The reset is `python -m mousedroid.cli.rearm --operator <name> --confirm-area-clear`.
+Both flags are required, with no defaults and no env fallback, because an unattributed
+re-arm is not a re-arm; `--status` reports without changing anything. Clearing the
+record does not command motion — the rover arms on its next start, keeping reset and
+resumption two separate acts. Three surfaces were considered and rejected, and the
+reasons are in the module docstring: **not** the telemetry REST API (LAN-reachable
+behind a bearer token, i.e. a *remote* re-arm, sharing an ingress with the
+natural-language mission endpoint), **not** an MCP tool (that would let the model that
+caused the stop undo it, straight through the actuation gate), and **not**
+`scripts/preflight_check.sh` (it runs as systemd `ExecStartPre` with no human attached,
+so anything it clears, `Restart=on-failure` clears automatically — the defect again).
+Operator procedure: `docs/runbooks/emergency-stop-rearm.md`.
+
+`safety.emergency_latch.enabled` defaults **False**, so every shipped overlay is
+byte-identical to pre-latch behaviour: no latch object, no directory, no file, and
+`_apply_emergency_latch` returns on its first line. Latching is strictly fail-safer,
+so invariant 6 would have permitted defaulting True — it ships False on operational
+grounds only, because a default-on latch on a fleet without the re-arm CLI and runbook
+deployed turns the first transient sensor dropout into a rover that will not move and
+an operator with no documented way to fix it. The ratchet to on is a separate change,
+the same shape as the #135 soak gate. `state_dir` is validated against absolute paths
+and `..` traversal under both POSIX and Windows separator semantics, reusing the
+validator that already guards the two slot stores — parameterised by field name so the
+error names `state_dir` rather than sending an operator hunting for a `slot_dir` key
+they do not have.
+
+No CHARTER §3 carve-out is required, and that conclusion is recorded rather than
+assumed: a carve-out gates *expansion* of the read-only / no-motion / off-loop posture.
+This restricts it — it adds a human gate where none existed, defaults to the
+pre-existing behaviour, and performs every byte of I/O off the hot loop.
+
+Pinned by `tests/unit/safety/test_emergency_latch.py`,
+`tests/regression/test_estop_latch_backwards_compat.py` (which parametrises over every
+shipped overlay) and `tests/e2e/test_estop_latch_restart.py`, which builds one
+orchestrator through the real factory, trips the latch, tears it down, and builds a
+second over the same experience root that must come up already latched. Proved against
+pre-fix semantics: making the latch inert turns the defect pin red.
+
+
 ### Safety — the wheels are now commanded to zero before the first tick
 
 `_LifecycleMixin.start` connected the ESP32 and went straight on to sensors,

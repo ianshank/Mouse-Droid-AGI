@@ -14,7 +14,7 @@ from pydantic import Field, field_validator, model_validator
 from mousedroid.config.schema._primitives import Self, StrictBaseModel
 
 
-def _validate_relative_slot_dir(v: str, *, config_name: str) -> str:
+def _validate_relative_slot_dir(v: str, *, config_name: str, field_name: str = "slot_dir") -> str:
     """Reject a ``slot_dir`` value that would escape the experience root.
 
     Shared by ``OnDeviceLearningConfig.slot_dir`` and ``GrowthConfig.slot_dir``:
@@ -29,6 +29,11 @@ def _validate_relative_slot_dir(v: str, *, config_name: str) -> str:
         v: The raw ``slot_dir`` field value.
         config_name: The owning config's dotted name (e.g. ``"on_device_learning"``),
             used only to make the error message point at the right YAML key.
+        field_name: The owning field's name. Defaults to ``"slot_dir"`` so the
+            two original call sites are unchanged; passed explicitly by
+            ``EmergencyLatchConfig.state_dir``, which shares the containment
+            contract but not the field name. Without it the error message
+            would name a key the operator does not have.
 
     Returns:
         The stripped, validated relative path.
@@ -46,7 +51,7 @@ def _validate_relative_slot_dir(v: str, *, config_name: str) -> str:
     has_traversal = ".." in posix.parts or ".." in windows.parts
     if not slot or is_absolute or has_traversal:
         msg = (
-            f"{config_name}.slot_dir must be a non-empty relative path "
+            f"{config_name}.{field_name} must be a non-empty relative path "
             "without parent traversal (resolved under "
             "ExperienceConfig.path); got " + repr(v)
         )

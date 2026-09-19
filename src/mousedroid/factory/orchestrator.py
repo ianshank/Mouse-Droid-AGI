@@ -78,7 +78,11 @@ from mousedroid.factory.on_device_learning import (
     build_on_device_coordinator,
     build_on_device_hot_swap_source,
 )
-from mousedroid.factory.safety import build_safety_monitor, build_safety_projector
+from mousedroid.factory.safety import (
+    build_emergency_latch,
+    build_safety_monitor,
+    build_safety_projector,
+)
 from mousedroid.factory.telemetry import (
     build_failure_recorder,
     build_metrics_registry,
@@ -116,7 +120,10 @@ def build_orchestrator(cfg: Settings) -> object:
 
     wm = build_world_model(cfg)
     agent = build_agent(cfg, wm)
-    monitor = build_safety_monitor(cfg)
+    # One latch, shared: the monitor trips it and the orchestrator loads
+    # and persists it. Two instances would mean a trip nobody writes.
+    emergency_latch = build_emergency_latch(cfg)
+    monitor = build_safety_monitor(cfg, latch=emergency_latch)
     esp32 = build_esp32_driver(cfg)
 
     camera: VisionProtocol | None = None
@@ -467,6 +474,7 @@ def build_orchestrator(cfg: Settings) -> object:
         skill_delegator=skill_delegator,
         memory_exporter=memory_exporter,
         mission_dispatcher=mission_dispatcher,
+        emergency_latch=emergency_latch,
         failure_recorder=failure_recorder,
         liveness_tracker=liveness_tracker,
         mock_telemetry_source=mock_telemetry_source,
