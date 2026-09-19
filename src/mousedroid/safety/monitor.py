@@ -466,7 +466,16 @@ class MouseDroidSafetyMonitor:
             is_emergency = True
             causes.append("lidar_emergency")
 
-        # -- Human detection (from observation if available) ---------------
+        # -- Human detection (from the injected HumanPresenceProtocol) -----
+        # NOT from the observation. It used to be read off the observation
+        # through a defaulting attribute lookup that no observation type
+        # could ever satisfy -- see peer review D-1 and
+        # sensing/human_presence.py. This comment said "from observation if
+        # available" until 2026-09-19; leaving it would have invited exactly
+        # the reintroduction test_human_presence_source.py guards against.
+        # That pin is a source-level gate, so the old expression is described
+        # here rather than quoted: a commented-out lookup is one keystroke
+        # from being a live one.
         presence = self._human_presence.sample(observation)
         human_detected = presence.detected
         human_dist_m = presence.distance_m

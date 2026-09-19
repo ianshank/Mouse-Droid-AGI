@@ -158,6 +158,7 @@ Ordered by severity. Each is live on `2469588` unless marked fixed.
 
 | ID | Severity | Defect | Evidence |
 |---|---|---|---|
+| **D-24** | **Critical** | ~~**A dead LiDAR still reported an affirmative all-clear ring, and the `lidar_unavailable_policy` was never even consulted.**~~ **FIXED IN THIS CHANGE (§9).** S-2 removed the `np.ones(feature_dim)` substitute from `SensorManager._safe_lidar_read`'s *exception* path. The identical vector was still manufactured one layer down, on a path that **never raises**: `LD19LidarDriver.read_scan` returns `empty_scan()` when the serial port was never opened or no valid frame arrived, and `LidarFeatureExtractor.extract` maps a zero-point scan to `np.ones(n_sectors)`. Features are normalised range fractions, so that is *maximum range in every sector*. Executed: an unplugged LD19 yields `lidar_min_dist_m=12.0`, `lidar_clearance_ok=True`, `is_emergency=False` **with `lidar_unavailable_policy='emergency'` set** — because the features were "present", the policy branch was unreachable. This makes D-3 worse than D-3 states: arming the interlock would have handed an operator an interlock that cannot fire for an unplugged cable or a stalled motor, which is the exact failure mode `test_unknown_policy_is_rejected_at_load` exists to prevent in its config form. Found while implementing D-3; it is a **blocker** for D-3, not a sibling | `hardware/lidar/ld19_driver.py::read_scan`, `hardware/lidar/feature_extractor.py::extract`, `sensing/manager.py::_safe_lidar_read`; executed in §8.9 |
 | **D-22** | **High** | **Sim and rover pack different physical quantities into the same `motor_state` slot — a train/serve mismatch.** `training/rover_obs_adapter.py` packs `[vx_body_mps, 0.0, omega_rads, battery_v]` for Isaac-Lab pretraining: body-frame linear velocity and an angular *rate*. `sensing/manager.py::_safe_motor_read` packs `[left_velocity_mps, right_velocity_mps, heading_for_motor(), battery_v]`: per-wheel speeds and an absolute *angle*. So an RSSM pretrained in sim learns slot 2 as a bounded angular rate and is then fed an unbounded heading angle on the rover, and slots 0/1 change frame entirely. Both docstrings are accurate for their own module, which is why a documentation sweep alone would have closed D-11 and left this standing. Found while correcting D-11; **not fixed here** — reconciling the layouts is a modelling decision, not a wording one | `training/rover_obs_adapter.py`, `sensing/manager.py::_safe_motor_read` |
 | **D-23** | **Medium** | **Three different "human radius" values are live at once, and the most conservative is the one that is off by default.** `safety.min_forward_clearance_m` = 0.20 m is what `monitor.py::evaluate`'s human branch actually compares against; `three_laws.human_safety_radius_m` = 0.50 m is what `MouseDroidNavigationAgent.act` uses; `SafetyProjectorConfig.human_keepout_m` = 1.00 m is what the projector uses — and the projector is `enabled: False` by default (D-4). The day a detector is wired, one human produces three different stop distances, with the 1.00 m one inert. Using an *obstacle*-clearance threshold as a *human* threshold in `evaluate` is also wrong on its face. Latent until D-1's seam is fed, which is exactly why it is recorded now | `safety/monitor.py::evaluate`, `agents/navigation.py::act`, `safety/projector.py::project`, `config/schema/reward_safety.py` |
 | **D-21** | **High** | ~~**The blast-radius bound the injection filter names does not exist.**~~ **CORRECTED IN THIS CHANGE (§9).** `security/injection_filter.py` is candid that it is *"a literal-pattern denylist, not a semantic classifier … best-effort against a motivated adversary"*, and located the real protection elsewhere: *"parsed mission output is still clamped by `LLMConfig.max_vx_norm_mps`/`max_vy_norm_mps`/`max_omega_norm_rads`"*. Those three fields are declared in **two** schemas, validated `gt=0`, copied into `GatewayConfig` by `factory.build_llm_gateway`, and asserted in a unit test — and an exhaustive repo-wide grep finds **no read anywhere**. Executed: with `max_vx_norm_mps=0.01`, `_parse_response` returns `vx_target=1.0`, 100× the documented bound. Two aggravations: it is the S-11 class again (an operator reading `config/*.yaml` sees `max_vx_norm_mps: 0.5` and concludes LLM output is limited to 0.5 m/s), and the fields are **dimensionally incoherent** with what they claimed to bound — declared in m/s and rad/s against a `GoalVector` documented as normalised `[-1, 1]`, so wiring them naively would silently halve the achievable command. The false claim is corrected here; whether to delete the fields or give them coherent semantics is a maintainer decision, pinned so it cannot drift back | `security/injection_filter.py`, `config/schema/llm.py`, `llm_gateway/config.py`, `factory/llm_gateway.py`; executed in §8.6 |
@@ -168,8 +169,8 @@ Ordered by severity. Each is live on `2469588` unless marked fixed.
 | **D-0** | **Medium** (latent High) | ~~**The LLM gateways' clamp turned `NaN` into the upper bound.**~~ **FIXED IN THIS CHANGE (§9).** Same idiom, same mechanism: `json.loads` accepts the bare `NaN` literal, the decoded payload is a well-formed dict so the `isinstance` guard passes, `float()` does not raise, and the clamp returns `1.0`. **Correction — an earlier draft of this row rated this Critical and described it as "a full-scale motion command". That was wrong.** Tracing every `vx_target` consumer shows the LLM-derived `GoalVector` is consumed *only* by structlog fields, the REST `POST /api/v1/mission` response body, and an MCP tool result: **no production path actuates on it.** It is applied as a velocity only in `orchestrator/autonomous.py`, which is parked with zero production callers (ADR-016) — and even there via the *other*, pydantic-validated `GoalVector`. The live blast radius is therefore an observability and API surface, not motion: a `NaN` comes back to a language model as a confident `1.0` (same family as D-14). It is latent High because it sits directly on the seam the roadmap plans to connect to actuation — goal-conditioned planning is exactly what §1 item 4 recommends building | `llm_gateway/{gateway,anthropic_gateway,openai_compatible}.py`; executed in §8.2, trace in §8.4 |
 | **D-1** | **Critical** | ~~**Human detection is structurally impossible; five safety mechanisms and three config budgets are dead code.**~~ **PLUMBING FIXED (§9)** — the gap is now typed and announced; no detector ships, and that is now said out loud rather than hidden. No `human_detected` / `human_dist_m` field exists on `ObservationProtocol` or `MouseDroidObservationBundle`; `evaluate` reads them through `getattr(..., False)` and nothing ever assigns them. A typed protocol field would have failed `mypy --strict`; the `getattr` default is what hides it | `sensing/protocol.py`, `sensing/bundle.py`, `safety/monitor.py::evaluate`, `agents/navigation.py::act`, `safety/projector.py::project` |
 | **D-2** | **High** | **`three_laws.py` is never called on the motion path — and wiring it would not help.** `factory/cognitive.py::build_cognitive_core` constructs `ConstitutionalChecker` with **no `law_checker` argument**, so `check` takes the `else: safe = action.copy()` branch in every production build; the only wiring site is offline training. A second, independent gate sits behind it: `CognitiveCore.tick_fast` filters context to the hard whitelist `("battery_v", "obstacle_dist_m", "mcts_sims")`, dropping every key Laws 1–3 need. `ThreeLawsConfig.enabled` defaults `True`, so config reads "enforcement on" while nothing enforces — the S-11 defect class again | `factory/cognitive.py`, `cognitive/cognitive_core.py::tick_fast`, `cognitive/constitutional_rl.py` |
-| **D-3** | **High** | **The S-2 LiDAR fail-closed fix shipped inert on exactly the rig that needs it.** `SafetyConfig.lidar_unavailable_policy` defaults `"ignore"` and **no YAML sets it** — including `config/jetson_lidar_only.yaml`, which also sets `ultrasonic: null`. On that stack `_safe_distance_read` returns `distance_fallback_m` = **999.0**, so `forward_clearance_ok` is *always* True, and `_evaluate_lidar_clearance` returns `(inf, True, False)` for a dead LiDAR. `c6f701d` built the mechanism correctly and left every shipped deployment on the fail-open branch | `config/schema/reward_safety.py`, `config/jetson_lidar_only.yaml`, `sensing/manager.py`, `safety/monitor.py` |
-| **D-4** | **High** | **`GeometricSafetyProjector` never runs in any shipped configuration.** `SafetyProjectorConfig.enabled` defaults `False` and no `config/*.yaml` sets it. The forward-brake, human-keepout and tight-quarters clamps are the **only graded (non-binary) safety response in the tree**. With D-3, the production LiDAR-only rig's entire LiDAR interlock reduces to one binary test at 0.20 m, and only while the LiDAR is alive | `config/schema/reward_safety.py`, `safety/projector.py` |
+| **D-3** | **High** | ~~**The S-2 LiDAR fail-closed fix shipped inert on exactly the rig that needs it.**~~ **FIXED IN THIS CHANGE (§9)**, in `config/jetson_lidar_only.yaml` and nowhere else — and the scoping is the finding. An earlier draft of the fix set the policy on `jetson_production.yaml` too. That would have **braked or emergency-stopped the production rover permanently**: `jetson_lidar_only.yaml` is an overlay *stacked on* production, production inherits `model.lidar_dim: 0` from `default.yaml` (D-13), and `_evaluate_lidar_clearance` takes its "available" branch only when `len(lidar_features) > 0`, so an armed policy there fires on every tick forever. **D-13 is a blocker for D-3 on production, not a sibling defect** — and raising `lidar_dim` is an RSSM input-dimension change that invalidates every checkpoint trained without the modality, i.e. a retraining decision. Original finding: `SafetyConfig.lidar_unavailable_policy` defaults `"ignore"` and **no YAML sets it** — including `config/jetson_lidar_only.yaml`, which also sets `ultrasonic: null`. On that stack `_safe_distance_read` returns `distance_fallback_m` = **999.0**, so `forward_clearance_ok` is *always* True, and `_evaluate_lidar_clearance` returns `(inf, True, False)` for a dead LiDAR. `c6f701d` built the mechanism correctly and left every shipped deployment on the fail-open branch | `config/schema/reward_safety.py`, `config/jetson_lidar_only.yaml`, `sensing/manager.py`, `safety/monitor.py` |
+| **D-4** | **High** | ~~**`GeometricSafetyProjector` never runs in any shipped configuration.**~~ **FIXED IN THIS CHANGE (§9)** on the lidar-only stack only, for the same `lidar_dim` reason as D-3. Flagged as a **different risk class from the rest of this change**: it alters commanded actions in *normal* operation, not only on a failure path, and its thresholds have never been validated against this rover (F-008 blocks bench validation). Original finding: `SafetyProjectorConfig.enabled` defaults `False` and no `config/*.yaml` sets it. The forward-brake, human-keepout and tight-quarters clamps are the **only graded (non-binary) safety response in the tree**. With D-3, the production LiDAR-only rig's entire LiDAR interlock reduces to one binary test at 0.20 m, and only while the LiDAR is alive | `config/schema/reward_safety.py`, `safety/projector.py` |
 | **D-5** | **High** | ~~**The production units automatically restart a motion system,**~~ **FIXED (§9)** — `safety.emergency_latch` now holds an emergency stop across ticks and across restarts, cleared only by `python -m mousedroid.cli.rearm`. Ships default-OFF; the ratchet to on is a separate change. Original finding: the production units automatically restart a motion system, which is the single most quotable ISO 3691-4 prohibition — in the standard the review itself recommends adopting.** `scripts/mousedroid.service` sets `Restart=on-failure`, `RestartSec=5`, `WatchdogSec=30`; `scripts/mousedroid-docker.service` sets `Restart=on-failure`, `RestartSec=10`. Combined with S-5 (e-stop has no latch and no persisted state — a restart is a fresh process), a fault can be cleared by a restart with no human in the loop. `WatchdogSec=30` is also **900 ticks** at 30 Hz. And because the watchdog is notified on any non-raising tick, an orchestrator that is e-stopped forever reports healthy forever | `scripts/mousedroid.service`, `scripts/mousedroid-docker.service`, `orchestrator/_lifecycle_mixin.py::run` |
 | **D-6** | **High** | **The primary action path is never shown the safety context.** `_ActionMixin._select_action` receives `safety_ctx` and forwards it **only** to `self._agents[0].act(...)`. `_try_cognitive_action` and `_try_vla_action` never see it. `config/jetson_production.yaml` sets `cognitive.enabled: true`, making the cognitive branch **primary** — and its only safety input is `obstacle_dist_m = observation.distance_m`, which on the lidar-only stack is the 999.0 fallback (D-3). LiDAR-derived clearance reaches the *policy* through nothing at all | `orchestrator/_action_mixin.py` |
 | **D-7** | **High** | **The TensorRT engine cache has no version identity and survives image rebuilds.** `efficiency/tensorrt.py::_model_fingerprint` hashes only class name, architecture string, input shapes, precision and parameter count — **not** TensorRT version, CUDA version, GPU compute capability or driver. `compile_model` treats a stale engine as a **cache hit**; `tensorrt_cache_dir` defaults under `/opt/mousedroid`, which `docker-compose.jetson.yml` **bind-mounts from the host**, so the cache outlives the image; and `load_compiled`'s `_load_sync` falls through a **bare `except Exception:`** to `torch.load(..., weights_only=False)`, swallowing the exact deserialization error a version mismatch would raise. Fires on a GPU swap or base-image bump, not only a JetPack upgrade. Docs claim TRT 10.4; JetPack 7.2.1 ships 10.16.2 | `efficiency/tensorrt.py`, `docker-compose.jetson.yml`, `config/schema/hardware.py::JetsonConfig` |
@@ -373,6 +374,49 @@ first version matched the literal substrings `min(hi, value)` / `min(upper, valu
 coupled to the variable names in the two files it was written against and flagged **neither**
 synthetic sample. A gate that has never been shown to fail is not evidence. [Certain]
 
+### 8.9 A dead LiDAR reported full clearance, with the policy armed
+
+`LD19LidarDriver.read_scan()` on a driver whose serial port was never opened — an unplugged
+cable — against `SafetyConfig(lidar_unavailable_policy="emergency", lidar_unavailable_grace_s=0.0)`:
+
+```
+read_scan raised?           False
+scan.n_points               0
+features (unique values)    [1.]
+policy=ignore     lidar_min_dist_m=12.0     clearance_ok=True is_emergency=False
+policy=emergency  lidar_min_dist_m=12.0     clearance_ok=True is_emergency=False
+```
+
+Identical output under both policies is the finding: the policy is not weak here, it is
+**unreachable**. `_evaluate_lidar_clearance` only consults it when `len(lidar_features) == 0`, and
+the features were present — all-ones, i.e. `1.0 * lidar_max_range_m` = 12.0 m in every sector.
+
+After the fix, through the real `SensorManager` and a factory-built monitor:
+
+```
+_safe_lidar_read -> features=None ok=False
+obs.lidar_features is None : True
+ctx.lidar_min_dist_m       : 0.0
+ctx.lidar_clearance_ok     : False
+ctx.is_emergency           : True
+```
+
+The counter-case that shaped the fix, and the reason it is a `sensor_responding` flag rather than
+a blanket `n_points == 0` check. On the LD19 a no-return beam reports `0` mm, which is below
+`min_range_m`, so a room with nothing inside `max_range_m` **legitimately** yields zero points. A
+naive fix would have emergency-stopped a rover standing in an open space:
+
+```
+open-room scan: n_points=0 sensor_responding=True
+obs.lidar_features is None : False
+ctx.lidar_min_dist_m       : 12.0
+ctx.is_emergency           : False
+```
+
+Frames arrived, so the sensor is answering; all-ones is a true reading of that room.
+
+---
+
 ### 8.8 Baseline
 
 `python scripts/select_next.py` → `F-008  USB-C rover smoke passes on the physical Jetson
@@ -467,6 +511,66 @@ and that the *other* control CHARTER §3 leans on was a phantom (D-21).
 The generalisable lesson is the one this review levels at the external synthesis in §1 item 2: a
 finding that has not been traced to its consumers is a hypothesis, not a result — and that applies
 to the reviewer's findings first.
+
+---
+
+### 9.1 Second batch — arming the LiDAR interlock, and the defect that blocked it
+
+**D-24 — a dead LiDAR no longer reports an all-clear ring.** `LidarScan` gains
+`sensor_responding: bool = True`; `LD19LidarDriver` sets it `False` on its two "no frames at all"
+paths (unopened serial port, no valid frame) and leaves it `True` on the "frames arrived, every
+point out of range" path; `SensorManager._safe_lidar_read` reports the modality absent when it is
+`False`. The field is a **bool and not a tunable threshold** on purpose: a `min_scan_points` knob
+would only be a way to configure the fail-closed path back open, the same reasoning as
+`EmergencyLatchConfig`'s deliberately absent fail-open knob.
+
+Two observables change on existing `ignore` deployments and are pinned rather than left to be
+discovered: a dead LiDAR's `lidar_min_dist_m` goes from a fabricated `lidar_max_range_m` to `inf`,
+and its `valid_mask` slot from 1 to 0. Neither changes a safety decision under `ignore`. Both are
+what the `read_all`, `_safe_lidar_read` and `frame_builder` docstrings already *said* happened.
+
+**D-3 / D-4 — the interlock and the projector armed, on the one stack with a LiDAR.**
+`config/jetson_lidar_only.yaml` gains `lidar_unavailable_policy: emergency`,
+`lidar_unavailable_grace_s: 0.5` and `projector.enabled: true`. It is the only shipped file whose
+behaviour changes. `jetson_production.yaml` gains a **comment and no keys**, recording why the
+apparent gap must stay open — closing it there would e-stop that rig on every tick.
+
+`emergency` rather than `degrade` because that stack sets `ultrasonic: null`, so LiDAR is the only
+obstacle sensor and braking-without-halting would be driving blind at reduced speed. The grace is
+sized against relations, not taste, and the AQA pins the relations: blind travel during the grace
+(`grace × max_velocity_mps` = 0.25 m) must stay within `projector.lidar_brake_distance_m` (0.30 m),
+and the grace must stay *below* `lidar.scan_acquisition_timeout_s` — sizing it to ride out a whole
+failed acquisition would need 0.5 m of blind travel, 2.5× `min_forward_clearance_m`. After D-24
+that is also unnecessary: a *slow* scan comes back partial-but-real and never reaches the policy.
+The honest residue is stated in the YAML: 0.25 m of blind travel still exceeds the 0.20 m
+forward-clearance threshold, and none of it is bench-validated while F-008 is open.
+
+**D-4 is a different risk class from everything above it** and is called out as such rather than
+filed under "strictly fail-safer": the projector changes commanded actions in *normal* operation.
+`human_keepout_m` stays inert regardless, because nothing feeds D-1's `HumanPresenceProtocol` seam.
+
+Pinned across three tiers, each proved red-then-green against pre-fix semantics:
+
+- `tests/unit/sensing/test_lidar_not_responding.py` — 9 tests, 3 red pre-fix. The driver's three
+  empty paths told apart, the sensing boundary, and the open-room counter-case.
+- `tests/regression/test_lidar_not_responding_backwards_compat.py` — 21 tests. Invariant 6 on the
+  new field (defaulted, last in the signature, still frozen), the mock path unaffected, every
+  `ignore` overlay's decision unchanged, and the two changed observables recorded.
+- `tests/regression/test_lidar_interlock_overlay_aqa.py` — 37 tests, 3 red pre-fix. The stacked
+  load, the derived budgets, the three-way `emergency` + latch + zero-grace footgun, and
+  `test_production_alone_stays_inert` — the pin that would have caught the draft described in
+  D-3's row, which makes it the most valuable test in the batch.
+- `tests/integration/test_lidar_interlock_overlay_integration.py` — 8 tests, 6 red pre-fix.
+  Factory-built monitor and projector on the real stacked settings, the grace exercised against
+  `observation.timestamp` rather than wall time, and a real `LD19LidarDriver` with no serial port
+  driving the whole path.
+
+**How this batch reached its shape.** The plan for it was rewritten once before any code was
+written, because the first version set the policy on `jetson_production.yaml`. Then D-24 was found
+while writing the tests for the corrected version — which means the corrected plan was *still*
+wrong, in a quieter way: it would have shipped an interlock that resolves correctly in config and
+cannot fire on the two most likely hardware failures. Both corrections come from the same habit and
+neither came from re-reading the plan: trace the value to its consumers, then execute it.
 
 Not fixed here, recorded for triage: **D-1 through D-7 and D-9 through D-16.** D-1 (human
 detection) and D-5 (automatic restart of a motion system) are the two that should be triaged

@@ -37,3 +37,71 @@ training:
 # At least one distance sensor must remain valid for safety checks.
 safety:
   min_valid_sensors: 1
+
+  # --- LiDAR interlock (peer review D-3) --------------------------------
+  # This is the ONLY shipped configuration where the LiDAR interlock can be
+  # armed, and the reason is `model.lidar_dim` above.
+  #
+  # `MouseDroidSafetyMonitor._evaluate_lidar_clearance` takes its
+  # "LiDAR available" branch only when `len(lidar_features) > 0`. On the
+  # production stack alone, `config/default.yaml` sets `model.lidar_dim: 0`
+  # and `jetson_production.yaml` overrides no `model:` block, so the features
+  # are empty on EVERY tick and the policy branch fires permanently. Setting
+  # a non-`ignore` policy there would brake or emergency-stop the rover
+  # forever. That is why this lives here and not in the base overlay --
+  # see the comment in `jetson_production.yaml` before "fixing" the gap.
+  #
+  # `emergency` rather than `degrade`: this stack sets `ultrasonic: null`
+  # above, so LiDAR is the ONLY obstacle sensor. A dead LiDAR here is total
+  # blindness, and braking-without-halting would be driving blind at reduced
+  # speed rather than stopping.
+  lidar_unavailable_policy: "emergency"
+
+  # The grace is NOT optional with `emergency`. It defaults to 0.0, and the
+  # monitor's own comment notes that "a grace of 0.0 really is no grace: the
+  # policy fires on the first tick" -- so one dropped scan would e-stop the
+  # rover, and with `safety.emergency_latch.enabled` on it would LATCH the
+  # rover until an operator physically cleared it.
+  #
+  # What actually reaches the policy, after peer review D-24: a *slow* scan
+  # does NOT. `LD19LidarDriver._read_frames_with_stats_blocking` returns
+  # whatever it accumulated by its deadline, so a sluggish rotation yields a
+  # partial-but-real scan with `sensor_responding: true`, which never enters
+  # this branch. The policy sees only a sensor that produced no frames at all
+  # -- an unopened port, a stalled motor, a baud mismatch -- or a read that
+  # raised. Those are not transients.
+  #
+  # So this grace is sized for the boot window and a single dropped tick, NOT
+  # to absorb a whole failed acquisition. Absorbing one would need a grace
+  # above `lidar.scan_acquisition_timeout_s: 1.0`, and at
+  # `safety.max_velocity_mps: 0.5` that is 0.5 m of blind travel -- 2.5x
+  # `min_forward_clearance_m` (0.20 m), which is not defensible. 0.5 s is
+  # 0.25 m of blind travel: still beyond the forward-clearance threshold, but
+  # within `safety.projector.lidar_brake_distance_m` (0.30 m), so the grace
+  # cannot carry the rover through the whole zone the projector would have
+  # been braking in. `tests/regression/test_lidar_interlock_overlay_aqa.py`
+  # pins that relation rather than the number.
+  #
+  # Consequence, stated plainly: a LiDAR that goes silent for a full
+  # acquisition WILL trip this. That is the intended behaviour, not a
+  # nuisance stop. None of it is bench-validated -- F-008 blocks that --
+  # so treat the value as an operator-tunable, not a constant.
+  lidar_unavailable_grace_s: 0.5
+
+  # --- Graded safety projection (peer review D-4) -----------------------
+  # Same `lidar_dim` dependency as the policy above: the projector clamps on
+  # LiDAR-derived distance, so on the production stack alone it would have no
+  # signal to clamp on.
+  #
+  # This CHANGES COMMANDED ACTIONS IN NORMAL OPERATION -- it is not a
+  # failure-path-only guard. Defaults are `lidar_brake_distance_m: 0.30`,
+  # `crawl_velocity_mps: 0.10`, `tight_quarters_dist_m: 0.50`; they are
+  # plausible but have never been validated against this rover, and F-008
+  # blocks bench validation.
+  #
+  # `human_keepout_m` (1.0 m) and `human_proximity_speed_mps` stay INERT
+  # regardless: nothing feeds the `HumanPresenceProtocol` seam yet, so
+  # `SafetyContext.human_detected` is always False (peer review D-1). Do not
+  # read this as human keep-out being live.
+  projector:
+    enabled: true

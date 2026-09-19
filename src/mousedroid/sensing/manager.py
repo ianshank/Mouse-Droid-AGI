@@ -490,6 +490,11 @@ class SensorManager:
         encoder's own missing-modality branch, and ``frame_builder`` omits
         the sector ring. Whether an absent reading should *stop the rover* is
         the safety monitor's call, via ``SafetyConfig.lidar_unavailable_policy``.
+
+        "Every outcome" includes a scan the driver returned without raising:
+        a non-responding sensor yields zero points, and the extractor turns
+        zero points into that same all-ones vector. See the
+        ``sensor_responding`` branch below (peer review D-24).
         """
         if self._lidar is None:
             return None, False
@@ -498,8 +503,37 @@ class SensorManager:
             scan = await self._lidar.read_scan()
             # Cache the most-recent raw scan for downstream consumers
             # (telemetry raw-LiDAR streaming). Always overwritten — we
-            # only need the latest valid scan.
+            # only need the latest valid scan. Cached before the
+            # ``sensor_responding`` check below so the dashboard can still
+            # show "0 points" for a dead sensor rather than the last good
+            # ring frozen in place.
             self._last_lidar_scan = scan
+            if not scan.sensor_responding:
+                # The sensor produced no raw frames: unopened serial port,
+                # stalled motor, baud mismatch. ``LidarFeatureExtractor``
+                # maps a zero-point scan to ``np.ones(n_sectors)``, and
+                # because features are normalised range fractions that
+                # vector asserts *maximum range in every sector*. Feeding it
+                # onward would rebuild the exact fail-open S-2 closed in this
+                # method — a dead LiDAR reporting ``lidar_max_range_m`` of
+                # clearance in all directions, with
+                # ``SafetyConfig.lidar_unavailable_policy`` never consulted
+                # because the features were "present" (peer review D-24).
+                #
+                # A zero-point scan from a *responding* sensor is a different
+                # thing and is NOT caught here: it means nothing lies inside
+                # ``[min_range_m, max_range_m]``, which all-ones states
+                # correctly. See ``LidarScan.sensor_responding``.
+                _log.warning(
+                    "lidar_sensor_not_responding",
+                    n_points=scan.n_points,
+                    hint=(
+                        "no raw frames this tick — reporting the modality "
+                        "absent so lidar_unavailable_policy decides, rather "
+                        "than extracting a fabricated all-clear ring"
+                    ),
+                )
+                return None, False
             if self._lidar_feature_extractor is None:
                 # A good scan we cannot turn into features is still not
                 # features. Report the modality absent rather than inventing

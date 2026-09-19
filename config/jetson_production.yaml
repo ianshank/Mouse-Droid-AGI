@@ -21,6 +21,25 @@ safety:
   # ticks in config/schema/reward_safety.py), so this rig needs no override.
   # Set them here only if bring-up shows this Jetson needs different numbers.
 
+  # --- Why there is no lidar_unavailable_policy here (peer review D-3) ---
+  # This looks like an obvious gap. It is not -- setting it here would brake
+  # or emergency-stop this rig permanently, on every tick, forever.
+  #
+  # `MouseDroidSafetyMonitor._evaluate_lidar_clearance` takes its "LiDAR
+  # available" branch only when `len(lidar_features) > 0`. LiDAR reaches the
+  # observation only when `model.lidar_dim > 0`; `config/default.yaml` sets
+  # it to 0 and this file overrides no `model:` block, so the features are
+  # empty on EVERY tick here and any non-`ignore` policy fires permanently.
+  #
+  # Raising `model.lidar_dim` to fix that is not a config change: it is an
+  # RSSM *input dimension*, so every checkpoint trained without the LiDAR
+  # modality stops loading. That is a retraining decision (peer review D-13).
+  #
+  # The interlock is armed in `config/jetson_lidar_only.yaml`, the overlay
+  # that does set `model.lidar_dim: 36`. Arm it there, not here.
+  # `tests/regression/test_lidar_interlock_overlay_aqa.py` pins this file's
+  # inertness so the "gap" cannot be closed by accident.
+
 # Fast-fail retry: no multi-second backoff in the 30 Hz loop
 retry:
   max_attempts: 1
