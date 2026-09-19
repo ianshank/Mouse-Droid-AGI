@@ -11,7 +11,7 @@ TensorRT engine cache are **not built**.
 
 | section | built | note |
 | --- | --- | --- |
-| D-1 measure first | **yes** | `observe_step_timing.py`, both PyTorch engines, `build_world_model(cfg, *, metrics=)`. |
+| D-1 measure first | **partly** | `observe_step_timing.py`, both PyTorch engines, `build_world_model(cfg, *, metrics=)`. The three-span split D-1 also specifies is tasks 3.4-3.5 — **NOT BUILT (task 2.1 gate)**; those are `onnx_copy_seconds` spans timing the copy path the gate closed against. |
 | D-2 thread metrics through the factory | **yes** | No global; the registry is built once, before the engine. |
 | D-3 correct the docs to `jetson_dual_stream.yaml` | **yes** | Phase 4 narrative sweep. |
 | D-4 widen `resolve_providers` | no | Provider options are Phase 6. `resolve_providers` is unchanged. |
@@ -30,9 +30,13 @@ reasoning along with the conclusion.
 
 ## D-1. Measure before optimizing, and fix the metrics seam first
 
-**Decision.** Phase 1 wires `MetricsRegistry` into `build_world_model`, splits the
-observe-step timing into three spans (pack / execute / convert), and makes the PyTorch
-engine emit the same histogram. Phase 2 captures a rover baseline of
+**Decision.** Phase 1 wires `MetricsRegistry` into `build_world_model`, makes the PyTorch
+engine emit the same histogram, and splits the observe-step timing into three spans
+(pack / execute / convert). The first two landed; the three-span split did **not** — it is
+tasks 3.4-3.5, whose `onnx_copy_seconds` family times the copy path the task-2.1 gate
+closed against, so the ONNX engine still times `session.run` alone. Stated here rather
+than only in the ledger above, because a reader who stops at this section would otherwise
+come away believing the histogram family sums to wall-clock `observe_step`. Phase 2 captures a rover baseline of
 `mousedroid_tick_phase_ms{phase=...}`. The I/O-binding, FP16 and cache work in Phases 4-6
 is conditional on that baseline showing `phase="world_model"` as a material share of the
 tick.
