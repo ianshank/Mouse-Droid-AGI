@@ -1,12 +1,78 @@
 # Tasks: `mouse-droid-branch-hygiene-sweep` (F-052)
 
-Task ordering is binding: each task lands green before the next starts. Deviations from
-task wording are recorded inline — declared, not silent.
+**Revision 2**, written after PR #233 squash-merged this bundle as `992da04`. Revision 1 was
+authored against `b0759da`; PR #234 landed in between. Task ordering within a slice is binding: each
+task lands green before the next starts. Deviations from task wording are recorded inline — declared,
+not silent.
 
-Tasks marked **[LANDED]** were executed while authoring this plan, because they are
-confirmed security defects in code the branch under review introduced and leaving them
-open while writing a document about them would be the exact failure this change exists to
-correct. Everything else is unstarted.
+Tasks marked **[LANDED]** were executed while authoring revision 1, because they were confirmed
+security defects in code that branch introduced. **Re-verified in the merged tree at `992da04`:** the
+validator rejects all four payload classes (tab, single backslash, glob, and the raw-boundary set), 12
+`_Q` references are present, and the 47 guard tests pass. The `[LANDED]` claims are real, not
+aspirational.
+
+### Post-merge status of the plan's premises, re-verified at `992da04`
+
+| premise | still true? |
+|---|---|
+| All five reclaimable `hardcoded_ok` markers still present | yes — `src/mousedroid/comms/_utils.py:23,26`, `src/mousedroid/comms/command_set.py:68,71`, `src/mousedroid/validation/latency_stats.py:30` |
+| Budgets still at ceiling (19/19, 8/8, 26/26) | yes — `python -m tools.ratchet_budgets` |
+| `mypy --strict` clean | yes — 424 source files, after PR #234 added code |
+| Exactly 3 `C901` offenders in `scripts/` at the repo ceiling | yes |
+| `ruff NPY` clean across `src/` and `training/` | yes |
+| `test-windows` window closes 2026-09-19, checker warns from 2026-09-20 | yes — `since: 2026-08-20` + 30 days; the checker's comparison is strict `>` |
+
+Nothing in the "Verified clean — do not churn" table of `proposal.md` §6 has gone false.
+
+---
+
+## Revision 2 — the shape problem, and the slices that fix it
+
+Revision 1's own peer-review named the defect and did nothing about it: *"This plan has 70 tasks
+across 9 phases. That is a programme, not a change."* It then grew to 92. A 92-task bundle does not
+ship; it gets cherry-picked by whoever reads it next, in whatever order, with no record of what the
+ordering was protecting.
+
+So revision 2 keeps every task and regroups them into **seven slices that can each ship as one PR**,
+with the dependency between them stated. Nothing is deleted. The task numbers are unchanged so
+existing references still resolve.
+
+### The slices, in dependency order
+
+| slice | what | tasks | ships alone? |
+|---|---|---|---|
+| **A — Headroom** | reclaim 5 inert/duplicated `hardcoded_ok` markers (26 -> 21), ratchet the ceiling, sync the stale hook fallback | Phase 0 | yes, and **everything else depends on it** |
+| **B — Gates that do not run** | `bash -n` blocking (already green, zero cost), branch coverage into `local-gates`, the `_GATED_ORCHESTRATOR_FILES` mechanism, `shellcheck` advisory, `pip-audit` over the missing extras | Phase 2 | yes |
+| **C — Security still open** | `REMOTE_USER`/`HOST` validation, the `rover_wip_guard.sh` trap quoting, `docker.env` sourcing under sudo, `.dockerignore` secrets patterns, `.env.*` in both ignore files, the gitleaks depth walk | 1.7-1.16 | yes |
+| **D — Config correctness** | the two HIGH `docker_deploy.sh` defects: the resolver that ignores `MOUSEDROID_JETSON_CONFIG`, and the telemetry port that is not a settings key | Phase 5 | yes |
+| **E — The missing alert** | `ModelArtifactDigestMismatch` for a counter whose own docstring says operators should page on it | 6.1 | yes |
+| **F — Inventory pins and hooks** | hooks->runbook pin, `SessionStart`, `PreCompact`, the three skills | Phase 3 | yes |
+| **G — Test gaps** | `STRICT_PROBE_PY`'s six unexecuted branches, the always-on Warmable proof, the sidecar validator negatives, the self-scanning pin, the full-tree hang | Phase 4 | yes, but largest |
+| **H — Docs and ladder** | `CHANGELOG`, C4, `test-windows` promotion, dependabot `docker`, digest pinning | Phases 6-7 | yes |
+
+**A is the only hard dependency.** All three suppression budgets sit at ceiling, so any slice that
+needs a new marker is blocked until A lands. B through H are mutually independent.
+
+### If this must be cut to a third, keep A, C, D, E
+
+That is: create the headroom, close the security items the last change left open, fix the promotion
+gate that currently **passes for the wrong reason**, and add the alert rule for a digest mismatch that
+nothing pages on.
+
+What breaks if the rest never happens, stated plainly:
+
+- **Without B**, the changed-lines branch-coverage gate keeps running in no workflow, and
+  `_lifecycle_mixin.py` stays exempt as "pure DI wiring" while holding algorithmic code. New logic
+  lands ungated. `shellcheck` keeps not running over ~9,000 lines of Bash.
+- **Without F**, the next wired hook goes undocumented the same way `ratchet_budget_check` did, because
+  the asymmetry that allowed it is still there.
+- **Without G**, the promotion gate's 70-line probe body keeps zero test coverage, and the
+  factory->composite->Warmable chain stays proved only inside an advisory job. That chain already broke
+  once, silently.
+- **Without H**, `test-windows` stays advisory past its window, and no base image is watched by
+  dependabot.
+
+None of those is an emergency. All four are the same shape: a check that exists and does not run.
 
 ---
 
