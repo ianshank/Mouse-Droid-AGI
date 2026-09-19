@@ -1421,15 +1421,19 @@ features:
     epic: "Jetson deployment"
     name: "World-model observe-step instrumentation + ONNX provider proof"
     description: >-
-      Give the observe-step histogram a production writer by threading a
-      MetricsRegistry through build_world_model to every call site, emit it from
-      both PyTorch engines (RSSM and DualStreamRSSM) so the engines are
-      comparable, and add copy-span metrics so the family sums to wall-clock.
-      Observe the active ONNX execution provider after session construction
-      instead of predicting it, carry provider options through provider
-      resolution, and validate the graph's input set against the loading config
-      at warmup. Correct the live surfaces that tell operators to flip
-      engine='onnx_trt' in an overlay where it raises.
+      Landed: give the observe-step histogram a production writer by threading a
+      MetricsRegistry through build_world_model to every call site, and emit it
+      from both PyTorch engines (RSSM and DualStreamRSSM) as well as the ONNX
+      runtime so the engines are comparable; gate the ONNX artifact on a SHA-256
+      digest before it is loaded; correct the live surfaces that tell operators
+      to flip engine='onnx_trt' in an overlay where it raises. NOT BUILT, gated
+      by the task 2.1 ceiling decision (end-to-end ceiling 1.0016x-1.0039x): the
+      onnx_copy_seconds spans that would make the histogram family sum to
+      wall-clock, observing the active execution provider after session
+      construction instead of predicting it, carrying provider options through
+      provider resolution, and validating the graph's input set against the
+      loading config at warmup. The observe-step histogram is the one metric
+      family this change adds a writer for; no onnx_copy_seconds family exists.
     category: "infrastructure"
     priority: "high"
     status: "in_progress"
@@ -1437,9 +1441,11 @@ features:
     verification:
       - "build_world_model accepts metrics= and threads it to the ONNX runtime"
       - "Every build_world_model call site passes or defaults the registry"
-      - "Observed providers come from session.get_providers(), not the pre-build intersection"
-      - "resolve_providers carries (name, options) pairs without losing the primary"
-      - "Graph input set is compared against all_input_names_for_cfg at warmup"
+      - "Both PyTorch engines and the ONNX runtime emit the observe-step histogram"
+      - "The ONNX artifact is refused on a SHA-256 mismatch before the session is built"
+      - "NOT BUILT (task 2.1 gate): observed providers from session.get_providers() -- warmup_session still returns the pre-session intersection"
+      - "NOT BUILT (task 2.1 gate): resolve_providers carrying (name, options) pairs -- it still takes bare provider-name tuples"
+      - "NOT BUILT (task 2.1 gate): graph input set compared against all_input_names_for_cfg at warmup"
       - "No live surface tells operators to enable onnx_trt from jetson_production.yaml"
       - "Existing config/*.yaml load unchanged; no new world_model: YAML key"
     validation_command: "bash scripts/validations/F-050.sh"

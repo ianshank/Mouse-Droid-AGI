@@ -160,17 +160,32 @@ two different trajectories from the same distribution.
 2. Edit `config/jetson_dual_stream.yaml` — **not**
    `config/jetson_production.yaml`, which cannot enable this engine
    (`_build_onnx_world_model` raises `ValueError` when `cfc_hidden_dim <= 0`,
-   and the production overlay leaves it at the schema default `0`):
-   ```yaml
-   world_model:
-     engine: onnx_trt
-     onnx_path: /opt/mousedroid/weights/dual_stream_rssm/observe_step.onnx
+   and the production overlay leaves it at the schema default `0`) — for the
+   `model:` half of the switch, and that half is already in it
+   (`cfc_hidden_dim: 64`). The `world_model:` half does **not** go into tracked
+   YAML at all. Select the engine with environment variables in
+   `/etc/mousedroid/docker.env`, which is outside the sync target and is never
+   transferred, so it survives a promotion:
+   ```bash
+   MOUSEDROID_WORLD_MODEL__ENGINE=onnx_trt
+   MOUSEDROID_WORLD_MODEL__ONNX_PATH=/opt/mousedroid/weights/dual_stream_rssm/observe_step.onnx
    ```
-   `onnx_path` is **required in practice**. Leaving it `null` engages the HF
-   Hub fallback, but the default `onnx_repo_id`
+   A `world_model:` block in a tracked overlay is not merely discouraged, it
+   silently does nothing: at the schema SHA that `config-compat` pins
+   (`deployments/jetson-image.json`), `WorldModelConfig` is a plain `BaseModel`
+   with `extra="ignore"`, so `scripts/check_config_compat.py` passes the key and
+   the pinned schema then drops it on load. The gate goes green, nothing logs a
+   complaint, and the rover stays on the `torch` engine — worse than a hard
+   failure, which is what a new *top-level* block would have given you.
+   `docs/runbooks/pc-to-jetson-promotion.md` states the same rule for every new
+   runtime field.
+
+   `onnx_path` is **required in practice**, which is why
+   `MOUSEDROID_WORLD_MODEL__ONNX_PATH` is in the set above. Leaving it unset
+   engages the HF Hub fallback, but the default `onnx_repo_id`
    (`ianshank/mousedroid-dual-stream-rssm`) currently publishes **no `.onnx`
    artifact** — only `.gitattributes` and `README.md` — so the fallback
-   resolves nothing and boot fails. Point `onnx_path` at a file you exported
+   resolves nothing and boot fails. Point it at a file you exported
    in step 1, or push that artifact to the Hub first.
 3. Restart `mousedroid`. The `world_model_engine_selected` structured
    log event confirms the active engine.

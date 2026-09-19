@@ -137,9 +137,14 @@ at worst.
   construct the ONNX engine without a registry and silently reinstate the dead-metric bug.
   `factory/orchestrator.py` builds the registry before the world model instead of after.
 - `src/mousedroid/world_model/dual_stream_rssm_onnx.py`: the existing
-  `observe_world_model_observe_step_seconds` timer keeps its ORT-execute scope, and two
-  new spans are added around `pack_observation` and the tensor conversions so the
-  histogram family finally sums to wall-clock `observe_step`.
+  `observe_world_model_observe_step_seconds` timer keeps its ORT-execute scope — the
+  `session.run` bracket at `:255-258` — and finally has a registry to write to, so
+  `alerts.yml:388-421` and `registry.py:221` stay valid unchanged. What the engine emits is
+  that one histogram. **NOT BUILT (task 2.1 gate):** the two further spans around
+  `pack_observation` (`:236`) and the tensor conversions (`:262-269`) that would make the
+  family sum to wall-clock `observe_step`. They are `onnx_copy_seconds` spans (tasks
+  3.4-3.5) timing the copy path the gate closed against, and no `onnx_copy_seconds` metric
+  exists.
 - `src/mousedroid/world_model/dual_stream_rssm.py`: the PyTorch engine emits the same
   observe-step histogram, so the two engines are comparable in production and not only in
   a Jetson-gated advisory test.
@@ -180,12 +185,19 @@ their sections for that reason. What lands is instrumentation (Phase 3), narrati
 
 **Evidence (F-050)**
 
-- `scripts/benchmark_latency.py` extended — not replaced — with an `observe_step` mode
-  covering torch, `onnx_portable`, and (when present) `onnx_iobinding_*`, reusing its
-  existing `--config`/`--checkpoint`/threshold/exit-code contract.
-- `tests/performance/test_observe_step_budget.py` extended with the per-span breakdown,
-  still budgeted by `MOUSEDROID_OBSERVE_STEP_BUDGET_MS`. No second source of truth for the
-  10 ms / 33 ms numbers.
+- The stage's landed evidence is the `mousedroid_world_model_observe_step_seconds`
+  histogram, which Phase 3 gives a production writer for the first time. The operator reads
+  it off the telemetry endpoint per `docs/runbooks/jetson-onnx-benchmark.md`; there is no
+  benchmark flag for the stage.
+- **NOT BUILT (task 2.1 gate, task 7.5):** `scripts/benchmark_latency.py` extended — not
+  replaced — with an `observe_step` mode covering torch, `onnx_portable`, and (when present)
+  `onnx_iobinding_*`, reusing its existing `--config`/`--checkpoint`/threshold/exit-code
+  contract. The script still covers `RSSM.imagine_step` and `MCTSPlanner.plan` only, so
+  there is no such CLI to look for.
+- **NOT BUILT (task 2.1 gate, task 7.5):**
+  `tests/performance/test_observe_step_budget.py` extended with the per-span breakdown. It
+  still budgets one wall-clock mean against `MOUSEDROID_OBSERVE_STEP_BUDGET_MS` — and the
+  constraint holds either way: no second source of truth for the 10 ms / 33 ms numbers.
 - Whole-tick evidence comes from the existing `mousedroid_tick_phase_ms{phase=...}`
   (`orchestrator.py:522`) and `mousedroid_tick_overruns_total`
   (`_registry_core.py:91`, written at `_telemetry_experience_mixin.py:114-126`). No new
