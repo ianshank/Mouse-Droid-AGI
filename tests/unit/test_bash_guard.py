@@ -21,11 +21,16 @@ positive and negative branches are therefore checkable from either platform.
 all be true of a fiction; it is the only thing here that skips on Windows, and it
 does so because on that host there is no positive answer to assert.
 
-Verified by importing this module and then forcing ``os.name = "nt"``: 9 of the
-10 pinned tests pass unchanged. The tenth is excluded from that simulation only
-because faking ``os.name`` on Linux makes ``pathlib`` select ``WindowsPath``,
-which it then refuses to instantiate — a limitation of simulating Windows, not of
-the test, which builds its paths on whatever host actually runs it.
+**Patching ``os.name`` has a second-order effect on ``pathlib``**, and that cost
+a third round on ``test-windows``. ``Path()`` reads ``os.name`` at call time to
+pick ``PosixPath`` or ``WindowsPath`` and refuses to instantiate the foreign one,
+so a ``Path(...)`` built inside a patched block works on the platform the patch
+names and raises ``NotImplementedError`` on the other. Executing the tests on
+Linux cannot reveal it — patching to ``"posix"`` there is a no-op. So the path
+fixtures are hoisted to import time, and
+``TestNoPathIsBuiltUnderAPatchedHost`` pins that structurally, by reading this
+module's own source. A structural check is the only kind that runs where the
+mistake is *introduced* rather than where it fires.
 """
 
 from __future__ import annotations
@@ -39,6 +44,16 @@ import pytest
 
 from tests import _bash
 from tests._bash import bash_is_usable, requires_bash
+
+# Built at IMPORT time, on the native host, so they carry this platform's
+# pathlib flavour. Constructing a ``Path`` *inside* a block that patches
+# ``os.name`` makes pathlib select the OTHER platform's class, which it then
+# refuses to instantiate ("cannot instantiate 'PosixPath' on your system" on
+# Windows, and the ``WindowsPath`` mirror on Linux). That is how this module
+# broke ``test-windows`` a second time, and a Linux run cannot reproduce it —
+# Linux is perfectly happy with the ``PosixPath`` the patch selects.
+_EXISTING_PATH = Path(__file__)
+_MISSING_PATH = Path(__file__).with_name("definitely-not-on-disk.sh")
 
 
 def _patched_which(result: str | None) -> object:
@@ -91,17 +106,17 @@ class TestRequiresBash:
 
     def test_skips_when_a_required_path_is_missing(self) -> None:
         with mock.patch.object(_bash.os, "name", "posix"), _patched_which("/usr/bin/bash"):
-            assert _skip_condition(requires_bash(paths=(Path("/nonexistent/guard.sh"),)))
+            assert _skip_condition(requires_bash(paths=(_MISSING_PATH,)))
 
     def test_does_not_skip_for_a_path_that_exists(self) -> None:
         with mock.patch.object(_bash.os, "name", "posix"), _patched_which("/usr/bin/bash"):
-            assert not _skip_condition(requires_bash(paths=(Path(__file__),)))
+            assert not _skip_condition(requires_bash(paths=(_EXISTING_PATH,)))
 
     def test_the_reason_names_everything_required(self) -> None:
         """A bare "bash required" tells a reader nothing about what was missing."""
-        marker = requires_bash("git", "tar", paths=(Path("/nope/deploy_remote.sh"),))
+        marker = requires_bash("git", "tar", paths=(_MISSING_PATH,))
         reason = marker.mark.kwargs["reason"]
-        for expected in ("bash", "git", "tar", "deploy_remote.sh"):
+        for expected in ("bash", "git", "tar", _MISSING_PATH.name):
             assert expected in reason, reason
 
 
@@ -143,3 +158,55 @@ class TestTheF051FilesUseIt:
             f"{module_name} must use tests._bash.requires_bash, not a local "
             "shutil.which('bash') predicate that passes on the WSL shim"
         )
+
+
+class TestNoPathIsBuiltUnderAPatchedHost:
+    """Structural pin for the trap that broke ``test-windows`` a second time.
+
+    ``pathlib.Path()`` reads ``os.name`` at call time to choose ``PosixPath`` or
+    ``WindowsPath``, and refuses to instantiate the foreign one. So a ``Path(...)``
+    inside a block that patches ``os.name`` is host-dependent by construction: it
+    works on the platform the patch happens to name and raises
+    ``NotImplementedError`` on the other.
+
+    A Linux run cannot catch this by executing the tests — patching to ``"posix"``
+    on Linux is a no-op. So it is caught structurally instead, by reading this
+    module's own source. That is the only way the check runs where the bug is
+    introduced rather than where it fires.
+    """
+
+    @staticmethod
+    def _source() -> list[str]:
+        return Path(__file__).read_text(encoding="utf-8").splitlines()
+
+    def test_no_path_call_appears_inside_a_host_patched_block(self) -> None:
+        offenders: list[str] = []
+        patched_indent: int | None = None
+        for line in self._source():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            indent = len(line) - len(line.lstrip())
+            if patched_indent is not None and indent <= patched_indent:
+                patched_indent = None
+            if 'mock.patch.object(_bash.os, "name"' in stripped:
+                patched_indent = indent
+                continue
+            if patched_indent is not None and "Path(" in stripped:
+                offenders.append(stripped)
+        assert offenders == [], (
+            "build Path objects at import time (see _EXISTING_PATH / _MISSING_PATH); "
+            "inside a patched-os.name block pathlib selects the foreign flavour and "
+            f"raises on the other host: {offenders}"
+        )
+
+    def test_the_hoisted_fixtures_are_host_native(self) -> None:
+        """They must carry whatever flavour this host's pathlib produces."""
+        native = type(Path(__file__))
+        assert type(_EXISTING_PATH) is native
+        assert type(_MISSING_PATH) is native
+
+    def test_the_missing_fixture_really_is_missing(self) -> None:
+        """Otherwise the skip-on-missing-path test passes for the wrong reason."""
+        assert not _MISSING_PATH.exists()
+        assert _EXISTING_PATH.exists()
