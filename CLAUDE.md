@@ -1,3 +1,12 @@
+@AGENTS.md
+
+<!-- The line above is a Claude Code `@path` import, not a link: it loads
+     AGENTS.md into context ahead of this file. It is required because with a
+     CLAUDE.md present Claude Code does not read AGENTS.md on its own, so
+     without it AGENTS.md is maintained and never loaded. Keep it bare —
+     import parsing skips code spans, so a backticked form imports nothing.
+     Pinned by tests/regression/test_f053_aqa.py (F-053). -->
+
 # MouseDroid — Claude Code Project Instructions
 
 > Autonomous navigation system for a Star Wars MSE-6 droid running on NVIDIA Jetson Orin Nano.
