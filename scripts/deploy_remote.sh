@@ -92,8 +92,22 @@ require_safe_remote_path() {
     [[ -n "${value}" ]] || die "${name} must not be empty"
     [[ "${value}" == /* ]] || die "${name} must be an absolute path, got: ${value}"
     case "${value}" in
-        *[\;\&\|\$\`\(\)\<\>\!$'\n'$'\r']*|*'"'*|*"'"*|*'\\'*|*' '*)
+        *[\;\&\|\$\`\(\)\<\>\!$'\n'$'\r'$'\t'$'\v'$'\f']*|*'"'*|*"'"*|*' '*)
             die "${name} contains characters unsafe for a remote command: ${value}"
+            ;;
+    esac
+    # Separate arm: the previous single-arm form spelt this as *'\\'*, and a
+    # QUOTED backslash pair in a case pattern matches TWO literal backslashes,
+    # so a lone backslash passed. Unquoted \\ matches exactly one.
+    case "${value}" in
+        *\\*) die "${name} must not contain a backslash: ${value}" ;;
+    esac
+    # Glob metacharacters are not shell metacharacters, so the arm above never
+    # caught them -- but the REMOTE shell pathname-expands an unquoted value,
+    # turning `mkdir -p /etc/mousedroid*` into whatever happens to match.
+    case "${value}" in
+        *[*?]*|*'['*|*']'*)
+            die "${name} must not contain glob characters (* ? [ ]): ${value}"
             ;;
     esac
     case "${value}" in
@@ -326,7 +340,7 @@ rsync_code() {
         --exclude '.pytest_cache' \
         --exclude '.ruff_cache' \
         --exclude '.claude' \
-        "${PROJECT_DIR}/" "${REMOTE_USER}@${HOST}:${REMOTE_SRC}/"
+        "${PROJECT_DIR}/" "${REMOTE_USER}@${HOST}:${REMOTE_SRC_Q}/"
     log_step "Rsync complete"
 }
 
@@ -336,18 +350,19 @@ rsync_code() {
 
 deploy_config() {
     log_section "Deploying configuration"
-    remote_sudo mkdir -p "${REMOTE_CONFIG}"
+    remote_sudo bash -c "mkdir -p ${REMOTE_CONFIG_Q}"
 
     log_step "Copying config files to ${REMOTE_CONFIG}/"
     local config_dir="${PROJECT_DIR}/config"
     if [[ -d "${config_dir}" ]]; then
         for cfg_file in "${config_dir}"/*.yaml; do
             [[ -f "${cfg_file}" ]] || continue
-            local basename
+            local basename basename_q
             basename="$(basename "${cfg_file}")"
             log_step "  -> ${basename}"
             scp -o ConnectTimeout=10 "${cfg_file}" "${REMOTE_USER}@${HOST}:/tmp/${basename}"
-            remote_sudo cp -n "/tmp/${basename}" "${REMOTE_CONFIG}/${basename}"
+            basename_q="$(printf '%q' "${basename}")"
+            remote_sudo bash -c "cp -n /tmp/${basename_q} ${REMOTE_CONFIG_Q}/${basename_q}"
             remote_cmd rm -f "/tmp/${basename}"
         done
     fi
@@ -361,7 +376,7 @@ deploy_config() {
 run_system_setup() {
     log_section "Running Jetson system setup"
     if remote_cmd "test -x ${REMOTE_SRC_Q}/scripts/jetson_system_setup.sh"; then
-        remote_sudo bash "${REMOTE_SRC}/scripts/jetson_system_setup.sh"
+        remote_sudo bash "${REMOTE_SRC_Q}/scripts/jetson_system_setup.sh"
     else
         log_step "SKIP: jetson_system_setup.sh not found on remote"
     fi
@@ -371,7 +386,7 @@ run_hardware_setup() {
     log_section "Running Jetson hardware setup"
     if remote_cmd "test -x ${REMOTE_SRC_Q}/scripts/jetson_hardware_setup.sh" 2>/dev/null || \
        remote_cmd "test -f ${REMOTE_SRC_Q}/scripts/jetson_hardware_setup.sh" 2>/dev/null; then
-        remote_sudo bash "${REMOTE_SRC}/scripts/jetson_hardware_setup.sh"
+        remote_sudo bash "${REMOTE_SRC_Q}/scripts/jetson_hardware_setup.sh"
     else
         log_step "SKIP: jetson_hardware_setup.sh not found on remote"
     fi
@@ -383,7 +398,7 @@ run_hardware_setup() {
 
 run_deploy() {
     log_section "Running deploy_jetson.sh on remote"
-    remote_sudo bash "${REMOTE_SRC}/scripts/deploy_jetson.sh"
+    remote_sudo bash "${REMOTE_SRC_Q}/scripts/deploy_jetson.sh"
 }
 
 # ---------------------------------------------------------------------------
@@ -394,7 +409,9 @@ pip_reinstall() {
     log_section "Reinstalling mousedroid package"
     local venv="/opt/mousedroid/venv"
     if remote_cmd "test -d ${venv}"; then
-        remote_sudo "${venv}/bin/pip" install --quiet -e "${REMOTE_SRC}[hardware,jetson]"
+        local pip_target_q
+        pip_target_q="$(printf '%q' "${REMOTE_SRC}[hardware,jetson]")"
+        remote_sudo "${venv}/bin/pip" install --quiet -e "${pip_target_q}"
     else
         log_step "Venv not found — running full deploy_jetson.sh"
         run_deploy

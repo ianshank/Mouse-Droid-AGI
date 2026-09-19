@@ -605,3 +605,99 @@ def test_the_remote_boundaries_use_the_quoted_forms() -> None:
     assert offenders == [], (
         f"a remote command string interpolates the RAW path; use REMOTE_SRC_Q: {offenders}"
     )
+
+
+# ---------------------------------------------------------------------------
+# The reject set, widened after an audit found four ways through it
+# ---------------------------------------------------------------------------
+#
+# The first version of the validator rejected the obvious metacharacters and
+# stopped there. An adversarial read found four holes, each confirmed by driving
+# the real script, and each is now a payload class below:
+#
+#   1. TAB, VT and FF were absent from the bracket class. Tab is an IFS
+#      character, so at every argv-style boundary the value word-splits and
+#      injects extra arguments into a command running under `sudo` on the rover.
+#   2. The backslash arm was spelt *'\\'*. A QUOTED backslash pair in a case
+#      pattern matches TWO literal backslashes, so a lone backslash passed and
+#      survived into a boundary where the remote shell strips one more level.
+#   3. Glob metacharacters are not shell metacharacters, so no arm caught them.
+#      The remote shell pathname-expands an unquoted value, which turns
+#      `mkdir -p /etc/mousedroid*` into whatever happens to match on the rover.
+#   4. `REMOTE_CONFIG_Q` was computed and never used, while `${REMOTE_CONFIG}`
+#      crossed raw at both config boundaries — so the "two defences" the header
+#      promises were, for that variable, one.
+#
+# Hole 4 is the instructive one: the pre-existing quoting test asserted the
+# pre-quoted form was *defined*, which the dead variable satisfied.
+# `test_every_pre_quoted_form_is_used` asserts it is *used*, which is the
+# property that was actually claimed.
+
+_WORD_SPLITTING_PAYLOADS = ["/opt/x\tsplit", "/opt/x\vsplit", "/opt/x\fsplit"]
+_BACKSLASH_PAYLOADS = ["/opt/x\\escaped", "/opt/\\etc"]
+_GLOB_PAYLOADS = ["/opt/mousedroid*", "/opt/mousedroi?", "/opt/[me]ousedroid", "/opt/x]y"]
+
+
+@pytest.mark.parametrize("payload", _WORD_SPLITTING_PAYLOADS)
+def test_whitespace_that_is_not_a_space_is_refused(payload: str) -> None:
+    """Tab/VT/FF split words in the remote shell exactly as a space does."""
+    result = _deploy_help(payload)
+    assert result.returncode != 0, f"accepted a word-splitting path: {payload!r}"
+    assert "unsafe for a remote command" in result.stderr, result.stderr
+
+
+@pytest.mark.parametrize("payload", _BACKSLASH_PAYLOADS)
+def test_a_single_backslash_is_refused(payload: str) -> None:
+    """A lone backslash, not just a doubled one — the original arm missed it."""
+    result = _deploy_help(payload)
+    assert result.returncode != 0, f"accepted a backslash path: {payload!r}"
+    assert "backslash" in result.stderr, result.stderr
+
+
+@pytest.mark.parametrize("payload", _GLOB_PAYLOADS)
+def test_a_glob_metacharacter_is_refused(payload: str) -> None:
+    """The REMOTE shell expands these; the local one never sees them."""
+    result = _deploy_help(payload)
+    assert result.returncode != 0, f"accepted a globbing path: {payload!r}"
+    assert "glob characters" in result.stderr, result.stderr
+
+
+def test_every_pre_quoted_form_is_used() -> None:
+    """A `*_Q` variable that nothing reads is a defence that does not exist.
+
+    `REMOTE_CONFIG_Q` was defined and never referenced while `${REMOTE_CONFIG}`
+    crossed raw at two boundaries. `test_the_remote_boundaries_use_the_quoted_forms`
+    passed throughout, because it only asserted the definition.
+    """
+    lines = _DEPLOY.read_text(encoding="utf-8").splitlines()
+    declared = {
+        line.split("=", 1)[0].strip()
+        for line in lines
+        if "=" in line and line.split("=", 1)[0].strip().endswith("_Q")
+    }
+    assert declared, "premise: the script declares at least one pre-quoted form"
+    unused = sorted(
+        name
+        for name in declared
+        if sum(1 for line in lines if name in line and not line.lstrip().startswith("#")) < 2
+    )
+    assert unused == [], (
+        f"pre-quoted form(s) declared but never used, so the raw value is still "
+        f"crossing the boundary they exist to protect: {unused}"
+    )
+
+
+def test_no_remote_command_string_interpolates_a_raw_validated_path() -> None:
+    """Widened from `${REMOTE_SRC}` alone, which is how hole 4 stayed invisible."""
+    source = _DEPLOY.read_text(encoding="utf-8")
+    raw_forms = ("${REMOTE_SRC}", "${REMOTE_CONFIG}")
+    offenders = [
+        line.strip()
+        for line in source.splitlines()
+        if ("remote_sudo " in line or "remote_cmd " in line or "rsync " in line)
+        and any(form in line for form in raw_forms)
+        and not line.lstrip().startswith("#")
+    ]
+    assert offenders == [], (
+        f"a remote command interpolates a raw validated path; use the _Q form: {offenders}"
+    )
