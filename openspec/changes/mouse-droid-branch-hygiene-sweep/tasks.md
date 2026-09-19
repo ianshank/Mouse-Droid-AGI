@@ -120,18 +120,28 @@ Each was verified by driving the real script, not by reading it.
   `if: github.event_name == 'pull_request'`, mirroring the `Hardcoded-value gate` step at
   `ci.yml:434-441`. Update the stale "local-only by design (need heavy deps)" comment at
   `ci.yml:380-383` — that job installs those deps.
-- [ ] 2.4 Remove `src/mousedroid/orchestrator/_lifecycle_mixin.py` and
-  `src/mousedroid/factory/orchestrator.py` from `check_branch_coverage.py::_ALLOWED_FILES`.
+- [ ] 2.4 Add `_GATED_ORCHESTRATOR_FILES` to `tests/regression/test_f042_aqa.py`, mirroring
+  the `_GATED_FACTORY_FILES` mechanism the same file already uses at `:14-20` / `:49-52`,
+  and change the orchestrator assertion at `:68` from `on_disk == exempt` to
+  `on_disk == exempt | _GATED_ORCHESTRATOR_FILES` with the same disjointness and
+  `not _is_exempted_from_branch_gate` checks. Required first: `:68` is a **categorical**
+  rule that every orchestrator `_*.py` is exempt, so there is currently no way to gate one.
+  (Revised from the first draft, which said simply "remove it from `_ALLOWED_FILES`" —
+  that would have broken this invariant rather than amended it. See `design.md` D-1.)
+- [ ] 2.5 Remove `src/mousedroid/orchestrator/_lifecycle_mixin.py` from
+  `check_branch_coverage.py::_ALLOWED_FILES` and add it to `_GATED_ORCHESTRATOR_FILES`.
   `_warm_world_model()` is algorithmic, not "pure DI wiring", and the file's own comment at
   `:66-68` says algorithmic modules stay gated.
-- [ ] 2.5 Update the three tests that pin those sets byte-for-byte:
-  `tests/unit/scripts/test_check_branch_coverage_base_ref.py:455`,
-  `tests/regression/test_f042_aqa.py`, `tests/regression/test_f042_backwards_compat.py`.
-- [ ] 2.6 Add the `[onnx_world_model]`, `[vla]` and `[hardware,jetson]` extras to the
+- [ ] 2.6 Move `src/mousedroid/factory/orchestrator.py` from `_ALLOWED_FILES` into the
+  existing `_GATED_FACTORY_FILES`. No new mechanism needed on this side.
+- [ ] 2.7 Update the two remaining byte-for-byte pins:
+  `tests/unit/scripts/test_check_branch_coverage_base_ref.py:455` and
+  `tests/regression/test_f042_backwards_compat.py`.
+- [ ] 2.8 Add the `[onnx_world_model]`, `[vla]` and `[hardware,jetson]` extras to the
   blocking `security` job's audit. `ci.yml:792` installs only `".[dev,telemetry,mcp]"` and
   `:802` runs `pip-audit --skip-editable` against *that* tree, so five packages this
   branch installs into the rover image are outside the blocking gate entirely.
-- [ ] 2.7 Cap the unbounded majors in `pyproject.toml:110-124`
+- [ ] 2.9 Cap the unbounded majors in `pyproject.toml:110-124`
   (`onnxruntime-gpu>=1.18,<2`, `onnx>=1.15,<2`, `onnxscript>=0.2,<1`).
 
 ## Phase 3 — Pin the inventories so drift fails a test

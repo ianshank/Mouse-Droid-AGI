@@ -44,9 +44,36 @@ future edits to those files — which is the point.
 **Rejected:** keeping both exempt and adding a comment (a comment is not a gate; that is
 the failure mode this whole change exists to stop).
 
-**Blast radius.** `tests/unit/scripts/test_check_branch_coverage_base_ref.py:455` and
-`tests/regression/test_f042_aqa.py` / `tests/regression/test_f042_backwards_compat.py` pin the exemption sets byte-for-byte
-— three tests must be updated in the same commit, deliberately, as F-042 intended.
+**Blast radius — and a correction found by verifying this section's own claim.**
+The first draft of this design said "remove the two files from `_ALLOWED_FILES`" and
+listed three tests to update. Checking that against the tree showed it would fight a
+*categorical* invariant rather than a list:
+`tests/regression/test_f042_aqa.py:68` asserts `on_disk == exempt` for the orchestrator —
+**every** `_*.py` mixin is exempt, by category, with no escape hatch.
+
+The factory half of the same test file already has the escape hatch this needs.
+`_GATED_FACTORY_FILES` (`:14-20`) enumerates three factory modules that stay *gated*, and
+the assertion is `on_disk == exempt | _GATED_FACTORY_FILES` with the two sets asserted
+disjoint (`:49-50`). So a factory module can be classified either way; an orchestrator
+mixin cannot.
+
+The revised decision is therefore to **mirror the factory mechanism onto the orchestrator
+side** rather than to poke a hole in a byte-for-byte list: add `_GATED_ORCHESTRATOR_FILES`
+with `_lifecycle_mixin.py` as its first member, change `:68` to
+`on_disk == exempt | _GATED_ORCHESTRATOR_FILES`, and add the disjointness and
+`not _is_exempted_from_branch_gate` assertions the factory half already carries.
+`src/mousedroid/factory/orchestrator.py` needs no new mechanism — it moves into the existing
+`_GATED_FACTORY_FILES`.
+
+That is a better change than the original: the categorical rule "all orchestrator mixins
+are pure split products" was true when F-042 wrote it and stopped being true the moment one
+gained algorithmic logic. Replacing the category with a reviewed classification is what
+F-042 already decided to do for the sibling directory.
+
+Tests to update: `tests/regression/test_f042_aqa.py` (the new gated set and assertion),
+`tests/regression/test_f042_backwards_compat.py` and
+`tests/unit/scripts/test_check_branch_coverage_base_ref.py:455` (both pin
+`_ALLOWED_FILES` / `_ALLOWED_DIR_PREFIXES` byte-for-byte).
 
 ## D-2 — Shell hygiene: `bash -n` blocking now, `shellcheck` advisory with a window
 

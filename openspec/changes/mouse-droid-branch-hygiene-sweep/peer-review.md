@@ -39,6 +39,25 @@ Two corrections came out of that: the plan now says explicitly *do not decompose
 "S104", "E501", "C901"]` exemption plus the absence of any shell linting — not
 complexity.
 
+### The sign-off condition caught a defect in this bundle, before it shipped
+
+`peer-review.md`'s own acceptance rule is that any line marked "verified" must reproduce
+when a reader runs the cited command. Applying it to D-1's blast-radius paragraph — which
+said "remove the two files from `_ALLOWED_FILES`, update three tests" — found that the
+change as written would *break* an invariant rather than amend one.
+
+`tests/regression/test_f042_aqa.py:68` asserts `on_disk == exempt` for the orchestrator:
+every `_*.py` mixin is exempt **by category**, with no escape hatch. Removing one file from
+the list does not narrow a reviewed enumeration; it violates a categorical rule.
+
+The factory half of that same file already solved this. `_GATED_FACTORY_FILES` (`:14-20`)
+enumerates three factory modules that stay gated, asserted disjoint from the exempt set at
+`:49-50`. The revised D-1 mirrors that mechanism onto the orchestrator side instead of
+poking a hole in a list, which is both smaller and more faithful to what F-042 decided.
+
+Worth stating plainly: this was the *only* defect the sign-off rule caught in its first
+application, and it was in the section the author was most confident about.
+
 ### Three of the request's named items turned out to be already satisfied
 
 Reported as verified-clean rather than silently dropped, because "we fixed lint" would be
