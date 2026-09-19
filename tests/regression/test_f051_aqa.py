@@ -30,7 +30,6 @@ rollback drill are operator steps, recorded in
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -40,6 +39,7 @@ import yaml
 
 from mousedroid.config.schema import Settings
 from mousedroid.config.schema.hardware import JetsonConfig
+from tests._bash import requires_bash
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _COMPOSE = _REPO_ROOT / "docker-compose.jetson.yml"
@@ -55,10 +55,10 @@ _CACHE_VOLUME = "mousedroid_tensorrt_cache"
 
 _NEW_RUNBOOKS = ("jetson-onnx-benchmark.md", "pc-to-jetson-promotion.md")
 
-_bash_required = pytest.mark.skipif(
-    shutil.which("bash") is None,
-    reason="bash required",
-)
+# Shared guard, not a local predicate: `which("bash")` alone is NOT enough —
+# on the GitHub Windows runner bash resolves to the WSL shim, which which()
+# finds and which then exits 1 on every invocation. See tests/_bash.py.
+_bash_required = requires_bash()
 
 
 def _compose() -> dict[str, Any]:

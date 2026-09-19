@@ -33,7 +33,6 @@ Pinned:
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -44,6 +43,7 @@ import yaml
 from mousedroid.config.loader import load_settings
 from mousedroid.config.schema.hardware import JetsonConfig
 from mousedroid.validation.preflight import _parse_env_keys
+from tests._bash import requires_bash
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CONFIG_DIR = _REPO_ROOT / "config"
@@ -67,7 +67,9 @@ _PREEXISTING_MOUNTS = (
     "promtail_positions:/var/lib/promtail",
 )
 
-_bash_required = pytest.mark.skipif(shutil.which("bash") is None, reason="bash required")
+# Shared guard, not a local predicate — see tests/_bash.py for why
+# `which("bash")` alone leaves the Windows runner red.
+_bash_required = requires_bash()
 
 
 def _service() -> dict[str, Any]:
