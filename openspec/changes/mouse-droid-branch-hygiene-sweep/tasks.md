@@ -224,6 +224,26 @@ Each was verified by driving the real script, not by reading it.
   the feature's declared evidence chain excludes its only behavioural test.
 - [ ] 4.13 Make `test_no_payload_ever_executed`'s canary `tmp_path`-scoped. The fixed
   global path makes it order-dependent and wrong under `pytest-xdist`.
+- [ ] 4.15 **A single full-tree `pytest` invocation hangs, and no CI job would ever catch it.**
+  `python -m pytest tests/ -m "not hardware"` blocks indefinitely in `ep_poll` — an
+  asyncio wait — with system CPU at **0%**, so it is hung, not slow. Reproduced twice
+  (~18 min and ~55 min, neither completed). Every tier passes *individually*:
+  `make regression` 1958, the unit tier 1013, `make gates` green. CI is green too, because
+  CI never runs that command: `make test` is four scoped invocations (`test-cov`,
+  `regression`, `smoke`, `behaviour`) and the workflow mirrors those four. So the hang
+  lives in the combination a single sweep creates, and there is no gate that executes that
+  selection. Known: the hung process had `zeroconf` (including `_services.browser`) and
+  `aiohttp` extension modules loaded, and the last output before the stall was
+  `tests/integration/test_e2e_5sec_run.py .FFF.FF`.
+  **Not yet known: which test.** The `faulthandler` dump on `SIGABRT` would have named it,
+  and the frames were lost to a `tail -25` in the author's own command — so step one is to
+  reproduce without piping, with `-p no:randomly` and `--timeout`, and bisect by tier
+  combination. Do not add the sweep to CI until the hang is found; add it after, so the
+  gate lands green.
+- [ ] 4.16 Consequence of 4.15 for the PR body and for any doc that cites it: a Testing
+  section quoting `python -m pytest tests/ -m "not hardware"` documents a command that
+  does not reliably terminate on this tree. Cite the four `make test` steps, which are
+  what CI runs.
 - [ ] 4.14 Add a unit test for `resolve_config`'s fail-closed branch
   (`scripts/analyze_observe_step_ceiling.py:740-747`): no test passes `--config` a
   nonexistent path, and that guard is what stops the gate computing a valid-looking
