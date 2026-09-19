@@ -138,7 +138,7 @@ Stated because a review that finds nothing wrong with its own output is not a re
    Mitigation: assert `isinstance(DualStreamRSSMOnnx, WarmableProtocol)` at class level in
    the same test, which needs no `onnxruntime` import at runtime. Without that, 4.2
    reintroduces the assert-what-you-wrote failure in a new place.
-4. **This plan has 70 tasks across 9 phases.** That is a programme, not a change. Phases
+4. **This plan has 92 tasks across 9 phases.** That is a programme, not a change. Phases
    0, 1 and 2 are the ones with teeth; 6 and 7 are largely mechanical. If it must be cut,
    cut 6 and 7 — but cut them *explicitly*, because task 6.1 is not documentation: it is a
    safety-relevant metric with a documented paging expectation and no alert rule.

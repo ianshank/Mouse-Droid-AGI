@@ -1,246 +1,177 @@
 # Design: `mouse-droid-agents-md-directory-docs` (F-053)
 
-**Revision 2.** Revision 1 was reviewed against the tree and three of its load-bearing claims were
-wrong — including the reason the change existed. `peer-review.md` records what changed and why. Each
-section below is a decision with its rejected alternatives.
+**Revision 3.** Revisions 1 and 2 planned a sibling `AGENTS.md` per directory. Review established that
+the content it would hold already exists in the `CLAUDE.md` beside it, that one of the target
+directories is frozen against writes, and that the reference shape offered as the accuracy exemplar
+contained three false statements. Revision 3 changes the deliverable. `peer-review.md` has the record.
 
 ---
 
-## D-1 — Why `AGENTS.md` at all, stated so a reviewer can decline it
+## D-1 — Pick one format, and it is `CLAUDE.md`
 
-Revision 1 justified this change by asserting that "this repository already runs two non-Claude
-reviewers on its pull requests — Devin Review and CodeRabbit both posted on #233 — so content that
-lives only in `CLAUDE.md` is invisible to the tools reviewing the code."
+**Decision.** In-package documentation lives in `CLAUDE.md`. `AGENTS.md` exists once, at the root,
+imported. This executes `docs/planning/TECH_DEBT_REMEDIATION_PLAN.md` **WS-8d** — *"Pick one format;
+index all subsystems"* — which revisions 1–2 never cited.
 
-**That was misleading, and it was the whole argument.** Verified on both #233 and #235:
+Three mechanical reasons, not preferences:
 
-| check | actual description |
-|---|---|
-| Devin Review | `Full review skipped: trial expired and no credits remaining` |
-| CodeRabbit | `Review skipped: draft pull request`; on #233 also `manual review required for this OSS repository` |
+1. **`CLAUDE.md` is the only reachable per-directory format.** With a root `CLAUDE.md` present, nested
+   `AGENTS.md` discovery is off entirely (D-3). Delivering one file's content elsewhere would take two.
+2. **It already holds the content.** All 8 nested `CLAUDE.md` carry a purpose blockquote at lines 3–4
+   and a `## Key Files` section. A sibling `AGENTS.md` restating the purpose is duplication by
+   construction — the drift factory revision 1 rejected by name, which revisions 1–2 then designed.
+3. **One target cannot be written to.** `src/mousedroid/arm/**` is denied by the PreToolUse
+   `freeze_gate` hook while `F-008` is `todo` (D-4).
 
-Neither reviews anything. They post skip statuses. There is no `.coderabbit.yaml`, no Codex or Cursor
-configuration, and nothing under `.github/` consumes `AGENTS.md`.
+**Rejected: `AGENTS.md` as the per-directory format.** It needs a `CLAUDE.md` importer in every
+directory to be read at all, so 9 packages become 18 files; `arm` cannot take either; and the 8
+existing `CLAUDE.md` would need their purpose blockquotes stripped to avoid duplication, touching the
+43 references D-8 measures.
 
-Combine that with D-3 and the honest position is stark: **for Claude Code, content in `CLAUDE.md` and
-content in an `AGENTS.md` that `CLAUDE.md` imports are the same thing.** The delta `AGENTS.md` buys is
-that *other* tools can read it — and today, on this repository, no other tool does.
+**Rejected: both formats, disjoint content.** This is what revision 2 proposed. It survives only if
+nothing is restated — and §1.3's purpose blockquotes mean the restatement is already there before the
+first new file is written.
 
-**Decision: proceed, on optionality and standards-compliance, not on a capability gain.** `AGENTS.md`
-is the Linux Foundation-stewarded filename that 30+ agents read; putting the content there costs one
-import line per directory and means the day someone runs Codex, Cursor or a credited Devin against
-this repo, the instructions are already in the file those tools look for. That is a real benefit. It
-is a *future* benefit, and this section says so rather than dressing it up as a present one.
+## D-2 — The one-line change that is the whole present-day win
 
-**A reviewer who does not want to pay for optionality should decline at this section**, and the
-plan is arranged (D-2) so that declining the bulk still leaves the one change worth making.
-
-## D-2 — The one line that is the entire present-day win
-
-**Decision.** Root `CLAUDE.md` gains `@AGENTS.md` as its first line. This ships independently of
-everything else and is Phase 1 on its own.
+**Decision.** Root `CLAUDE.md` gains `@AGENTS.md` as its first line, and `pyproject.toml:244` gains
+`"**/AGENTS.md"`. This is Phase 1, ships alone, and is worth shipping alone.
 
 The repository has a **403-line root `AGENTS.md`** and **zero `@` imports in any of its nine
-`CLAUDE.md` files**. By the loading rules in D-3, that file is read by nothing. It has been
-maintained, cited by tests and by `AGENTS.md`-referencing docstrings across the tree, and it has never
-been loaded.
+`CLAUDE.md` files**. That file is read by nothing. It is maintained, cited by tests and by docstrings
+across `src/`, and has never loaded. One line fixes that and simultaneously makes the tool-neutral
+standard file this repo's public agent surface — which is the whole standards-compliance goal, achieved
+once rather than 41 times.
 
-One line makes 403 lines of existing, already-written instruction live for the first time. Nothing
-else in this plan comes close on value per unit of work, and it is why the phases are ordered so that
-a reviewer can take Phase 1 and stop.
+Confirmed empirically: the session that authored this plan received `CLAUDE.md`'s contents in its
+instruction payload and not `AGENTS.md`'s.
 
-**Empirical confirmation, from this session.** The instruction payload for the session that wrote this
-plan carried the contents of `CLAUDE.md` and **not** `AGENTS.md`. Revision 1 listed observing that as
-Phase 0.2, still to be done; it was already done, in the act of writing.
+## D-3 — Reachability: nested `AGENTS.md` discovery is off, not shadowed
 
-## D-3 — Reachability, corrected: nested discovery is off, not shadowed
+The documented rule: Claude reads `AGENTS.md` "only when you have no `CLAUDE.md` in your working
+directory **or above it**", and the nested-subdirectory bullet sits **inside** that "when none count"
+block. A root `CLAUDE.md` counts for every directory beneath it.
 
-Revision 1 said the eight directories holding a `CLAUDE.md` are "exactly the directories where a
-sibling `AGENTS.md` would otherwise be shadowed". **That is backwards.**
+So with one present, no `AGENTS.md` in this tree is auto-loaded at any depth, and the only load path is
+an `@AGENTS.md` from a `CLAUDE.md` in the same directory. Revision 1 called those eight directories
+"where `AGENTS.md` would be shadowed"; they are the only places it could load at all. Revision 3 uses
+that fact to stop putting files where they cannot be read.
 
-The documentation's rule reads: "Claude reads `AGENTS.md` only when you have no `CLAUDE.md` in your
-working directory **or above it**", and the nested-subdirectory bullet — "a subdirectory's
-`AGENTS.md`, when Claude opens a file there … and that subdirectory has none of the three `CLAUDE.md`
-files of its own" — sits **inside** the "when none count" block.
+The `claude-md-and-agents-md` setting would change this, but it is **ignored in project and local
+settings files** — user or managed scope only — so it cannot be a repository decision. A symlink is
+rejected on this repo's own Windows history: the docs warn it needs Administrator or Developer Mode and
+that git checks a committed one out as plain text without `core.symlinks`.
 
-A root `CLAUDE.md` counts, being above every subdirectory. So with one present:
+## D-4 — The F-008 freeze, handled rather than tripped over
 
-- **nested `AGENTS.md` auto-discovery is off entirely**, everywhere in the tree;
-- the only load path for a nested `AGENTS.md` is an explicit `@AGENTS.md` from a `CLAUDE.md` **in
-  that same directory**.
+`.claude/workforce.yaml` sets `frozen_paths: [src/mousedroid/arm/**]`, gated on `F-008`, whose
+`features.yaml` status is `todo`. `.claude/settings.json` wires `freeze_gate` as a PreToolUse hook on
+`Write|Edit|MultiEdit|NotebookEdit`. Every write under that path is denied.
 
-**Consequence that reshapes the scope.** Those eight directories are not where `AGENTS.md` is
-shadowed — they are the **only** places a nested `AGENTS.md` can load at all. In the other 33
-packages it is unreachable, and making it reachable would mean adding a `CLAUDE.md` stub per package
-purely to import a sibling: two files where one would do, for content Claude would read either way.
+Revisions 1–2 scheduled two write tasks there — add an import to `src/mousedroid/arm/CLAUDE.md`, author
+`arm/AGENTS.md` — while citing the freeze notice two sections away. That is the same failure mode this
+whole plan is about: knowing a fact and not connecting it to the work.
 
-That is the argument against a per-package `AGENTS.md`, and it is mechanical rather than aesthetic.
+**Decision.** `arm` needs no new file (it already has a `CLAUDE.md`), so revision 3 has nothing to
+write there. Its one known defect — `src/mousedroid/arm/CLAUDE.md:19` names `mock_arm.py` where the
+file is `src/mousedroid/arm/hardware/mock_arm_driver.py` — is recorded as a **declared exemption in the
+D-5 gate**, with F-008 as the reason. The gate is not weakened to pass; the exemption is enumerated,
+and it lapses when the freeze does.
 
-## D-4 — Scope: 8 + 1, plus a generated map for all 41
+**Rejected: `MOUSEDROID_WORKFORCE_ALLOW_FROZEN=1`.** The override exists for reviewed exceptional
+edits. A stale filename in a doc is not exceptional, and using the override to fix documentation would
+set the precedent that the freeze yields to convenience.
 
-| surface | scope | why that scope |
-|---|---|---|
-| `AGENTS.md` | the **8** directories that hold a `CLAUDE.md` | the only directories where D-3 permits it to load |
-| `tests/CLAUDE.md` + `tests/AGENTS.md` | **1** more pair | `tests/` is high-traffic and has no `CLAUDE.md`, so its `AGENTS.md` needs a one-line importer or it is dead |
-| `docs/architecture/package-map.md` | **all 41** packages, generated | answers "every folder" at zero agent-token cost, and cannot drift |
+## D-5 — Gate the `Key Files` lists, by generalising a gate that already works
 
-**`tests/` was a defect in revision 1.** The nine-file set included `tests/AGENTS.md` while
-`tests/CLAUDE.md` does not exist — so under D-3 that file would have been dead on arrival. The
-plan that exists to stop unreadable documentation was about to ship some. It is now an explicit pair,
-or it is dropped; task 2.6 forces the choice rather than leaving it implied.
+**Decision.** Extend `tests/regression/test_doc_reconciliation_aqa.py::test_orchestrator_claude_md_names_only_real_symbols`
+(`:191`) from one file to **every** nested `CLAUDE.md`.
 
-**Why generated for the 41.** A hand-written folder description rots, and the 16 `agent.md` files are
-the proof — their `Key Files` lists are the part that rotted. A map built from `ast`-parsed imports
-states what each package actually depends on and who depends on it, regenerates in CI, and is diffed
-so a stale one fails. 40 of the 41 packages already carry an `__init__.py` docstring to source the
-purpose line from; only `src/mousedroid/telemetry` lacks one, so the generator's fail-closed rule has
-exactly one pre-existing case to fix.
+That test already does exactly the right thing for `orchestrator`: it asserts each named symbol
+resolves to a real `class`/`def` in its mapped file, and that two named phantoms are absent. It is the
+repository's only content gate on a nested surface. Generalising it is cheaper than inventing a gate and
+strictly better than the alternative revisions 1–2 chose, which was to leave the 8 existing `Key Files`
+lists ungated while adding a 9th surface beside them.
 
-## D-5 — No rename, on measured grounds
+It catches the two known-stale entries immediately: `src/mousedroid/llm_gateway/CLAUDE.md:26`
+(`mock_gateway.py`, does not exist) and `src/mousedroid/arm/CLAUDE.md:19` (`mock_arm.py`, wrong path).
+The first is fixed; the second is the D-4 exemption.
 
-The tidiest-looking option is to rename each nested `CLAUDE.md` to `AGENTS.md` and leave a one-line
-`CLAUDE.md` importing it: content in the tool-neutral file, no duplication, standard-compliant.
+**It also catches a third defect nothing else would:**
+`src/mousedroid/llm_gateway/CLAUDE.md:20-21` requires `LLMConfig.fallback_backend` to "target local
+backends (e.g. `mock`, `ollama`)" — and `src/mousedroid/config/schema/llm.py:157` permits only `none`,
+`llama_cpp`, `openai_compatible`. **Neither named value is legal.** Revision 1 recorded this and
+revision 2 silently dropped it; the gate makes dropping it impossible.
 
-**Rejected, measured.** The eight paths are referenced ~25 times: root `CLAUDE.md`'s Surface Map (8),
-`docs/claude/surfaces/README.md` (8), `CHANGELOG.md` (4),
-`src/mousedroid/config/schema/hardware.py` (1), `scripts/validations/F-031.sh` (1), three openspec
-bundles, and a path-specific test
-(`test_doc_reconciliation_aqa.py::test_orchestrator_claude_md_names_only_real_symbols`). Live
-references could be updated; `CHANGELOG.md` and the openspec bundles are **historical records** and
-rewriting them to match a later rename is the kind of retroactive edit this repository has
-consistently refused.
+## D-6 — The generated package map, and what it honestly describes
 
-So the eight `CLAUDE.md` contracts stay where they are, under their current names, and `AGENTS.md`
-lands beside them holding different content (D-7).
+**Decision.** `scripts/generate_package_map.py` emits `docs/architecture/package-map.md`: one section
+per package with a purpose line from its `__init__.py` docstring, its imports, its dependents, and a
+mermaid subgraph — all from the `ast`-parsed import graph.
 
-## D-6 — Diagrams belong in the generated map, not hand-written per file
+**Two corrections to revision 2's version of this, both from review:**
 
-Revision 1 asked for one hand-drawn `flowchart` per `AGENTS.md`, gated by a check that "every fence
-parses and renders".
+1. **`TYPE_CHECKING` imports are filtered out.** They are import statements, not dependencies. Three
+   live cases sit in the exemplar package alone — `src/mousedroid/world_model/cfc_cell.py`,
+   `checkpoint_migration.py`, `dual_stream_rssm_onnx.py` — and without the filter the map would assert
+   a `world_model → telemetry` edge that exists only for type checking.
+2. **It is labelled an import map, not a dataflow map.** Revision 2 claimed "a diagram cannot be
+   wrong, because it is derived from the imports it depicts". The derivation is sound; the *relation*
+   is not the one a folder description wants. In a factory-first DI codebase they diverge by design —
+   `factory` has 35 outbound package edges and `config` 33 inbound because invariants 1–2 require it,
+   and the real runtime seams run through injected Protocols that `ast` cannot see. So the map states
+   what imports what, accurately, and says that is what it states.
 
-**That gate does not exist and is not cheap to build.** There is no `mermaid` or `mmdc` reference in
-`pyproject.toml`, `.github/workflows/ci.yml`, `scripts/ci.sh` or the `Makefile`, and no Python mermaid
-parser is installed. Implementing it means adding a Node toolchain to a Python-only CI — a
-substantially larger change than a plan task, presented as a one-liner.
+**Still no renderer.** Nothing in `pyproject.toml`, `.github/workflows/ci.yml`, `scripts/ci.sh` or the
+`Makefile` references `mermaid` or `mmdc`, and no Python parser is installed. Correctness comes from
+the generator's unit tests against a fixture tree, and one regenerate-and-diff test covers all 41
+sections.
 
-**Decision: the generator emits every diagram.** `scripts/generate_package_map.py` builds each
-package's dependency subgraph from the parsed import graph and writes the fence. Three properties
-follow that hand-drawing cannot match:
+**Sized, not guessed:** 41 packages and 221 directed package edges estimate to ~34 KB, so the map
+**splits per epic** from the start rather than leaving a fork in the deliverable.
 
-1. **A diagram cannot be wrong**, because it is derived from the imports it depicts.
-2. **One golden-file test covers all 41** — regenerate and diff — instead of 41 unvalidated fences.
-3. **No renderer is needed.** Correctness comes from the generator's own unit tests over a fixture
-   package, not from rendering.
+## D-7 — Assertions that hold on `test-windows`
 
-The nine hand-written `AGENTS.md` carry no diagram. They are instruction files under a tight line cap
-(D-9); a diagram there would be prose the generator already produces, better, elsewhere.
+`.gitattributes` is **absent**, so a CRLF checkout changes every file's byte count, and
+`.github/workflows/ci.yml` runs `tests/regression` on `test-windows`.
 
-This satisfies "with mermaid" more strongly than revision 1 did: 41 diagrams that are provably
-accurate, rather than 9 that nothing checks.
+**Decision.** No byte-exact assertion anywhere in this change. Size checks are line counts. The
+regenerate-and-diff test normalises line endings and path separators before comparing. Revision 2 had
+three byte-exact assertions and rejected symlinks *specifically* on this repo's Windows history without
+applying the same lesson to its own tests.
 
-## D-7 — Division of labour: purpose versus contract
+## D-8 — No rename, measured
 
-| file | answers | changes when |
-|---|---|---|
-| `AGENTS.md` | *What is this folder for? What flows in and out?* | the architecture changes |
-| `CLAUDE.md` | *What must never be weakened here?* — numbered invariants, freeze notices | a contract changes |
+Renaming the eight nested `CLAUDE.md` to `AGENTS.md` would touch **43 occurrences across 17 files** (40
+excluding this bundle): the root Surface Map, `docs/claude/surfaces/README.md`, `CHANGELOG.md`,
+`progress.md`, `src/mousedroid/config/schema/hardware.py`, `scripts/validations/F-031.sh`, four openspec
+bundles, and a path-specific test. Revision 2 said "~25"; the number in a row it marked verified was
+off by 15. `CHANGELOG.md` and the openspec bundles are historical records.
 
-The eight nested `CLAUDE.md` contracts are not rewritten. `src/mousedroid/world_model/CLAUDE.md`'s
-numbered invariants, `src/mousedroid/telemetry/CLAUDE.md`'s success-path-recording rule and
-`src/mousedroid/arm/CLAUDE.md`'s F-008 freeze notice stay authoritative.
+## D-9 — Where the persona content goes
 
-**The rule that stops drift:** an invariant is stated in exactly one file. `AGENTS.md` may *point* at
-a contract, never restate one. Revision 1 proposed gating this with a substring check (task 3.6);
-paraphrase defeats that, so it is now a review item in the skill rather than a gate that would be
-worked around — recorded as a deliberate downgrade, not dropped silently.
+The 16 `agent.md` are persona prompts. Personas belong in `.claude/agents/`, where 7 live under a
+validated contract (`max_lines: 60`, required frontmatter, bare tool names —
+`tests/regression/test_claude_workforce_aqa.py:182`). Each `agent.md` splits: folder-purpose half into
+the sibling `CLAUDE.md` (new for the 9, already present for the 5 that have both); persona half
+promoted only where it earns a definition.
 
-## D-8 — Where the persona content goes
+**Only one reference actually breaks a delete.** Revision 2 claimed three.
+`tests/regression/test_doc_reconciliation_aqa.py:46` puts `tests/agent.md` in `_SRC_COVERAGE_DOCS` and
+`read_text()`s it at `:130` — that one breaks. The other two are **docstring prose**:
+`src/mousedroid/skills/loaders.py:7,103` describe behaviour that keys off absent front matter and name
+no file, and `tests/regression/test_ci_gate_wiring_aqa.py:825` sits in a docstring that says the roster
+is now sourced from `git ls-files`.
 
-The 16 `agent.md` files are persona prompts — *"You are the **World Model Architect**"* — which is
-neither folder documentation nor the build/test guidance `AGENTS.md` is for. Personas belong in
-`.claude/agents/`, where 7 already live under a validated contract (`max_lines: 60`, required
-frontmatter, bare tool names; `tests/regression/test_claude_workforce_aqa.py:182-257`).
+## D-10 — What this deliberately does not do
 
-Each `agent.md` is **split**: folder-purpose half into the sibling `AGENTS.md` where one of the nine
-exists, otherwise into the package's `__init__.py` docstring, which D-4's generator reads; persona
-half evaluated against the existing seven and promoted only where it earns a definition. Fourteen
-near-identical "you are the X architect" stubs do not each warrant a subagent.
-
-**Not deleted blind:** three are referenced by live code and tests
-(`tests/regression/test_doc_reconciliation_aqa.py:46`,
-`tests/regression/test_ci_gate_wiring_aqa.py:825`, `src/mousedroid/skills/loaders.py:7,103`).
-
-## D-9 — Token budget, and the delete test as a gate
-
-**Decision.** Each of the nine `AGENTS.md` is capped at **30 lines** — lower than revision 1's 40,
-because D-6 removed the diagram those lines were reserved for — and every line must pass: *would a
-competent developer who had never seen this repo get this wrong?*
-
-Current practice puts these files under ~150 lines and names architecture description as the
-anti-pattern; reported measurements have auto-generated files at ~3% *lower* task success for >20%
-more inference cost. The 16 existing `agent.md` files are the worked example of the failure: each
-repeats "Protocol-based DI", "no hardcoded values", "structlog not print()" — all three already in the
-root `CLAUDE.md`, and the third already enforced by `ruff` `T20`.
-
-**The cap is measured, not asserted.** Drafted against `src/mousedroid/world_model` — the hardest
-case, carrying two engines and the most behaviour — the shape below comes to **25 lines**, so 30 has
-five lines of headroom on the worst package. This is the reference shape Phase 3 authors against:
-
-```markdown
-# world_model
-
-Latent dynamics and planning. Encodes a sensor bundle into a latent state, rolls that state
-forward without rendering pixels, and hands the planner a scored action.
-
-## What flows through
-
-- **In** — `SensorBundle` from `sensing`, built against dimensions in `config.WorldModelConfig`.
-- **Out** — a latent `(z, h)` pair to `mcts`, an `Action` to `orchestrator`, and an
-  observe-step histogram to `telemetry` through an injected `ObserveStepLatencySink`.
-
-## Packages this speaks to
-
-`sensing` and `config` upstream; `orchestrator` and `telemetry` downstream. Concrete engines are
-constructed only in `factory.world_model` — nothing here imports a concrete type.
-
-## Engines
-
-`engine: torch` is the shipped default and builds a plain `RSSM`, because no overlay sets
-`model.cfc_hidden_dim > 0`. `onnx_trt` builds a `CompositeWorldModel` and requires both a locally
-exported artifact and that dimension.
-
-## Invariants
-
-Numbered contracts live in `CLAUDE.md` in this directory. They are not restated here.
-```
-
-Note what it does not contain: no `Key Files` list (the section that rotted in all 16 `agent.md`
-files), no restated invariant, no diagram, and nothing a competent developer would already do.
-
-## D-10 — Three ways this change could do harm, closed in Phase 1
-
-1. **`pyproject.toml:244` gains `"**/AGENTS.md"`.** The exclude list is
-   `["**/CLAUDE.md", "**/agent.md"]`, with a comment naming the harm: without it the wheel ships
-   internal agent instructions to PyPI. Revision 1 would have added files under `src/mousedroid/` and
-   shipped every one. A test asserts all three patterns, so the next agent-facing filename cannot slip
-   through either.
-2. **`src/mousedroid/agents/` is scanned by the skill loader** (`harness_mcp.py:394` defaults
-   `markdown_agent_dirs` there and the loader globs `*.md`). It is not one of the nine, and a test
-   pins that it stays out.
-3. **The root `AGENTS.md` may not grow.** At 23,125 bytes it is already 1.16× `doc_hygiene.py`'s
-   20,000-byte budget, and widening that gate is deferred precisely because files like it would fail.
-   This change may shrink it; it may not grow it.
-
-## D-11 — What this deliberately does not do
-
-- **No `AGENTS.md` in the 33 packages without a `CLAUDE.md`.** D-3: unreachable without a second file
-  per package. Their folder documentation is the generated map.
-- **No rename of the eight contracts.** D-5, measured.
-- **No hand-drawn diagrams and no renderer in CI.** D-6.
-- **No `.claude/rules/` migration.** Path-scoped rules load alongside `AGENTS.md` and would suit some
-  cross-cutting content, but a third surface triples the review burden here. Recorded as follow-up.
-- **No toolchain floor.** The import path works on any version; native `AGENTS.md` reading needs
-  v2.1.277+ and nothing here requires it.
-- **No audit of the root `AGENTS.md`'s 403 lines.** Phase 1 makes it load, which makes its known
-  staleness (two references to `CLAUDE.md` sections that do not exist; a subagent count of 8 against
-  an actual 7) live rather than dormant. Those specific rows are fixed; a full audit is its own change.
+- **No new `AGENTS.md` outside the root.** D-1, D-3.
+- **No write under `src/mousedroid/arm/**`.** D-4.
+- **No rename of the eight contracts.** D-8.
+- **No hand-drawn diagrams, no renderer in CI.** D-6.
+- **No claim that `tools/doc_hygiene.py` enforces a budget on these files.** It is invoked against
+  `NEXT_STEPS.md` only (`Makefile:143`, `ci.yml:421`, `scripts/ci.sh:65`, pinned by
+  `test_f038_aqa.py:62-63`). Its 20 KB default is a **reference figure** for judging size, not a gate
+  that applies here. Revisions 1–2 wrote "over budget" as though something enforced it.
+- **No `.claude/rules/` migration**, and **no audit of the root `AGENTS.md`'s 403 lines** beyond the
+  contradictions Phase 1 makes live.

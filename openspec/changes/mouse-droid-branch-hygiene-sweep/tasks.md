@@ -1,28 +1,120 @@
 # Tasks: `mouse-droid-branch-hygiene-sweep` (F-052)
 
-**Revision 2**, written after PR #233 squash-merged this bundle as `992da04`. Revision 1 was
-authored against `b0759da`; PR #234 landed in between. Task ordering within a slice is binding: each
-task lands green before the next starts. Deviations from task wording are recorded inline — declared,
-not silent.
+**Revision 3**, after an adversarial re-verification at `992da04` found six blocking defects in
+revision 2 — including a diagnosis that was simply wrong, in a plan that had already merged. Ordering
+within a slice is binding. Tasks marked **[LANDED]** were executed while authoring revision 1 and are
+re-verified below; **one of them was false and is unmarked.**
 
-Tasks marked **[LANDED]** were executed while authoring revision 1, because they were confirmed
-security defects in code that branch introduced. **Re-verified in the merged tree at `992da04`:** the
-validator rejects all four payload classes (tab, single backslash, glob, and the raw-boundary set), 12
-`_Q` references are present, and the 47 guard tests pass. The `[LANDED]` claims are real, not
-aspirational.
+## Revision 3 — what the re-verification overturned
 
-### Post-merge status of the plan's premises, re-verified at `992da04`
+### 1. BLOCKING: tasks 4.15/4.16 were wrong. It is slow, not hung — reproduced.
 
-| premise | still true? |
-|---|---|
-| All five reclaimable `hardcoded_ok` markers still present | yes — `src/mousedroid/comms/_utils.py:23,26`, `src/mousedroid/comms/command_set.py:68,71`, `src/mousedroid/validation/latency_stats.py:30` |
-| Budgets still at ceiling (19/19, 8/8, 26/26) | yes — `python -m tools.ratchet_budgets` |
-| `mypy --strict` clean | yes — 424 source files, after PR #234 added code |
-| Exactly 3 `C901` offenders in `scripts/` at the repo ceiling | yes |
-| `ruff NPY` clean across `src/` and `training/` | yes |
-| `test-windows` window closes 2026-09-19, checker warns from 2026-09-20 | yes — `since: 2026-08-20` + 30 days; the checker's comparison is strict `>` |
+Revision 2 claimed a full-tree `pytest` sweep "blocks indefinitely in `ep_poll` … with system CPU at
+0%, so it is hung, not slow." **Refuted by direct reproduction:**
 
-Nothing in the "Verified clean — do not churn" table of `proposal.md` §6 has gone false.
+```
+python -m pytest tests/integration/test_e2e_5sec_run.py --timeout=40 --timeout-method=thread
+-> mcts_planning budget=50 ... mcts_plan_complete n_simulations=50   (7-13 s per plan() call)
+-> repeated, making progress the whole time
+```
+
+It is **CPU-bound in MCTS rollout** (`world_model/mcts.py::_rollout` -> `rssm.py::imagine_step` ->
+`torch _VF.gru_cell`), not blocked on a selector. Three ways the original evidence was misread:
+
+- `ep_poll` is what an asyncio selector shows when sampled *between* callbacks. It is the normal
+  resting state of the loop while a tick body computes.
+- My per-process CPU sampler had a bug: `ps -eo pid --no-headers | head -60` takes the first 60 PIDs
+  in numeric order, and pytest was PID 17208 — **it was never sampled.**
+- `tests/integration` is **step 1 of `make test`** (`Makefile::test-cov`) and CI's `test` job mirrors
+  it, so this file runs in a blocking gate today. Revision 2's "no gate executes that selection" was
+  wrong; the only tier a full sweep adds is `tests/performance`.
+
+**Corrected task:** the integration tier is minutes-per-test on CPU-only hosts. Either mark these
+`slow` or shrink the MCTS budget in the mock config. **Do not bisect a deadlock that does not exist.**
+4.16 is deleted — it existed only to propagate 4.15's conclusion.
+
+### 2. BLOCKING: task 6.13a was marked `[LANDED]` and is false; the same merge shipped a seventh site.
+
+6.13a claimed six "bind-mounted from the host" sites corrected and "both halves are now closed."
+**`CHANGELOG.md:19` still reads** *"`docker-compose.jetson.yml` bind-mounts the default location from
+the host, so it outlives the image"* — in an operator-facing `### Security` entry, while
+`docker-compose.jetson.yml:130` uses the named volume `mousedroid_tensorrt_cache`. Also open:
+`src/mousedroid/efficiency/tensorrt.py:191` needs a contextual read to decide whether it is an eighth.
+
+**This is the worst class of defect here**, because a `[LANDED]` marker stops a later pass from
+checking. **6.13a is unmarked.** Its replacement is not a prose sweep but a regression test: no tracked
+file may pair "bind-mount" with "tensorrt_cache".
+
+### 3. BLOCKING: `proposal.md` A-4's evidence is false, and task 1.8 contradicts it.
+
+A-4 said "the only two occurrences in the repo are `# shellcheck disable=SC2086` directives".
+**Actual: 19 `shellcheck disable` directives across 10 files** — `scripts/prove_pin_fails.sh` alone has
+9, and `scripts/rover_wip_guard.sh:124` carries the `SC2064` disable **task 1.8 cites by name.**
+
+The true form is stronger: *shellcheck is invoked by no gate despite 19 inline, rule-specific
+suppressions across 8 scripts that assume it runs.* It also means `peer-review.md`'s "nobody has run
+it" is wrong, and §4's "any suppression declared inline and counted" starts from 19, not 0.
+
+### 4. BLOCKING: task 2.2 is impossible as written.
+
+`scripts/check_advisory_promotions.py::find_advisory_jobs` records only **job-level**
+`continue-on-error: true`. A step-level one inside the blocking `lint` job is invisible, so an
+`advisory_stages.yaml` entry immediately trips the checker's "stale metadata" branch — a contract
+`tests/regression/test_ci_gate_wiring_aqa.py:305-311` pins verbatim. **shellcheck needs its own job**
+with job-level `continue-on-error`, or no tracker entry.
+
+### 5. BLOCKING: task 2.7 misses two surfaces.
+
+Beyond the three pins it names: `tests/unit/scripts/test_check_branch_coverage_base_ref.py:487`
+(`test_is_exempted_from_branch_gate_matches_prefix_precisely`) asserts **positively** at `:511` that
+`_lifecycle_mixin.py` is exempt, and its docstring at `:495` explains why (ADR-017's measurement). And
+`scripts/validations/F-042.sh` runs that whole file, so F-042's declared evidence chain goes red too.
+
+**Also: 2.4-2.7 buy zero measured coverage now.** `tests/unit/orchestrator/test_world_model_warmup.py`
+is 367 lines / 22 tests covering every branch of `_warm_world_model()`, and D-1 itself admits the gate
+is diff-scoped and "today's diff would pass." The real benefit is future edits to a 683-line mixin —
+and removing the exemption **reverses ADR-017 and F-042's recorded decision**, which needs an ADR
+amendment the bundle tasks for a smaller change (6.12) and not for this one. State the honest benefit
+or cut the slice.
+
+### 6. BLOCKING: task 0.1 reverses the recorded F-030 decision.
+
+The arithmetic is right (26 -> 23 -> 21, independently re-derived). The rationale is not.
+`.claude/workforce.yaml:116-121` records the 24->28 bump as fixing *"inconsistent treatment of the same
+kind of value"* — `ESP32_CMD_TYPE_*` constants were unmarked while identical vendor-protocol constants
+carried markers. Task 0.1 strips `ESP32_CMD_TYPE_VELOCITY` (=1) and `_STOP` (=0) while
+`_BATTERY` (=2) **must** keep its marker, because 2 is not in `ALLOWED_NUMERIC_VALUES`. That recreates
+the exact inconsistency the bump removed, inside a phase arguing "the discipline working."
+
+**Corrected:** take only the two `1000.0` markers (26 -> 24, ratchet to 24/22). Or delete all four
+protocol markers and record F-030's note as superseded. Do not silently invert it.
+
+### Non-blocking corrections, all landing in the same edit
+
+| # | wrong | right |
+|---|---|---|
+| 7 | "`local-gates` installs those deps, so the comment is stale" | identical install to `test` (`ci.yml:399` vs `:222`). The real barrier is `timeout-minutes: 20` against the whole unit+property+integration selection |
+| 8 | "all 23 CI jobs are green" | **17** jobs; 23 is check-runs after matrix expansion |
+| 9 | "70 tasks across 9 phases" | **92** |
+| 10 | task 7.2 would make the streak count accurate | enforcement is zero three times over: the step lives in the advisory `vulture-audit` job, has no `actions: read` permission, and runs without `--strict`. Fix those first or 7.2 is motion without effect |
+| 11 | "`prometheus-check` then validates it" | `promtool check rules` validates YAML shape and PromQL only, and is skipped entirely if its install fails. Pair 6.1 with a test asserting every metric in `alerts.yml` appears in `registry.render_prometheus()` |
+| 12 | "`test-windows` window closes 2026-09-20" | the 30-day window **elapsed 2026-09-19**; the checker's strict `>` defers the WARN to 2026-09-20 |
+| 13 | every open `deploy_remote.sh` line number | stale by ~14 lines after 1.1-1.6 landed (`:316`->`:330`, `:211`->`:225`, `:395,430`->`:410,447`). **Cite by symbol**, per the repo's own convention |
+| 14 | "`openspec/project.md:24`" in task 6.14 | `:24` is now this bundle's own row. Cite by change-id |
+| 15 | four citations off by a few lines | `config.py:339-341`->`:335-337`; `workforce.yaml:68`->`:65`; "13 env keys"->**14**; `_lifecycle_mixin.py:97-160`->`:97-145` |
+| 16 | `test_deploy_remote_guard.py` "607 lines"; "9,036 lines" of bash | **703**; **9,053** |
+
+### What survived, and it is most of the bundle
+
+Every row of `proposal.md` §6's "do not churn" table reproduces at `992da04`, independently re-run:
+`mypy --strict` clean over 424 files, `ruff NPY` clean, exactly 3 `C901` offenders in `scripts/`, 58
+`.sh` files all `bash -n` clean, 22 validation commands resolving, all 7 config fields carrying
+`Field(default=…, description=…)`.
+
+Every §2 finding except A-4 holds exactly: A-1 (no workflow invokes `check_branch_coverage.py`), A-6,
+A-7, B-1 through B-4, C-1 through C-4, D-3. Tasks 1.1-1.6 **are** genuinely landed — only their line
+numbers are stale. Phase 0's five markers and the `config.py` fallback mismatch are all confirmed.
+D-1's `_GATED_ORCHESTRATOR_FILES` mechanism is sound; it is incompletely tasked, not wrong.
 
 ---
 
@@ -290,26 +382,13 @@ Each was verified by driving the real script, not by reading it.
   the feature's declared evidence chain excludes its only behavioural test.
 - [ ] 4.13 Make `test_no_payload_ever_executed`'s canary `tmp_path`-scoped. The fixed
   global path makes it order-dependent and wrong under `pytest-xdist`.
-- [ ] 4.15 **A single full-tree `pytest` invocation hangs, and no CI job would ever catch it.**
-  `python -m pytest tests/ -m "not hardware"` blocks indefinitely in `ep_poll` — an
-  asyncio wait — with system CPU at **0%**, so it is hung, not slow. Reproduced twice
-  (~18 min and ~55 min, neither completed). Every tier passes *individually*:
-  `make regression` 1958, the unit tier 1013, `make gates` green. CI is green too, because
-  CI never runs that command: `make test` is four scoped invocations (`test-cov`,
-  `regression`, `smoke`, `behaviour`) and the workflow mirrors those four. So the hang
-  lives in the combination a single sweep creates, and there is no gate that executes that
-  selection. Known: the hung process had `zeroconf` (including `_services.browser`) and
-  `aiohttp` extension modules loaded, and the last output before the stall was
-  `tests/integration/test_e2e_5sec_run.py .FFF.FF`.
-  **Not yet known: which test.** The `faulthandler` dump on `SIGABRT` would have named it,
-  and the frames were lost to a `tail -25` in the author's own command — so step one is to
-  reproduce without piping, with `-p no:randomly` and `--timeout`, and bisect by tier
-  combination. Do not add the sweep to CI until the hang is found; add it after, so the
-  gate lands green.
-- [ ] 4.16 Consequence of 4.15 for the PR body and for any doc that cites it: a Testing
-  section quoting `python -m pytest tests/ -m "not hardware"` documents a command that
-  does not reliably terminate on this tree. Cite the four `make test` steps, which are
-  what CI runs.
+- [ ] 4.15 **The integration tier is minutes-per-test on a CPU-only host.** Revision 2 called this a
+  deadlock; it is not — see Revision 3 §1. Reproduced: `tests/integration/test_e2e_5sec_run.py` logs
+  `mcts_plan_complete n_simulations=50` every 7-13 seconds, making progress throughout, CPU-bound in
+  `world_model/mcts.py::_rollout` -> `rssm.py::imagine_step` -> torch `_VF.gru_cell`. It runs in a
+  **blocking** gate today (step 1 of `make test`), and passes in CI because CI runners are faster.
+  Fix: mark the affected tests `slow`, or shrink the MCTS budget in the mock config so a 5-second
+  simulated run does not need 50 simulations per tick. Do **not** bisect for a hang.
 - [ ] 4.14 Add a unit test for `resolve_config`'s fail-closed branch
   (`scripts/analyze_observe_step_ceiling.py:740-747`): no test passes `--config` a
   nonexistent path, and that guard is what stops the gate computing a valid-looking
@@ -392,12 +471,10 @@ Each was verified by driving the real script, not by reading it.
   `_model_fingerprint` half open") was **wrong by the time it was written** — base PR #234
   landed `_runtime_identity()` and `cache_dir_is_private` and closed that half, while
   annotating D-25 and D-26 but not D-7. Both halves are now closed and the row says so.
-- [x] 6.13a **[LANDED]** Six sites said the cache directory is "bind-mounted from the host"
+- [ ] 6.13a **UNMARKED — was falsely [LANDED].** A seventh site survives: `CHANGELOG.md:19` Six sites said the cache directory is "bind-mounted from the host"
   — false on the merged tree, since F-051 replaced that with the named volume
   `mousedroid_tensorrt_cache`. Two are operator-facing (`JetsonConfig.tensorrt_cache_dir`'s
-  `description=`, `cache_dir_is_private`'s docstring). A semantic merge conflict with **zero
-  file overlap**: `git merge` had nothing to flag, because the base's new prose and this
-  branch's compose change are only inconsistent together.
+  `description=`, `cache_dir_is_private`'s docstring). A semantic merge conflict with **zero file overlap**. Revision 2 claimed all six were closed; `CHANGELOG.md:19` — an operator-facing `### Security` entry — still says `docker-compose.jetson.yml` bind-mounts the default location from the host, while `docker-compose.jetson.yml:130` uses the named volume. Replace the prose sweep with a regression test: no tracked file may pair "bind-mount" with "tensorrt_cache". Also read `src/mousedroid/efficiency/tensorrt.py:191` in context — it may be an eighth.
 - [ ] 6.13b Verify the interaction the merge created rather than assuming it: Docker creates
   a named volume root-owned `0755`, and `cache_dir_is_private` treats group/other-reachable
   as a MISS. Reading `_save_sync` shows it does `mkdir(mode=0700)` **plus** an explicit

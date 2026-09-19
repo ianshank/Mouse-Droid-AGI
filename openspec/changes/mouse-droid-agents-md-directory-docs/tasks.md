@@ -1,156 +1,145 @@
 # Tasks: `mouse-droid-agents-md-directory-docs` (F-053)
 
-**Revision 2.** Re-scoped after review found three load-bearing claims in revision 1 wrong; see
-`peer-review.md`. Task ordering is binding: each lands green before the next starts. Deviations from
-task wording are recorded inline — declared, not silent.
+**Revision 3.** Re-scoped after review; see `peer-review.md`. Ordering is binding **within a phase**,
+and each phase leaves the tree green — revision 2 declared ordering binding and then scheduled three
+tasks that were red until a later phase, so the rule now says what it means.
 
-**Phase 1 ships alone and is worth shipping alone.** If the rest of this plan is declined, Phase 1
-should still land: it is one import line plus one exclude pattern, and it makes 403 lines of existing
-instruction load for the first time.
+**Phase 1 ships alone and is worth shipping alone.**
 
 ---
 
-## Phase 1 — Make the existing `AGENTS.md` load, and stop the wheel shipping it
+## Phase 1 — Make the root `AGENTS.md` load, and keep it out of the wheel
 
 - [ ] 1.1 Add `"**/AGENTS.md"` to `pyproject.toml:244`'s wheel `exclude`, plus a test asserting all
-  three agent-facing patterns are present. Today the list is `["**/CLAUDE.md", "**/agent.md"]`. First,
-  because it is the only task whose omission does harm outside this repository.
-- [ ] 1.2 Add `@AGENTS.md` as the first line of the root `CLAUDE.md`. Bare, not backticked — `@path`
-  parsing skips code spans, so `` `@AGENTS.md` `` imports nothing.
-- [ ] 1.3 Fix the known staleness that this makes live. Phase 1 means root `AGENTS.md` and root
-  `CLAUDE.md` load together, so contradictions stop being dormant: `AGENTS.md` points twice at
-  `CLAUDE.md` sections that do not exist ("Test surface mirror", "Live deployment + CI-gate
-  contracts"), and says "any of the other five" subagents where `.claude/agents/` holds 7 and
-  `SKILLS.md` says 7.
-- [ ] 1.4 Assert the root `AGENTS.md` does not grow. 23,125 bytes against `doc_hygiene.py`'s 20,000;
-  widening that gate is deferred because files like it would fail. Shrinking is fine.
-- [ ] 1.5 Confirm the root `CLAUDE.md` stays inside `docs.core_max_lines: 250`
-  (`.claude/workforce.yaml:72`; currently 114). An import adds one line to the importing file —
-  verify rather than assume, because `tools/claude_hooks/docs_trimmer.py` is what fails `local-gates`.
-- [ ] 1.6 Assert no import chain exceeds four hops (the documented maximum) and none resolves outside
-  the working directory — an external import triggers an approval dialog that silently disables it for
-  anyone who declines.
-- [ ] **Stop here if the rest is declined.** Everything above is independent of the nine files and the
-  generator.
+  three agent-facing patterns. Today it is `["**/CLAUDE.md", "**/agent.md"]`. First, because it is the
+  only task whose omission does harm outside this repository.
+- [ ] 1.2 Write `tests/regression/test_f053_aqa.py::test_the_root_agents_md_is_imported` — the root
+  `CLAUDE.md` must contain the bare `@AGENTS.md` form. A backticked mention must fail, because `@path`
+  parsing skips code spans. **Land this test before 1.3**, so it has a genuine failing case; revision 2
+  ordered the equivalent proof after the fix, where nothing could fail.
+- [ ] 1.3 Add `@AGENTS.md` as the first line of the root `CLAUDE.md`. 1.2 goes green.
+- [ ] 1.4 Fix the staleness this makes live, since both files now load together: root `AGENTS.md`
+  points twice at `CLAUDE.md` sections that do not exist ("Test surface mirror", "Live deployment +
+  CI-gate contracts") and says "any of the other five" subagents where `.claude/agents/` holds 7 and
+  `SKILLS.md:802` says 7.
+- [ ] 1.5 Confirm the root `CLAUDE.md` stays inside `docs.core_max_lines: 250` (currently 114). This is
+  the one doc budget that is actually enforced, by `tools/claude_hooks/docs_trimmer.py` in
+  `local-gates`. Do **not** assert a byte size on `AGENTS.md`: `.gitattributes` is absent, so a CRLF
+  checkout changes it, and `test-windows` runs `tests/regression`.
+- [ ] **Stop here if the rest is declined.** Nothing below is required for this to be correct.
 
-## Phase 2 — The nine, and the reachability gate that is the point of this plan
+## Phase 2 — Execute WS-8d: one format, every subsystem indexed
 
-- [ ] 2.1 Add `@AGENTS.md` to each of the eight nested `CLAUDE.md` files (`arm`, `growth`, `hardware`,
-  `learning`, `llm_gateway`, `orchestrator`, `telemetry`, `world_model`). Relative imports resolve
-  against the importing file, so the bare name is correct.
-- [ ] 2.2 Write `tests/regression/test_f053_aqa.py::test_every_agents_md_has_a_load_path` — for every
-  `AGENTS.md` in the tree, a `CLAUDE.md` in the **same directory** must import it with the bare
-  `@AGENTS.md` form. A backticked mention must fail the test, because a backticked mention is not an
-  import. This is the gate the whole plan exists for: with a root `CLAUDE.md` present, nested
-  `AGENTS.md` auto-discovery is off, so an unimported `AGENTS.md` is unreadable by anything.
-- [ ] 2.3 Prove 2.2 fails before 2.1 lands, per the `prove-pin-fails` skill. A gate that was green
-  before the fix is not a gate.
-- [ ] 2.4 Pin the in-scope set as an enumerated frozenset, following `_GATED_FACTORY_FILES`
-  (`tests/regression/test_f042_aqa.py:14-20`) — never a directory prefix, which silently absorbs every
-  future package. Assert both directions: a missing file fails, and an `AGENTS.md` outside the set
-  fails.
-- [ ] 2.5 Assert `src/mousedroid/agents/` is not in the set. The skill loader globs `*.md` there
-  (`harness_mcp.py:394`), so an `AGENTS.md` with YAML front matter would register as a skill.
-- [ ] 2.6 **Decide `tests/` explicitly, and record which way.** It is high-traffic and has no
-  `CLAUDE.md`, so `tests/AGENTS.md` has no load path. Either add a one-line `tests/CLAUDE.md`
-  containing `@AGENTS.md` (making it nine) or drop `tests/` (making it eight). Revision 1 had it in the
-  set with no importer, which 2.2 would have caught — do not let that stand as an implicit choice.
-- [ ] 2.7 Assert zero `agent.md` files remain (Phase 4 removes them; this pins it shut).
+- [ ] 2.1 Author a `CLAUDE.md` for the **9** subsystems that have only an `agent.md`: `agents`,
+  `cognitive`, `comms`, `config`, `experience`, `logging`, `memory`, `safety`, `sensing`. Each carries
+  the purpose blockquote at lines 3-4 and a `Key Files` section, matching the shape of the existing 8 so
+  there is one format rather than two.
+- [ ] 2.2 Fan out authoring to `doc-reconciler` subagents, briefs disprove-shaped ("find a statement the
+  tree contradicts"). Each brief carries the target package's `__init__.py` docstring and its real
+  imports inline — a subagent that skips project instructions loads neither.
+- [ ] 2.3 Derive every purpose line from the package's actual Protocols and imports. **No line may
+  restate a root invariant**: 15 of the 16 `agent.md` carry the same three boilerplate lines already in
+  the root `CLAUDE.md`, and one of those is enforced by `ruff` `T20`. Repeating them is pure token cost.
+- [ ] 2.4 Add `test_f053_aqa.py::test_every_subsystem_with_in_package_docs_has_a_claude_md`, and assert
+  the root Surface Map indexes each one — WS-8d's complaint is that 9 subsystems are invisible from the
+  root surface, so indexing is half the deliverable.
+- [ ] 2.5 `peer-reviewer` pass per batch; `config-guardian` pass for thresholds or paths restated from a
+  Pydantic schema into prose.
+- [ ] 2.6 Do **not** create any `AGENTS.md` outside the root. Assert it: an `AGENTS.md` anywhere under
+  `src/` or `tests/` fails. D-1/D-3 — it would be unreachable and would duplicate a purpose statement
+  that already exists.
 
-## Phase 3 — Author the nine, by subagent fan-out
+## Phase 3 — Gate the `Key Files` lists, by generalising a gate that works
 
-- [ ] 3.1 Write `.claude/skills/agents-md-authoring/SKILL.md` first, so the nine files and the
-  generator's purpose lines share one procedure: derive purpose from imports and Protocols, never from
-  filenames; ≤30 lines; point at contracts, never restate them; no diagram (the generator owns those).
-- [ ] 3.2 Fan out authoring to `doc-reconciler` subagents. Each brief carries the target directory's
-  `CLAUDE.md` contract inline — a subagent that skips project instructions does not load it, so it
-  cannot be assumed present.
-- [ ] 3.3 Each file states: what the folder is for, what enters and leaves, which packages it speaks to
-  through Protocols, and a pointer to its `CLAUDE.md`. **No `Key Files` list** — that is the section
-  that rotted in all 16 `agent.md` files.
-- [ ] 3.4 Assert the 30-line cap (D-9).
-- [ ] 3.5 `peer-reviewer` pass per batch, brief: "find one statement the tree contradicts, or report
-  clean with the evidence that makes it clean."
-- [ ] 3.6 `config-guardian` pass: no threshold, port, path or dimension restated from a Pydantic schema
-  into prose, where it would drift silently.
-- [ ] 3.7 The no-restated-invariant rule is a **review item in the skill, not a gate**. Revision 1
-  proposed a substring check; paraphrase defeats it, and a gate everyone learns to route around is
-  worse than a checklist line. Recorded as a deliberate downgrade.
+- [ ] 3.1 Generalise `tests/regression/test_doc_reconciliation_aqa.py::test_orchestrator_claude_md_names_only_real_symbols`
+  (`:191`) from one file to every nested `CLAUDE.md`: each named symbol resolves to a real `class`/`def`
+  in its mapped file, and each named path exists.
+- [ ] 3.2 Prove 3.1 fails before any fix lands — it should immediately flag
+  `src/mousedroid/llm_gateway/CLAUDE.md:26` (`mock_gateway.py`, which does not exist; the real file is
+  `fallback_gateway.py`) and `src/mousedroid/arm/CLAUDE.md:19` (`mock_arm.py`; the real path is
+  `src/mousedroid/arm/hardware/mock_arm_driver.py`).
+- [ ] 3.3 Fix the `llm_gateway` entry.
+- [ ] 3.4 Record `src/mousedroid/arm/CLAUDE.md` as a **declared exemption** with F-008 as the reason:
+  `src/mousedroid/arm/**` is denied by the `freeze_gate` PreToolUse hook
+  (`.claude/workforce.yaml:23-24`) while `F-008` is `todo`. Enumerate it as a frozenset entry following
+  `_GATED_FACTORY_FILES` (`tests/regression/test_f042_aqa.py:14-20`), never a prefix, and add a test
+  asserting the exemption lapses when F-008 reaches `done`. Do **not** use
+  `MOUSEDROID_WORKFORCE_ALLOW_FROZEN` — a stale filename is not an exceptional edit.
+- [ ] 3.5 Extend 3.1 to config values named in prose. It should catch
+  `src/mousedroid/llm_gateway/CLAUDE.md:20-21`, which requires `LLMConfig.fallback_backend` to target
+  "`mock`, `ollama`" while `src/mousedroid/config/schema/llm.py:157` permits only `none`, `llama_cpp`,
+  `openai_compatible` — **neither named value is legal**. Revision 1 found this and revision 2 dropped
+  it; the gate is what stops that happening again.
 
-## Phase 4 — Migrate the 16 `agent.md`, split rather than deleted
+## Phase 4 — Retire the 16 `agent.md`
 
-- [ ] 4.1 Record that this executes an existing decision:
-  `docs/planning/TECH_DEBT_REMEDIATION_PLAN.md` already rules `agent.md` **Delete/merge**, having
-  flagged it as unresolved drift. Update that table in the same commit — a decision reversed or
-  duplicated in a second document is how the four-way invariant split arose.
-- [ ] 4.2 Split each: folder-purpose half into the sibling `AGENTS.md` where one of the nine exists,
-  otherwise into the package's `__init__.py` docstring, which Phase 5's generator reads.
-- [ ] 4.3 **Fix, do not migrate,** `src/mousedroid/llm_gateway/agent.md:6` — "velocity commands via
-  local LLM" is false in both halves (`src/mousedroid/llm_gateway/protocol.py:65` returns a
-  `GoalVector`; `src/mousedroid/config/schema/llm.py:96` includes the cloud `anthropic` backend).
-  Carrying it forward would launder a wrong statement into a new file.
-- [ ] 4.4 Update the three live references before removing anything —
-  `tests/regression/test_doc_reconciliation_aqa.py:46`,
-  `tests/regression/test_ci_gate_wiring_aqa.py:825`, `src/mousedroid/skills/loaders.py:7,103`. A blind
-  delete turns a green suite red.
-- [ ] 4.5 Evaluate each persona against the seven existing `.claude/agents/` definitions and promote
-  only those that earn one, under the existing contract (`max_lines: 60`, required frontmatter, bare
-  tool names — `tests/regression/test_claude_workforce_aqa.py:182-257`).
-- [ ] 4.6 Remove the 16 `agent.md`. Task 2.7 pins them gone.
+- [ ] 4.1 Record that this executes WS-8d (`docs/planning/TECH_DEBT_REMEDIATION_PLAN.md:1492-1500`),
+  and update that table. Cite WS-8d, not the root-docs row — the root row rules on the root `agent.md`;
+  WS-8d rules on the per-directory pair, which is what this change touches.
+- [ ] 4.2 Merge each folder-purpose half into the sibling `CLAUDE.md` (new for the 9, existing for the
+  5 that have both, plus root).
+- [ ] 4.3 **Fix, do not migrate,** `src/mousedroid/llm_gateway/agent.md:6`: "velocity commands via local
+  LLM" is false in both halves (`protocol.py:65` returns a `GoalVector`;
+  `src/mousedroid/config/schema/llm.py:96` includes the cloud `anthropic` backend).
+- [ ] 4.4 Update the **one** reference that actually breaks a delete:
+  `tests/regression/test_doc_reconciliation_aqa.py:46` lists `tests/agent.md` in `_SRC_COVERAGE_DOCS`
+  and `read_text()`s it at `:130`. The other two commonly cited references are docstring prose —
+  `src/mousedroid/skills/loaders.py:7,103` names no file, and
+  `tests/regression/test_ci_gate_wiring_aqa.py:825` sits in a docstring stating the roster now comes
+  from `git ls-files`.
+- [ ] 4.5 Evaluate each persona against the seven existing `.claude/agents/` definitions; promote only
+  those that earn one, under the existing contract.
+- [ ] 4.6 Remove the 16 `agent.md`; assert zero remain. **This is also where `pyproject.toml`'s
+  `"**/agent.md"` exclude becomes dead** — leave it, and say why in the commit: it costs nothing and
+  removing it would let a reintroduced `agent.md` ship to PyPI.
 
-## Phase 5 — The generated package map: all 41 folders, and every diagram
+## Phase 5 — The generated package map: all 41 folders, with the diagrams
 
-This is what answers "describing the functions of each folder" for every folder, and it is where the
-mermaid lives.
+- [ ] 5.1 Write `scripts/generate_package_map.py`: walk `src/mousedroid/*/`, `ast`-parse imports,
+  **filter `TYPE_CHECKING` blocks** (three live cases in `world_model` alone), and emit one section per
+  package — purpose line, imports, dependents, mermaid subgraph.
+- [ ] 5.2 Label it an **import map**, not a dataflow map. In a factory-first DI codebase these diverge
+  by design: `factory` has 35 outbound package edges and `config` 33 inbound because invariants 1-2
+  require it, and the runtime seams run through injected Protocols `ast` cannot see. State that in the
+  generated header so no reader mistakes it for architecture.
+- [ ] 5.3 Source each purpose line from the package's `__init__.py` docstring, failing closed on a
+  package without one. 40 of 41 have one; `src/mousedroid/telemetry/__init__.py` is **0 bytes**, so
+  write it here. Note this makes Phase 5 a `src/` edit subject to `mypy --strict`, ruff docstring rules
+  and the coverage floor — it is not a docs-only phase.
+- [ ] 5.4 Split the output **per epic** from the start: 41 packages and 221 directed edges estimate to
+  ~34 KB, so a single file would be a fork in the deliverable rather than a decision.
+- [ ] 5.5 Add a regenerate-and-diff test that **normalises line endings and path separators** before
+  comparing, so it holds on `test-windows`. Assert determinism: sorted output, no timestamps, no
+  absolute paths.
+- [ ] 5.6 Unit-test the generator against a fixture package tree; correctness comes from those tests,
+  not from rendering. No renderer is added — none exists anywhere in the toolchain.
+- [ ] 5.7 Wire into `scripts/ci.sh` and a `Makefile` target.
 
-- [ ] 5.1 Write `scripts/generate_package_map.py`: walk `src/mousedroid/*/`, `ast`-parse each module's
-  imports, and emit `docs/architecture/package-map.md` — one section per package with a purpose line,
-  what it imports, what imports it, and a mermaid dependency subgraph **generated from the parsed
-  graph**.
-- [ ] 5.2 Source each purpose line from the package's `__init__.py` docstring, failing closed on a
-  package without one. 40 of 41 already have one; only `src/mousedroid/telemetry` lacks it, so fix that
-  docstring here. This turns "document the folder" into a docstring the linter and the map both read,
-  rather than prose in a third place.
-- [ ] 5.3 Add `test_f053_aqa.py::test_the_package_map_is_current` — regenerate and diff. A stale map
-  fails, which is the property 41 hand-written files could never have.
-- [ ] 5.4 Unit-test the generator against a fixture package tree, so diagram correctness is proven by
-  the generator's tests rather than by rendering. **No renderer is added**: there is no `mermaid`/`mmdc`
-  reference in `pyproject.toml`, `.github/workflows/ci.yml`, `scripts/ci.sh` or the `Makefile`, and no
-  Python mermaid parser installed, so a render gate means putting a Node toolchain into a Python-only
-  CI. D-6 rejects that.
-- [ ] 5.5 Assert determinism: sorted output, no timestamps, no absolute paths. Otherwise 5.3 flaps.
-- [ ] 5.6 Wire the generator into `scripts/ci.sh` and a `Makefile` target.
-- [ ] 5.7 Confirm `docs/architecture/package-map.md` fits `doc_hygiene.py`'s 20 KB budget, or split it
-  per epic. 41 sections plus 41 diagrams is the size risk in this change.
+## Phase 6 — Wiring and documentation
 
-## Phase 6 — Workforce and documentation wiring
-
-- [ ] 6.1 Index the new skill in `SKILLS.md` — required by
-  `tests/regression/test_claude_workforce_aqa.py:290`, so an unindexed skill fails CI.
-- [ ] 6.2 `python tools/validate_skill_commands.py` passes; every backticked path in the new SKILL.md
-  resolves.
-- [ ] 6.3 Add the `AGENTS.md` layer and the package map to `docs/claude/surfaces/README.md` and the
-  root `CLAUDE.md` Surface Map, stating the D-7 division of labour in one line.
-- [ ] 6.4 `CHANGELOG.md` entry under `[Unreleased]`: the convention, the `agent.md` removal and why
-  (not the standard filename, read by nothing), and that the root `AGENTS.md` now loads.
-- [ ] 6.5 `NEXT_STEPS.md`: record the three follow-ups this change declines — validating the ~50
-  existing `docs/` diagrams, a `.claude/rules/` path-scoped migration, and a full audit of the root
-  `AGENTS.md`.
-- [ ] 6.6 Check `docs/architecture/c4-claude-workforce.md`; it diagrams the workforce surfaces and goes
-  stale once this layer exists.
+- [ ] 6.1 Root `CLAUDE.md` Surface Map indexes all 17 in-package `CLAUDE.md`, and
+  `docs/claude/surfaces/README.md` gains the package map.
+- [ ] 6.2 `CHANGELOG.md` entry: WS-8d executed, one format, `agent.md` retired and why, root
+  `AGENTS.md` now loads.
+- [ ] 6.3 `NEXT_STEPS.md`: record what this declines — validating the 49 existing `docs/` fences plus
+  the 1 in root `README.md`, a `.claude/rules/` migration, a full root `AGENTS.md` audit, and the `arm`
+  `Key Files` fix pending F-008.
+- [ ] 6.4 Check `docs/architecture/c4-claude-workforce.md`; it diagrams the workforce surfaces and goes
+  stale once 17 `CLAUDE.md` are indexed.
+- [ ] 6.5 If a skill is written for this procedure, index it in `SKILLS.md` —
+  `tests/regression/test_claude_workforce_aqa.py:290` fails an unindexed skill. `.gitignore:10` already
+  negates `.claude/skills/`, so no negation task is needed.
 
 ## Phase 7 — Validation and closeout
 
-- [ ] 7.1 `make gates` passes.
-- [ ] 7.2 `make test` passes (all four pytest steps).
-- [ ] 7.3 `python -m tools.ratchet_budgets --strict` exits 0, budgets unchanged. This change is docs,
-  tests and one script, so it should need no suppression at all — if it does, that is a signal the
-  approach is wrong, not that the budget should move.
-- [ ] 7.4 `python scripts/validate.py --tier fast` and `bash scripts/ci.sh` pass.
-- [ ] 7.5 Write `scripts/validations/F-053.sh`; register F-053 in `features.yaml` with
+- [ ] 7.1 `make gates`, `make test`, `bash scripts/ci.sh`, `python scripts/validate.py --tier fast` all
+  pass.
+- [ ] 7.2 `python -m tools.ratchet_budgets --strict` exits 0, budgets unchanged. Phase 5 touches `src/`,
+  so this is a real check rather than a formality.
+- [ ] 7.3 Write `scripts/validations/F-053.sh`; register F-053 in `features.yaml` with
   `status: in_progress`, `implemented_in: null`, `depends_on: ["F-030"]`.
-- [ ] 7.6 Add the regression pair. The backwards-compat half asserts the nine `CLAUDE.md` files still
-  load and their invariants are unchanged — the risk of this change is weakening a contract by moving
-  prose around it.
-- [ ] 7.7 Register in `openspec/project.md`; flip to `implemented` with the trunk SHA after
-  squash-merge.
+- [ ] 7.4 Add the regression pair. The backwards-compat half asserts all 17 `CLAUDE.md` still load and
+  the 8 existing contracts' invariants are unchanged — the risk of this change is weakening a contract
+  while moving prose around it.
+- [ ] 7.5 `openspec/project.md` already carries the registry row (landed in `20cdd63`); update its text
+  to match revision 3 rather than adding a second row.

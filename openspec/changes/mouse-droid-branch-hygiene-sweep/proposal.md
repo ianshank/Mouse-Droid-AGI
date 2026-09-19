@@ -17,7 +17,7 @@
 
 The `mouse-droid-jetson-onnx-delivery` change (F-050/F-051) landed 78 files,
 +14,051/−129, across production code, 1,510 lines of new Bash, Docker, CI and docs.
-All 23 CI jobs are green and all 38 review threads are resolved. That is the bar CI
+All 17 CI jobs are green (23 check runs after matrix expansion) and all 38 review threads are resolved. That is the bar CI
 enforces — it is not the bar this repository claims to hold.
 
 Four rounds of document review during that change found **none** of its real defects.
@@ -47,7 +47,7 @@ were read, not recalled. Findings the investigation *disproved* are in §6.
 | A-1 | `scripts/check_branch_coverage.py` — the changed-lines branch-coverage gate — runs **only** in `bash scripts/ci.sh`. No GitHub workflow invokes it. | `scripts/ci.sh:178`; `.github/workflows/ci.yml:380-383` declares it "Still local-only by design (need heavy deps)". |
 | A-2 | That rationale is stale. The `test` job already installs the heavy deps and runs the full suite, and `local-gates` was created precisely to end "a GitHub-CI-only contributor bypassed all of them" (its own comment, `ci.yml:377-379`). Branch coverage is the one gate that was left behind. | `ci.yml:376-384` vs `ci.yml:428-441` |
 | A-3 | The two files this branch put the most new **logic** into are both exempt from that gate: `src/mousedroid/orchestrator/_lifecycle_mixin.py` and `src/mousedroid/factory/orchestrator.py` are in `_ALLOWED_FILES`, admitted as "pure DI wiring" and "orchestrator mixin/_state split products". `_warm_world_model()` is neither — it has an `isinstance` guard, an `asyncio.to_thread` hop, timing, and a failure-propagation path. | `scripts/check_branch_coverage.py:66-99`; `src/mousedroid/orchestrator/_lifecycle_mixin.py:97-160` |
-| A-4 | **`shellcheck` runs nowhere.** Not in any workflow, not in `scripts/ci.sh`, not in the `Makefile`, not in `pyproject.toml`. The only two occurrences in the repo are `# shellcheck disable=SC2086` directives that nothing consumes. This branch added 1,510 lines of Bash. | `grep -rn shellcheck` → `.github/workflows/config-compat.yml:95`, `.github/workflows/jetson-nightly.yml:114` only |
+| A-4 | **`shellcheck` is invoked by no gate — despite 19 inline, rule-specific suppressions across 10 files that assume it runs.** `scripts/prove_pin_fails.sh` alone carries 9, and `scripts/rover_wip_guard.sh:124` carries the `SC2064` disable task 1.8 cites by name. *(Revision 1 said "the only two occurrences" — wrong, and the true form is stronger.)* | `grep -rn 'shellcheck disable'` -> 19 across 10 files |
 | A-5 | The repository already has a `bash -n` parse-check convention, and the four new operational scripts did not get it. | Convention: `tests/regression/test_host_bootstrap_script.py:5`, `tests/regression/test_jetson_full_validation_script.py:40-50`. Missing for: `scripts/deploy_remote.sh`, `scripts/docker_deploy.sh`, `scripts/download_weights.sh`, `scripts/rover_wip_guard.sh`. |
 | A-6 | No workflow exercises `deploy_remote.sh` or `docker_deploy.sh`, not even a dry run. | `grep -rln 'deploy_remote\|docker_deploy' .github/workflows/` → no matches |
 | A-7 | `scripts/docker_deploy.sh` (506 lines, and the file carrying the strict promotion gate) has **no unit-tier test**. Its sibling `deploy_remote.sh` has a 607-line one. `docker_deploy.sh` is reached only by regression AQA text assertions. | `tests/unit/scripts/test_deploy_remote_guard.py` (607 lines) vs no `tests/unit/scripts/test_docker_deploy*.py` |
