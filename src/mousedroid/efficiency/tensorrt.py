@@ -150,9 +150,10 @@ def _runtime_identity() -> tuple[str, ...]:
     count -- so two engines built from the same model under different
     TensorRT, CUDA or driver versions shared a cache key.
     ``compile_model`` treats a matching file as a cache hit, and
-    ``docker-compose.jetson.yml`` bind-mounts the cache directory from the
-    host, so an engine survives an image rebuild, a JetPack upgrade or a GPU
-    swap and is loaded as current. A stale engine produces *wrong numbers
+    ``docker-compose.jetson.yml`` mounts the cache directory from outside the
+    image (the named volume ``mousedroid_tensorrt_cache`` since F-051), so an
+    engine survives an image rebuild, a JetPack upgrade or a GPU swap and is
+    loaded as current. A stale engine produces *wrong numbers
     rather than a crash*, which is the worst failure mode to debug after the
     fact.
 
@@ -187,8 +188,11 @@ def cache_dir_is_private(cache_dir: Path) -> bool:
     (0700)". Nothing enforced it: ``_save_compiled``'s ``mkdir`` passed no
     ``mode``, so the directory landed at the umask default (``0o755`` on a
     stock host), there was no ``chmod`` anywhere in ``src/``, and the default
-    location is bind-mounted from the host. This function is what makes that
-    comment true (peer review D-25).
+    location is mounted from outside the image -- a host bind-mount when this
+    was written, the named volume ``mousedroid_tensorrt_cache`` since F-051.
+    Either way the directory is one this process did not create and cannot
+    vouch for, which is why the check exists rather than a trusted mkdir.
+    This function is what makes that comment true (peer review D-25).
 
     On Windows ``st_mode`` carries no POSIX permission semantics, so the
     question is unanswerable there and the answer is ``True`` -- refusing
@@ -441,9 +445,9 @@ class JetsonTensorRTCompiler:
                     os.chmod(path.parent, stat.S_IRWXU)
                 except OSError:
                     # A cache directory owned by another user -- the likely
-                    # case for the bind-mounted default, where the host
-                    # created /opt/mousedroid as root and the container runs
-                    # unprivileged. Do NOT abort the save: it may still
+                    # case for the externally-mounted default, where Docker
+                    # created the named volume root-owned and the container
+                    # runs unprivileged. Do NOT abort the save: it may still
                     # succeed, and the directory may already be private
                     # because someone else made it so.
                     #

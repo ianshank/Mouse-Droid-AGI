@@ -300,9 +300,25 @@ Each was verified by driving the real script, not by reading it.
 - [ ] 6.11 Move F-050 from `epic: "Jetson deployment"` to the existing `World model` epic.
 - [ ] 6.12 `docs/architecture/adr-log.md:16` — annotate ADR-008 "amended 2026-09-19"; the
   branch reversed its multi-step cross-engine parity decision.
-- [ ] 6.13 `docs/analysis/positioning-safety-peer-review-2026-09-19.md:176` — annotate D-7
-  as partly addressed by F-051 task 8.1 (the host bind-mount became a named volume),
-  leaving the `_model_fingerprint` half open.
+- [x] 6.13 **[LANDED]** `docs/analysis/positioning-safety-peer-review-2026-09-19.md` — D-7,
+  P7 and the corrected-design map all still read as live. Done while merging the base:
+  the drafted wording ("partly addressed by F-051 task 8.1, leaving the
+  `_model_fingerprint` half open") was **wrong by the time it was written** — base PR #234
+  landed `_runtime_identity()` and `cache_dir_is_private` and closed that half, while
+  annotating D-25 and D-26 but not D-7. Both halves are now closed and the row says so.
+- [x] 6.13a **[LANDED]** Six sites said the cache directory is "bind-mounted from the host"
+  — false on the merged tree, since F-051 replaced that with the named volume
+  `mousedroid_tensorrt_cache`. Two are operator-facing (`JetsonConfig.tensorrt_cache_dir`'s
+  `description=`, `cache_dir_is_private`'s docstring). A semantic merge conflict with **zero
+  file overlap**: `git merge` had nothing to flag, because the base's new prose and this
+  branch's compose change are only inconsistent together.
+- [ ] 6.13b Verify the interaction the merge created rather than assuming it: Docker creates
+  a named volume root-owned `0755`, and `cache_dir_is_private` treats group/other-reachable
+  as a MISS. Reading `_save_sync` shows it does `mkdir(mode=0700)` **plus** an explicit
+  `os.chmod`, which hardens the mount point, so there is no permanent-miss loop — but the
+  chmod is wrapped in `except OSError` for the not-our-directory case, so confirm on the
+  rover that the container user can chmod the volume root. Not a claimed defect; a claimed
+  unknown.
 - [ ] 6.14 Append the four omitted artifacts to the `openspec/project.md:24` cell
   (`src/mousedroid/utils/artifact_integrity.py`, `src/mousedroid/world_model/onnx_export_metadata.py`,
   `src/mousedroid/world_model/composite.py`, `scripts/rover_wip_guard.sh`) and the two new runbooks.
