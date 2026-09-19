@@ -1,6 +1,10 @@
 # Peer review — Jetson ONNX runtime + PC-to-rover delivery
 
-Review of the external plan `jetson-onnx-runtime-and-pc-delivery` against the tree at
+Review of the external plan `jetson-onnx-runtime-and-pc-delivery`. Round 1 was verified
+against `18aba56` (the bundle's `basis_commit`); rounds 2 and 3 against `9aedfe2` and
+`a46fbad`, which are this branch's own docs-only commits adding the bundle itself — no
+`src/`, `config/`, `scripts/` or workflow file differs between them, so every code
+citation below resolves identically at all three. Baseline for the tree under review:
 `18aba56` (default branch `claude/markdown-implementation-plan-aVJ2l`). The plan artifact
 is not in the repository; claims are quoted from the submitted document. Every repo-side
 fact below was read out of the tree.
@@ -338,7 +342,11 @@ measurement tooling.
 ## What round 2 changes in the plan
 
 - **Do not build a whole-tick benchmark.** Run `test_jetson_endurance.py` on the rover with
-  actuation disabled and commit its JSON to `reports/endurance/` via `evidence-commit`. It
+  actuation disabled. Its JSON lands in `reports/endurance/`, which `.gitignore:339-340`
+  ignores except `.gitkeep` and `evidence-commit/SKILL.md:24-38` lists among the six
+  local-only families — so it closes out as a **declared local-only chain** (artifact on
+  the rover plus a `CHANGELOG.md` reference), not as a git commit. Pin 54 states the same
+  rule; an earlier draft of this line contradicted it. It
   already covers the tick p95 gate, RSS stability (which answers the both-engines memory
   question), and thermals.
 - **The whole-tick gate is a prerequisite, not a deliverable.** Closing P5 — wiring
@@ -650,7 +658,7 @@ These change the plan's premise more than anything in round 1.
     7.4 GB iGPU, so a full-offload second model fails with `unable to allocate CUDA0
     buffer`." Corroborated at `docs/runbooks/jetson-full-bringup.md:31`,
     `deployments/jetson-image.json:6`, and as a STOP gate in
-    `docs/superpowers/plans/2026-07-15-…:882`. Note the committed YAML
+    `docs/superpowers/plans/2026-07-15-trunk-reconcile-jetson-docker-validation-v3.md:882`. Note the committed YAML
     (`config/jetson_production.yaml:119`, `n_gpu_layers: -1`) describes a configuration
     documented to crash, and only the uncommitted per-host `docker.env` override saves it.
     Container limit is `memory: 6G` with no `memswap_limit`, `shm_size` or `pids_limit`
@@ -843,3 +851,160 @@ landing regardless of whether the latency work ever does.
     refusable by config, and any benchmark or promotion record SHALL state which weight
     source loaded. Otherwise the plan's evidence is measured against an unrecorded weight
     state, which is the same defect as an unrecorded execution provider.
+
+## ML pins — round 3
+
+76. **The plan's two parity requirements were mutually contradictory, and one is impossible.**
+    `new_z` is not a leaf output: `_world_model_state_mixin.py:41` assigns `self._z` and feeds
+    it back, and `dual_stream_rssm.py:283` builds
+    `recurrent_input = torch.cat([z, prev_action], dim=-1)` for both the GRU (`:284`) and the
+    CfC. So `new_h(t+1) = f(new_z(t))`. Excluding `new_z` from parity while gating multi-step
+    `new_h` parity cannot hold — two independent RNG streams diverge by O(‖post_std‖) at t=2,
+    orders of magnitude above any precision tolerance, so the gate would fail a **correct**
+    FP32 implementation. Resolved by making `eps` an injected graph input (task 6.10), which
+    makes `new_z` gateable and multi-step parity meaningful. Until then parity is single-step.
+77. **ADR-008's justification for excluding `new_z` is false and needs correcting.** It says
+    "consumers that depend on the specific sample (none, in the current architecture)". There
+    are three: `observe_step` itself next tick, `MCTSPlanner.plan(h, z)` via
+    `agents/navigation.py`, and the VLA policy's `VLAObservation(h=..., z=...)`. The
+    *conclusion* (exclude it from single-step parity) is still right; the reasoning is not.
+78. **My own "changing inputs produce changing outputs" scenario was vacuous.**
+    `sample_gaussian` draws `randn_like` unconditionally on every call, so outputs differ even
+    with byte-identical inputs and a completely broken buffer. Replaced with a fixed-input
+    test asserting `new_h`/`obs_embed`/`surprise` identical while `new_z` differs. Note also
+    that nothing in the repo asserts ONNX `new_z` varies across calls, so a graph whose sample
+    was folded to a constant would pass the whole suite and silently stop being stochastic on
+    the rover — the export passes `do_constant_folding: True`.
+79. **Two `randn_like` draws occur per step, not one.** `observe_step_traceable` samples the
+    prior and discards it. If ONNX dead-code elimination removes that unreachable draw while
+    torch still consumes it, the streams desynchronise at *different* rates, so seeding alone
+    could never align them. Removing the dead draw is also free latency on the hot path.
+80. **FP16 has two unguarded overflow sites, and the sibling function shows the fix.**
+    `latent_utils.py::kl_divergence` — the one `observe_step` calls — has no clamp and no
+    float32 cast, while `balanced_free_bits_kl` ten lines away does both and says why. In fp16
+    `post_logvar.exp()` overflows above ~11.09 and dividing by `prior_logvar.exp()` overflows
+    for any O(1) numerator once `prior_logvar < ~-11.1`; `logvar_clamp` defaults to `10.0`,
+    which does not save it. `sample_gaussian`'s `exp(logvar * 0.5)` overflows above ~22.2 and
+    feeds `inf` into the recurrent state.
+81. **The only production drift guard cannot fire.** `_validate_latent` warns when
+    `norm(h) > model.latent_norm_threshold`, default `50.0`. A `nn.GRUCell` state is a convex
+    combination of `tanh` outputs, so `norm(h) <= sqrt(256) = 16` at the production
+    `hidden_dim`. Sub-NaN FP16 drift is unobservable, so "no safety-envelope regression" has
+    no instrument behind it.
+82. **An fp16 graph would fail on the first live tick, not at warmup.**
+    `run_session_with_zeros` is dtype-aware and zero-fills `tensor(float16)` correctly, but
+    `observation_packer.pack_observation` hardcodes `dtype=torch.float32` at every
+    construction site. Warmup passes; `observe_step` raises `InvalidArgument` on the first
+    sensor read. And `jetson.precision` cannot gate any of it: its only consumer is
+    `efficiency/tensorrt.py` via `build_tensorrt_compiler`, which has no production caller.
+83. **The training objective can collapse, and the repo already knows.** Both scripts that
+    produced the published weights regress the decoder onto the encoder's **own
+    grad-attached output**: `training/train_rssm.py:249,268`
+    (`obs_embed = rssm.encoder(...)` then `mse_loss_fn(obs_recon, obs_embed)`), with no
+    `.detach()` and no fixed target — and `train_dual_stream_rssm.py` does it three times.
+    Encoder → 0 minimises both that term and the KL. The fix is documented on
+    `rssm.py:280`: `train_sequence` reconstructs raw per-modality targets, "fixed targets, so
+    the objective cannot collapse the way an `obs_embed` self-reconstruction would". It was
+    never back-ported to `training/`. `DualStreamRSSM` — the class this change accelerates —
+    has no `train_sequence` at all.
+84. **The reward head has never received a gradient.** `reward_head` appears twice in the
+    tree: constructed at `rssm.py:51`, used at `:231`. Zero occurrences in `training/`. No
+    loss touches it, so Adam skips it and it stays at its `kaiming_uniform_` init. MCTS's only
+    value estimator is `_rollout`'s accumulated `imagine_step` reward, so the planner's entire
+    value signal is a random projection of an untrained dynamics model.
+85. **`best_ucb_c: 1.41` in the published artifact is the unmodified input, not a result.**
+    `training/warmstart_policy.py::tune_ucb` initialises `best_ucb = base_cfg.ucb_c` (1.41) and
+    only overwrites it inside `if mean_reward > best_reward and p50_ms < target_ms`. No
+    candidate met `p50_ms < 50` — the card's own p50 is ~109 ms — so the assignment never ran
+    and the function reported its input back under a key asserting it is an output. The card's
+    rewards make 1.41 the **worst** of the five sampled values (0.145 against 0.4133 at
+    ucb_3.0). Nothing else in that artifact should be cited without re-deriving it.
+86. **The gate set is inverted relative to consumer risk.** The plan gates FP16 on `surprise`
+    — the most fp16-fragile output (pin 80) — which reaches nothing:
+    `safety/monitor.py` never passes it to `SafetyContext`, so `compute_mcts_budget` always
+    sees `0.0`. Meanwhile `new_h`/`new_z`, which reach MCTS, the VLA policy and the next tick,
+    were excluded or ungateable. Pin 76's fix corrects this.
+
+## DevOps pins — round 3
+
+87. **The health gate the plan depends on is a hardcoded `"ok"`.**
+    `_lifecycle_mixin.py:601-612` — `health_check()` returns
+    `{"status": "ok", "platform": ..., "mock_hardware": ..., "agents": [...]}`
+    unconditionally. There is one `def health_check` in `src/`. `main.py::_health_check`
+    exits non-zero only when `status != "ok"`, which is unreachable, so `--health-check`
+    detects DI/config wiring failures and nothing else. The REST surface is no better:
+    `_rest_handlers.py::_handle_health` always returns 200 and `health/monitor.py::check_health`
+    derives status from GPU temperature alone. `docker_deploy.sh` probes it with `curl -sf`,
+    which passes on any 2xx. The plan's `--strict-health` mode must therefore be written
+    against real signals — heartbeat freshness, `mousedroid_loop_time_ms`,
+    `mousedroid_tick_overruns_total`, `mousedroid_safety_violations`, or container
+    `Health: healthy` — not against these two.
+88. **The systemd restart budget is silently inert.** `scripts/mousedroid-docker.service`
+    puts `StartLimitIntervalSec=300` and `StartLimitBurst=5` at lines 68-69, inside
+    `[Service]` (section starts line 23). `StartLimitIntervalSec` is only valid in `[Unit]`;
+    `systemd-analyze verify` on a scratch copy reports "Unknown key name
+    'StartLimitIntervalSec' in section 'Service', ignoring." The effective policy is the
+    10 s default, and with `RestartSec=10` at most one or two restarts land per window, so
+    the limiter never trips and the unit never enters `failed`. Combined with
+    `restart: unless-stopped` in compose — which the unit's own comment notes may stop
+    `--abort-on-container-exit` from firing — a bad promotion crash-loops with no failure
+    state and nothing to alert on. `tests/regression/test_systemd_unit.py` greps for
+    `Restart=on-failure` as text and never checks section placement.
+89. **"Promote an immutable commit" is true of the git SHA and false of the artifact.** Both
+    `FROM` lines in `Dockerfile.jetson` are mutable third-party tags (`dustynv/llama_cpp:r36.4.0`,
+    `dustynv/l4t-pytorch:r36.4.0`), not digests; there is no lockfile or constraints file
+    anywhere (`git ls-files` finds none) while `pyproject.toml` and the Dockerfile both use
+    ranges; `docker_deploy.sh` builds with `--no-cache`, so every deploy re-resolves against
+    live PyPI; roughly a dozen install layers are `|| true`, so an image missing `ncps`,
+    `picamera2`, `anthropic` or the GCP SDK still tags green; the Jetson image is never built
+    in CI (the `docker` job runs `docker build --check`, a linter, and really builds only
+    `Dockerfile.dev`); and there is no registry, push, signing, SBOM or provenance. The
+    rollback anchor therefore exists in exactly one local daemon, recoverable from nothing.
+90. **The TensorRT cache would default inside the promotion boundary.**
+    `JetsonConfig.tensorrt_cache_dir` defaults to `/opt/mousedroid/tensorrt_cache` — inside
+    the bind-mounted git checkout the promotion operates on — and `efficiency/tensorrt.py`
+    writes `engine_<fingerprint>.pth` via `torch.save` with no eviction, size cap or pruning.
+    A `git clean -fdx` on a promotion that wants a deterministic tree destroys it and forces a
+    full rebuild at the worst moment. It is also a root-writable, root-deserialised pickle
+    cache in a bind mount shared with the host, with the 0700 its own comment assumes set
+    nowhere. Rev C's named-volume decision (task 8.1) is right; this pin says why it is
+    mandatory rather than tidy.
+91. **`sync_jetson_overlay.sh` inverts config authority on the promotion path.** It is
+    well-built — sha256 compare, atomic `mktemp`+`mv`, explicit error checks, a `RETURN` trap,
+    and a strict `--verify` mode that never mutates — but it runs as a dash-prefixed
+    (non-fatal) `ExecStartPre`, so the **checkout** wins over the deployed config on every
+    start and a sync failure is ignored. A rollback that reverts the image but leaves
+    `/opt/mousedroid` at the new commit silently re-applies the *new* config to the *old*
+    image, reintroducing exactly the crash-loop the `config-compat` gate exists to prevent.
+    The promotion path should call `--verify` (undashed) and fail on drift. Two other writers
+    compete: `docker_deploy.sh` copies a broader `config/*.yaml` set from a script-relative
+    root, and `jetson-nightly.yml:87` mutates rover config from whatever `/opt/mousedroid` is
+    checked out at while validating code from the runner's own workspace — two commits in one
+    validation run.
+92. **Nothing bounds logs, and nothing alerts on disk or memory.** `docker-compose.jetson.yml`
+    has no `logging:` block, so the default `json-file` driver grows without bound under a
+    30 Hz structlog stream; `config/loki/loki.yml` sets no `retention_period`; there is no
+    `daemon.json` or logrotate config; and `scripts/jetson_disk_cleanup.sh` is manual with no
+    timer. `config/prometheus/alerts.yml` has ten groups and zero recording rules, with no
+    alert on disk, memory, swap or CPU temperature — only `mousedroid_gpu_temp_celsius`.
+    `scripts/preflight_check.sh`'s `MOUSEDROID_MIN_DISK_GB` guard is real but start-time only.
+    The plan adds a disk-backed cache and a memory-hungry build; neither would be noticed.
+93. **No backup, no DR, no restore runbook.** The only backup in the tree is
+    `host_bootstrap.sh`'s timestamped `docker.env.bak.*` — on the same disk that would fail.
+    Not backed up: the `mousedroid_experience` LMDB volume (the only irreplaceable artifact),
+    downloaded weights, `/opt/voice_models`, the TRT cache, and the image itself (pin 89).
+    Recovery from a dead NVMe is a reflash plus a rebuild against mutable tags — a different
+    dependency set — and total loss of accumulated experience.
+94. **`pip-audit` does not audit what ships.** The `security` job installs
+    `.[dev,telemetry,mcp]` on `ubuntu-latest`/amd64. The rover additionally carries torch,
+    CUDA and TensorRT from the base image (never audited), `llama_cpp`, `anthropic`, five
+    `google-cloud-*`, `hailort`, `ncps`, `piper-tts`, `picamera2`, `Jetson.GPIO` and more.
+    Coverage of the base image is zero, and that is where CUDA and TensorRT live.
+95. **Correcting one agent claim, for the record.** A DevOps review asserted that an alert
+    against `mousedroid_tick_overruns_total` "would silently match nothing" because the
+    registry field is `f"{ns}_tick_overruns"` (`_registry_core.py:101`). That is wrong:
+    `primitives.py::_render_counter` sets `metric_name = f"{name}_total"` at render, so the
+    **exposed** name is `mousedroid_tick_overruns_total` and an alert against it is correct.
+    Round 2's pin 48 and pin 6 had this right. What *is* true is the narrower point that the
+    registry-side field name carries no suffix, which is why pin 6 requires the registry name
+    be declared without one.

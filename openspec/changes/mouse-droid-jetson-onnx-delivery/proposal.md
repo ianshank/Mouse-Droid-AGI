@@ -2,7 +2,7 @@
 
 - change_id: mouse-droid-jetson-onnx-delivery
 - project: mouse-droid
-- status: proposed
+- status: active
 - feature_id: F-050, F-051
 - epic: Jetson deployment
 - owner: ianshank
@@ -86,9 +86,12 @@ at worst.
 
 - `src/mousedroid/factory/world_model.py`: `build_world_model` gains a keyword-only
   `metrics: MetricsRegistry | None = None`, threaded to `DualStreamRSSMOnnx`. All four
-  call sites updated (`factory/orchestrator.py:121`, `factory/on_device_learning.py:102,
-  274,304`, `validation/pillars.py:184`); `factory/orchestrator.py` builds the registry
-  before the world model instead of after.
+  **six** call sites updated: `factory/orchestrator.py:121`,
+  `factory/on_device_learning.py:102,274,304`, `factory/growth.py:121` and
+  `validation/pillars.py:184`. The growth one matters — it is a
+  `world_model if world_model is not None else build_world_model(cfg)` fallback, so it can
+  construct the ONNX engine without a registry and silently reinstate the dead-metric bug.
+  `factory/orchestrator.py` builds the registry before the world model instead of after.
 - `src/mousedroid/world_model/dual_stream_rssm_onnx.py`: the existing
   `observe_world_model_observe_step_seconds` timer keeps its ORT-execute scope, and two
   new spans are added around `pack_observation` and the tensor conversions so the
@@ -100,9 +103,19 @@ at worst.
   reachable, or ADR-008 and `scripts/export_dual_stream_rssm_onnx.py:17-21` corrected to
   name `config/jetson_dual_stream.yaml`. Design D-3 picks the second.
 - `src/mousedroid/config/schema/world_model.py`: typed ONNX runtime options — execution
-  mode, strict-provider policy, device id, engine/timing cache toggles, CUDA-graph and
-  context-memory switches, profile batch. Precision, workspace size and TRT cache
-  directory are **read from `cfg.jetson`**, not duplicated.
+  mode, strict-provider policy, device id, engine/timing cache toggles, context-memory
+  switch, profile batch. No CUDA-graph switch (design D-12 removes it from scope).
+  Precision, workspace size and TRT cache directory are **read from `cfg.jetson`**, not
+  duplicated.
+- **Opt-in is environment-based, not a tracked overlay.** Rev A proposed
+  `config/jetson_onnx_fp16.yaml`; design D-7 forbids a `world_model:` key in any tracked
+  YAML, and the two cannot both hold — `check_config_compat.py` would validate such a file
+  against the pinned schema where `WorldModelConfig` is a plain `BaseModel`
+  (`032942b…:src/mousedroid/config/schema.py:1597`, `extra="ignore"`) and silently drop
+  every key. So activation is
+  `MOUSEDROID_WORLD_MODEL__ENGINE=onnx_trt` plus the matching `MOUSEDROID_WORLD_MODEL__*`
+  variables in `/etc/mousedroid/docker.env`, which is also the F-043 precedent ("Do not add
+  isaac keys to config/default.yaml"). The runbook documents the variable set.
 - `src/mousedroid/common/onnx_session.py`: `resolve_providers` and `warmup_session` widened
   to carry `(name, options)` provider tuples; a post-construction `session.get_providers()`
   comparison; `sess_options` passed explicitly. `vla/policy.py` and both ORT test stubs
@@ -190,7 +203,7 @@ answer is "none apply".
   bundle's verdict table says so — not to the RSSM observe path ADR-008 accepts.
 - **Q3, behaviour change by editing source rather than YAML/env — no.** Every new field is
   `Field(default=..., description=...)` preserving today's behaviour; FP16 and caches are
-  opt-in via `config/jetson_onnx_fp16.yaml`.
+  opt-in via the `MOUSEDROID_WORLD_MODEL__*` environment variables.
 
 FP16 does change recurrent-state numerics, which is a safety-adjacent property. It is
 gated on multi-step parity plus recorded task replay (`specs/performance-evidence`) and
@@ -210,8 +223,8 @@ against the old `Settings`. At that SHA `WorldModelConfig` is a plain `BaseModel
 (`schema.py:1597`), i.e. `extra="ignore"` — so a new `world_model.*` key in
 `config/jetson_production.yaml` passes the gate and is then ignored by the pinned schema.
 A new *top-level* block hard-fails instead. Rev C therefore adds no `world_model:` key to
-any tracked overlay; `config/jetson_onnx_fp16.yaml` is an explicitly-selected overlay, and
-Phase 8 re-pins the record post-merge.
+any tracked overlay; activation is environment-based (see What Changes), and Phase 8
+re-pins the record post-merge.
 
 **That pin is one branch cleanup from repo-wide failure.** `deployments/jetson-image.json`
 states it itself: zero tags exist, and the SHA's only reachability is ten stale feature

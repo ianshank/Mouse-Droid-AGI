@@ -98,8 +98,8 @@ Benchmark records SHALL capture git commit and dirty state, model SHA-256, board
 L4T/JetPack, CUDA, cuDNN, TensorRT, ORT, Torch and Python versions, `nvpmodel -q`, clock
 state and whether clocks were changed, container image ID, requested and **observed**
 providers with secret-safe options, cold and warm session-build times, per-stage latency,
-distribution statistics from raw samples (count, mean, median, p90, p95, p99, stdev, min,
-max, deadline misses over 33.33 ms), `tegrastats` samples, throttling indicators, and drift
+distribution statistics from raw samples via `validation/latency_stats.py::summarize`
+(count, min, mean, p50, p95, p99, max), stdev, deadline misses over 33.33 ms, `tegrastats` samples, throttling indicators, and drift
 versus Torch for `new_h`, `obs_embed`, `surprise`.
 
 Raw samples SHALL be stored, not only aggregates. At least three independent processes per
@@ -202,7 +202,11 @@ from CI.
 
 - **GIVEN** a rover with actuation disabled
 - **WHEN** the endurance test runs for the full-validation duration
-- **THEN** its JSON lands in `reports/endurance/` and is committed via `evidence-commit`
+- **THEN** its JSON lands in `reports/endurance/` and is closed out as a **declared
+  local-only** evidence chain — the artifact exists on the rover plus a `CHANGELOG.md`
+  reference — because `.gitignore:339-340` ignores that directory except `.gitkeep`, and
+  `evidence-commit/SKILL.md:24-38` lists `reports/endurance` among the six local-only
+  families. It is NOT git-committed.
 
 ### Requirement: The whole-tick gate SHALL be treated as a prerequisite, not a deliverable
 

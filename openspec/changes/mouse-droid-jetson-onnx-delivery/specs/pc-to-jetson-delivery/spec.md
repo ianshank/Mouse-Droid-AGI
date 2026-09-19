@@ -114,8 +114,12 @@ recorded SHA is relied upon.
 
 ### Requirement: No `world_model:` key SHALL be added to a tracked overlay
 
-New runtime fields SHALL live on Pydantic schema defaults. `config/jetson_onnx_fp16.yaml`
-SHALL be an explicitly-selected overlay and SHALL NOT be merged into `config/default.yaml`.
+New runtime fields SHALL live on Pydantic schema defaults, and the FP16/cache profile SHALL
+be selected through `MOUSEDROID_WORLD_MODEL__*` environment variables in
+`/etc/mousedroid/docker.env`. No tracked `config/*.yaml` SHALL carry a `world_model:` block,
+including a new opt-in overlay: `check_config_compat.py` validates changed config files
+against the pinned schema, where `WorldModelConfig` is a plain `BaseModel` with
+`extra="ignore"`, so such a file passes the gate and has every key silently dropped.
 
 `config/default.yaml` is the deep-merge base for all 17 overlays (`loader.py:76-96`), so a
 block there would apply everywhere. More importantly, `config-compat` validates new YAML

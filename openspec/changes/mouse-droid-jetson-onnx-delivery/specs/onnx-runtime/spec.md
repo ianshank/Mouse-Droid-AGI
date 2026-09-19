@@ -156,11 +156,17 @@ amendment lands before any I/O-binding code.
 
 CUDA Graph is out of scope for this change.
 
-#### Scenario: Changing inputs do not replay stale output
+#### Scenario: Fixed inputs expose a stale buffer
 
-- **GIVEN** ten consecutive calls with different sensor values
+- **GIVEN** ten consecutive calls with **byte-identical** inputs and state
 - **WHEN** each returns
-- **THEN** the outputs differ, proving no buffer reuse replays a prior result
+- **THEN** `new_h`, `obs_embed` and `surprise` are identical across all ten
+- **AND** `new_z` differs across them, proving the sampler still advances
+
+A "changing inputs produce changing outputs" scenario is **vacuous on this model**:
+`sample_gaussian` (`world_model/latent_utils.py`) draws `randn_like` unconditionally on
+every call, so outputs differ even with identical inputs and a completely broken buffer.
+Only a fixed-input test separates a stale buffer from a live sampler.
 
 #### Scenario: CPU fallback cannot claim I/O binding
 
@@ -169,7 +175,50 @@ CUDA Graph is out of scope for this change.
 - **THEN** under a permissive policy it selects portable mode and logs the downgrade
 - **AND** under a strict policy it raises
 
-### Requirement: Parity gates SHALL exclude the posterior sample
+### Requirement: The sampler SHALL be made injectable before multi-step parity is gated
+
+`sample_gaussian` SHALL take its noise as an argument, and the export shim SHALL expose it
+as a graph **input** (`eps`), so both engines can be fed the identical draw.
+
+This is a prerequisite, not a refinement, because the spec below and the FP16 requirement
+are otherwise **mutually contradictory**. `new_z` is not a leaf output: it is the recurrent
+input on the following tick. `_world_model_state_mixin.py:41` assigns `self._z` from
+`observe_step` and feeds it back, and `dual_stream_rssm.py:283` builds
+`recurrent_input = torch.cat([z, prev_action], dim=-1)` for both the GRU (`:284`) and the
+CfC. So `new_h(t+1) = f(new_z(t))`. Excluding `new_z` from parity while gating multi-step
+`new_h` parity cannot hold: two independent RNG streams — torch's global generator versus
+ORT's `RandomNormal*` kernel — diverge by O(‖post_std‖) at t=2, orders of magnitude above
+any precision tolerance. That gate would fail a **correct** FP32 implementation, measuring
+RNG mismatch rather than precision loss.
+
+ADR-008's justification is also false and SHALL be corrected: it states "consumers that
+depend on the specific sample (none, in the current architecture)". There are three —
+`observe_step` itself next tick, `MCTSPlanner.plan(h, z)` via
+`agents/navigation.py`, and the VLA policy's `VLAObservation(h=..., z=...)`.
+
+With `eps` injected, `new_z` becomes fully gateable and multi-step parity becomes
+meaningful in both FP32 and FP16. Until then, parity SHALL be single-step only, over the
+deterministic outputs and the distribution.
+
+Note that two `randn_like` draws occur per step, not one: `observe_step_traceable`
+samples the prior and discards it (`_, prior_mean, prior_logvar = ...`). If ONNX
+dead-code-elimination removes that unreachable draw while torch still consumes it, the two
+streams desynchronise at different rates — so seeding alone could never align them.
+Removing the dead prior draw is also free latency on the path this change is accelerating.
+
+#### Scenario: Identical noise yields identical trajectories
+
+- **GIVEN** `eps` fed identically to the torch and ONNX engines over 16 recurrent steps
+- **WHEN** trajectories are compared
+- **THEN** `new_h`, `new_z`, `obs_embed` and `surprise` all agree within tolerance
+
+#### Scenario: Multi-step parity before injection
+
+- **GIVEN** `eps` is still drawn inside the graph
+- **WHEN** a multi-step parity gate is proposed
+- **THEN** it is rejected as unmeasurable and the single-step gate below applies
+
+### Requirement: Single-step parity gates SHALL exclude the posterior sample
 
 Torch↔ONNX parity SHALL compare `new_h`, `obs_embed` and `surprise` at `atol=1e-4`, and
 SHALL compare the posterior distribution (`post_mean`, `post_logvar`) rather than `new_z`.
@@ -179,9 +228,33 @@ ADR-008's "Cross-engine equivalence guarantee" excludes `new_z` because its
 `new_z` fails by construction on a correct implementation.
 
 The FP32 tolerance SHALL NOT be tightened below the accepted `atol=1e-4` without a
-measurement justifying it. FP16 parity SHALL start at `rtol=1e-2, atol=1e-3` over multiple
-recurrent steps, and SHALL additionally require recorded task replay showing no
-safety-envelope regression.
+measurement justifying it. FP16 parity SHALL start at `rtol=1e-2, atol=1e-3`,
+**single-step** until `eps` is an injected graph input and multi-step only after it is. It
+SHALL additionally require recorded task replay showing no safety-envelope regression —
+noting that no recorded-rover corpus exists today, so that corpus is a deliverable, not
+existing evidence.
+
+FP16 has two unguarded overflow sites on the observe path that SHALL be fixed first.
+`latent_utils.py::kl_divergence` — the function `observe_step` actually calls — has no clamp
+and no float32 cast, while its sibling `balanced_free_bits_kl` ten lines away does both and
+says why ("so an fp16 AMP context cannot overflow `exp(logvar)` into NaN"). In fp16
+`post_logvar.exp()` overflows above ~11.09, and dividing by `prior_logvar.exp()` overflows
+for any O(1) numerator once `prior_logvar < ~-11.1`; `ModelConfig.logvar_clamp` defaults to
+`10.0`, which does not save it. `sample_gaussian`'s `torch.exp(logvar * 0.5)` overflows
+above ~22.2 and feeds `inf` straight into the recurrent state.
+
+The only production drift guard cannot fire: `_validate_latent` warns when
+`norm(h) > model.latent_norm_threshold`, default `50.0`, but a `nn.GRUCell` state is a
+convex combination of `tanh` outputs so `norm(h) <= sqrt(256) = 16` at the production
+`hidden_dim`. Sub-NaN FP16 drift is therefore unobservable, and the "no safety-envelope
+regression" claim has no instrument behind it until that threshold is corrected.
+
+`jetson.precision` cannot gate any of this today: its only consumer is
+`efficiency/tensorrt.py` via `factory/hardware.py::build_tensorrt_compiler`, which has no
+production caller. And `observation_packer.pack_observation` hardcodes `dtype=torch.float32`
+at every construction site, while `run_session_with_zeros` is dtype-aware — so an fp16 graph
+passes warmup and raises `InvalidArgument` on the first live sensor read, on the rover, not
+at bring-up. Both SHALL be fixed before an fp16 graph is loadable.
 
 #### Scenario: A correct FP32 implementation
 

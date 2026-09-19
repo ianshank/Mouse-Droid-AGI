@@ -96,8 +96,10 @@ behaviour is parameter-passed and `common/onnx_session.py` still imports nothing
 `tensorrt_cache_dir` (`hardware.py:580-588`), and `config/default.yaml` sets the first two.
 The ORT session reads those. `WorldModelConfig` gains only what has no home:
 `onnx_execution_mode`, `onnx_require_primary_provider`, `onnx_device_id`,
-`onnx_engine_cache_enabled`, `onnx_timing_cache_enabled`, `onnx_cuda_graph_enabled`,
-`onnx_context_memory_sharing_enabled`, `onnx_profile_batch`.
+`onnx_engine_cache_enabled`, `onnx_timing_cache_enabled`,
+`onnx_context_memory_sharing_enabled`, `onnx_profile_batch`. `onnx_cuda_graph_enabled` is
+**not** included: D-12 removes CUDA Graph from this change's scope, so adding its switch here
+would put a deferred feature back into the schema.
 
 **Rejected: rev A's `onnx_precision` / `onnx_max_workspace_bytes` /
 `onnx_engine_cache_dir`.** They create two places to set TRT precision, two workspace
@@ -145,8 +147,17 @@ Phase 7 shows concurrent apply is reachable.
 
 ## D-7. Add no `world_model:` key to any tracked overlay
 
-**Decision.** New fields live on schema defaults. `config/jetson_onnx_fp16.yaml` is a new,
-explicitly-selected overlay — never merged into `config/default.yaml`.
+**Decision.** New fields live on schema defaults, and the FP16/cache profile is selected
+through `MOUSEDROID_WORLD_MODEL__*` environment variables in `/etc/mousedroid/docker.env` —
+not through a tracked YAML overlay.
+
+**Rejected: a `config/jetson_onnx_fp16.yaml` overlay** (rev A's proposal, and rev B's own
+earlier wording). `check_config_compat.py` validates every changed `config/*.yaml` against
+the schema at the pinned SHA, where `WorldModelConfig` is a plain `BaseModel`
+(`032942b…:src/mousedroid/config/schema.py:1597`) with `extra="ignore"` — so such a file
+passes the gate and has every key silently dropped by the pinned schema. An overlay and
+"no `world_model:` key in tracked YAML" cannot both hold. Environment activation satisfies
+both and matches the F-043 precedent.
 
 **Rejected: rev A's "default all new switches OFF in `config/default.yaml`".** Two
 problems. First, `loader.py:76-96` loads `default.yaml` as the base and deep-merges every
