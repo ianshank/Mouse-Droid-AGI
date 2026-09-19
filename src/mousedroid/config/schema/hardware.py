@@ -560,7 +560,19 @@ class HailoConfig(StrictBaseModel):
 class JetsonConfig(StrictBaseModel):
     """Nvidia Jetson Orin Nano hardware configuration."""
 
-    tensorrt_enabled: bool = Field(True, description="Enable TensorRT optimization")
+    tensorrt_enabled: bool = Field(
+        True,
+        description=(
+            "Enable TensorRT optimization. INERT TODAY: nothing in src/ "
+            "constructs a compiler -- `build_tensorrt_compiler` has no "
+            "caller and `OptimizedInference`, the only thing that would "
+            "invoke `compile_model`, is never instantiated (vulture reports "
+            "both as unused). So this reads as 'acceleration on' while no "
+            "acceleration runs. Recorded rather than flipped to False "
+            "because the flag correctly expresses intent for the day the "
+            "seam is wired; see peer review D-25/S-11."
+        ),
+    )
     gpu_memory_fraction: float = Field(
         0.5,
         gt=0,
@@ -584,7 +596,17 @@ class JetsonConfig(StrictBaseModel):
     workspace_gb: float = Field(1.0, gt=0, description="TensorRT builder workspace (GB)")
     tensorrt_cache_dir: Path = Field(
         Path("/opt/mousedroid/tensorrt_cache"),
-        description="Directory for cached TensorRT compiled engines",
+        description=(
+            "Directory for cached TensorRT compiled engines. Created 0700 "
+            "and verified private before any engine is deserialized, because "
+            "loading a torch2trt engine requires `weights_only=False` -- "
+            "arbitrary pickle. A cache directory group or other can reach is "
+            "treated as a MISS and rebuilt, never loaded. The default is "
+            "bind-mounted from the host by docker-compose.jetson.yml, so it "
+            "outlives the image. The 0700 mode is deliberately NOT "
+            "configurable: a knob for it would only be a way to configure "
+            "the fail-closed path back open."
+        ),
     )
 
 
