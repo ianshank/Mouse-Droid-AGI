@@ -158,6 +158,9 @@ Ordered by severity. Each is live on `2469588` unless marked fixed.
 
 | ID | Severity | Defect | Evidence |
 |---|---|---|---|
+| **D-25** | **Medium** (latent High) | ~~**The TensorRT engine cache unpickles arbitrary code behind a permission control that does not exist.**~~ **FIXED IN THIS CHANGE (§9.2).** `efficiency/tensorrt.py::load_compiled` falls back to `torch.load(..., weights_only=False)` -- arbitrary pickle, i.e. code execution on load -- behind a comment asserting the cache directory *"should have restricted permissions (0700)"*. Nothing enforced it: `mkdir` passed no `mode=` (executed: the directory lands at **0o755**, group- and other-readable), there is no `chmod` anywhere in `src/`, no validator on `JetsonConfig.tensorrt_cache_dir`, and `docker-compose.jetson.yml:80` bind-mounts `/opt/mousedroid` **from the host**. The fallback fires precisely when the file is *not* what was expected. **This is the D-21 class for the third time** -- after the injection filter's `max_vx_norm_mps` and D-1's `human_detected`: a security claim written in a comment, relied on by a real decision, never implemented. **Rated latent, and the rating is the finding's twin.** An earlier draft of this row called it a live RCE; tracing it shows `OptimizedInference` -- the only caller of `compile_model` -- is **constructed nowhere in `src/`**, `build_tensorrt_compiler` has **no caller**, and `vulture` already reports both as unused. That is the D-0 misrating repeated after this review had written the lesson down; see §9.2 | `efficiency/tensorrt.py::load_compiled`, `::_save_compiled`, `config/schema/hardware.py::JetsonConfig`, `docker-compose.jetson.yml`; executed in §8.10 |
+| **D-26** | **Medium** | ~~**`tensorrt_enabled` declares an acceleration that never runs.**~~ **CORRECTED IN THIS CHANGE (§9.2).** Schema default `True` (`config/schema/hardware.py:563`) and set `true` explicitly in **four** shipped configs -- `default.yaml:107`, `jetson_production.yaml:61`, `jetson_dual_stream.yaml:20`, `jetson_sdcard_64gb.yaml:18`. Nothing constructs a compiler, so an operator reading any of them concludes TensorRT acceleration is on while the models run in eager PyTorch. **Fourth instance of the S-11 class in this review**, after D-1 (`human_detected`), D-2 (`ThreeLawsConfig.enabled`) and D-21 (`max_vx_norm_mps`). The recurrence is the actionable part: this repo's config surface systematically over-promises relative to its wiring. Fixed as a description correction, not a default flip -- the flag expresses intent correctly for the day the seam is wired | `config/schema/hardware.py::JetsonConfig.tensorrt_enabled`, `config/*.yaml` |
+| **D-27** | **Medium** | **A `PRE_ACTION` hook cannot change the action that executes.** `orchestrator.py:622` assigns `ctx.proposed_action` and `:623` runs the `PRE_ACTION` hooks, but `:626` then does `action = executable` -- so a hook that mutates `proposed_action` has no effect on what reaches the motors. `ctx.safety_ctx` is likewise exposed to hooks (`orchestrator.py:525`, declared `harness/protocol.py:155`) but read-only in practice. The harness advertises a mutation seam it does not honour -- the same declared-but-inert class as D-1 and D-2. Found while tracing D-6; **not fixed here** | `orchestrator/orchestrator.py`, `harness/protocol.py` |
 | **D-24** | **Critical** | ~~**A dead LiDAR still reported an affirmative all-clear ring, and the `lidar_unavailable_policy` was never even consulted.**~~ **FIXED IN THIS CHANGE (§9).** S-2 removed the `np.ones(feature_dim)` substitute from `SensorManager._safe_lidar_read`'s *exception* path. The identical vector was still manufactured one layer down, on a path that **never raises**: `LD19LidarDriver.read_scan` returns `empty_scan()` when the serial port was never opened or no valid frame arrived, and `LidarFeatureExtractor.extract` maps a zero-point scan to `np.ones(n_sectors)`. Features are normalised range fractions, so that is *maximum range in every sector*. Executed: an unplugged LD19 yields `lidar_min_dist_m=12.0`, `lidar_clearance_ok=True`, `is_emergency=False` **with `lidar_unavailable_policy='emergency'` set** — because the features were "present", the policy branch was unreachable. This makes D-3 worse than D-3 states: arming the interlock would have handed an operator an interlock that cannot fire for an unplugged cable or a stalled motor, which is the exact failure mode `test_unknown_policy_is_rejected_at_load` exists to prevent in its config form. Found while implementing D-3; it is a **blocker** for D-3, not a sibling | `hardware/lidar/ld19_driver.py::read_scan`, `hardware/lidar/feature_extractor.py::extract`, `sensing/manager.py::_safe_lidar_read`; executed in §8.9 |
 | **D-22** | **High** | **Sim and rover pack different physical quantities into the same `motor_state` slot — a train/serve mismatch.** `training/rover_obs_adapter.py` packs `[vx_body_mps, 0.0, omega_rads, battery_v]` for Isaac-Lab pretraining: body-frame linear velocity and an angular *rate*. `sensing/manager.py::_safe_motor_read` packs `[left_velocity_mps, right_velocity_mps, heading_for_motor(), battery_v]`: per-wheel speeds and an absolute *angle*. So an RSSM pretrained in sim learns slot 2 as a bounded angular rate and is then fed an unbounded heading angle on the rover, and slots 0/1 change frame entirely. Both docstrings are accurate for their own module, which is why a documentation sweep alone would have closed D-11 and left this standing. Found while correcting D-11; **not fixed here** — reconciling the layouts is a modelling decision, not a wording one | `training/rover_obs_adapter.py`, `sensing/manager.py::_safe_motor_read` |
 | **D-23** | **Medium** | **Three different "human radius" values are live at once, and the most conservative is the one that is off by default.** `safety.min_forward_clearance_m` = 0.20 m is what `monitor.py::evaluate`'s human branch actually compares against; `three_laws.human_safety_radius_m` = 0.50 m is what `MouseDroidNavigationAgent.act` uses; `SafetyProjectorConfig.human_keepout_m` = 1.00 m is what the projector uses — and the projector is `enabled: False` by default (D-4). The day a detector is wired, one human produces three different stop distances, with the 1.00 m one inert. Using an *obstacle*-clearance threshold as a *human* threshold in `evaluate` is also wrong on its face. Latent until D-1's seam is fed, which is exactly why it is recorded now | `safety/monitor.py::evaluate`, `agents/navigation.py::act`, `safety/projector.py::project`, `config/schema/reward_safety.py` |
@@ -172,7 +175,7 @@ Ordered by severity. Each is live on `2469588` unless marked fixed.
 | **D-3** | **High** | ~~**The S-2 LiDAR fail-closed fix shipped inert on exactly the rig that needs it.**~~ **FIXED IN THIS CHANGE (§9)**, in `config/jetson_lidar_only.yaml` and nowhere else — and the scoping is the finding. An earlier draft of the fix set the policy on `jetson_production.yaml` too. That would have **braked or emergency-stopped the production rover permanently**: `jetson_lidar_only.yaml` is an overlay *stacked on* production, production inherits `model.lidar_dim: 0` from `default.yaml` (D-13), and `_evaluate_lidar_clearance` takes its "available" branch only when `len(lidar_features) > 0`, so an armed policy there fires on every tick forever. **D-13 is a blocker for D-3 on production, not a sibling defect** — and raising `lidar_dim` is an RSSM input-dimension change that invalidates every checkpoint trained without the modality, i.e. a retraining decision. Original finding: `SafetyConfig.lidar_unavailable_policy` defaults `"ignore"` and **no YAML sets it** — including `config/jetson_lidar_only.yaml`, which also sets `ultrasonic: null`. On that stack `_safe_distance_read` returns `distance_fallback_m` = **999.0**, so `forward_clearance_ok` is *always* True, and `_evaluate_lidar_clearance` returns `(inf, True, False)` for a dead LiDAR. `c6f701d` built the mechanism correctly and left every shipped deployment on the fail-open branch | `config/schema/reward_safety.py`, `config/jetson_lidar_only.yaml`, `sensing/manager.py`, `safety/monitor.py` |
 | **D-4** | **High** | ~~**`GeometricSafetyProjector` never runs in any shipped configuration.**~~ **FIXED IN THIS CHANGE (§9)** on the lidar-only stack only, for the same `lidar_dim` reason as D-3. Flagged as a **different risk class from the rest of this change**: it alters commanded actions in *normal* operation, not only on a failure path, and its thresholds have never been validated against this rover (F-008 blocks bench validation). Original finding: `SafetyProjectorConfig.enabled` defaults `False` and no `config/*.yaml` sets it. The forward-brake, human-keepout and tight-quarters clamps are the **only graded (non-binary) safety response in the tree**. With D-3, the production LiDAR-only rig's entire LiDAR interlock reduces to one binary test at 0.20 m, and only while the LiDAR is alive | `config/schema/reward_safety.py`, `safety/projector.py` |
 | **D-5** | **High** | ~~**The production units automatically restart a motion system,**~~ **FIXED (§9)** — `safety.emergency_latch` now holds an emergency stop across ticks and across restarts, cleared only by `python -m mousedroid.cli.rearm`. Ships default-OFF; the ratchet to on is a separate change. Original finding: the production units automatically restart a motion system, which is the single most quotable ISO 3691-4 prohibition — in the standard the review itself recommends adopting.** `scripts/mousedroid.service` sets `Restart=on-failure`, `RestartSec=5`, `WatchdogSec=30`; `scripts/mousedroid-docker.service` sets `Restart=on-failure`, `RestartSec=10`. Combined with S-5 (e-stop has no latch and no persisted state — a restart is a fresh process), a fault can be cleared by a restart with no human in the loop. `WatchdogSec=30` is also **900 ticks** at 30 Hz. And because the watchdog is notified on any non-raising tick, an orchestrator that is e-stopped forever reports healthy forever | `scripts/mousedroid.service`, `scripts/mousedroid-docker.service`, `orchestrator/_lifecycle_mixin.py::run` |
-| **D-6** | **High** | **The primary action path is never shown the safety context.** `_ActionMixin._select_action` receives `safety_ctx` and forwards it **only** to `self._agents[0].act(...)`. `_try_cognitive_action` and `_try_vla_action` never see it. `config/jetson_production.yaml` sets `cognitive.enabled: true`, making the cognitive branch **primary** — and its only safety input is `obstacle_dist_m = observation.distance_m`, which on the lidar-only stack is the 999.0 fallback (D-3). LiDAR-derived clearance reaches the *policy* through nothing at all | `orchestrator/_action_mixin.py` |
+| **D-6** | **High** | **The primary action path is never shown the safety context -- and the trace is worse than this row first recorded.** Confirmed by exhaustive classification: `safety_ctx` is referenced exactly once in `_select_action`'s body (`_action_mixin.py:66`), and that branch is the **exception-fallback** path, reached only when `_try_cognitive_action` returns `None`. `_try_vla_action` is stronger still -- it does `del observation` on the first line of its body (`:130`) and sees only latent state. `cognitive_core.py:104` narrows context to the literal whitelist `("battery_v", "obstacle_dist_m", "mcts_sims")`, so `human_detected` / `human_dist_m` -- which `ConstitutionalChecker.check` documents as accepted keys -- are stripped before arrival. And `lidar_clearance_ok` is read at **exactly one site in all of `src/`**: `telemetry/frame_builder.py:191`, pure telemetry. Zero reads of either LiDAR field are policy inputs. Original finding: `_ActionMixin._select_action` receives `safety_ctx` and forwards it **only** to `self._agents[0].act(...)`. `_try_cognitive_action` and `_try_vla_action` never see it. `config/jetson_production.yaml` sets `cognitive.enabled: true`, making the cognitive branch **primary** — and its only safety input is `obstacle_dist_m = observation.distance_m`, which on the lidar-only stack is the 999.0 fallback (D-3). LiDAR-derived clearance reaches the *policy* through nothing at all | `orchestrator/_action_mixin.py` |
 | **D-7** | **High** | **The TensorRT engine cache has no version identity and survives image rebuilds.** `efficiency/tensorrt.py::_model_fingerprint` hashes only class name, architecture string, input shapes, precision and parameter count — **not** TensorRT version, CUDA version, GPU compute capability or driver. `compile_model` treats a stale engine as a **cache hit**; `tensorrt_cache_dir` defaults under `/opt/mousedroid`, which `docker-compose.jetson.yml` **bind-mounts from the host**, so the cache outlives the image; and `load_compiled`'s `_load_sync` falls through a **bare `except Exception:`** to `torch.load(..., weights_only=False)`, swallowing the exact deserialization error a version mismatch would raise. Fires on a GPU swap or base-image bump, not only a JetPack upgrade. Docs claim TRT 10.4; JetPack 7.2.1 ships 10.16.2 | `efficiency/tensorrt.py`, `docker-compose.jetson.yml`, `config/schema/hardware.py::JetsonConfig` |
 | **D-8** | **Medium** | ~~**Valid-JSON-but-not-an-object crashed the default LLM gateway.**~~ **FIXED IN THIS CHANGE (§9).** `LLMGateway._parse_response` caught `(JSONDecodeError, KeyError, TypeError)` — but `dict.get` cannot raise `KeyError`, and a non-dict always raises `AttributeError`, which was **not** named. So `[1,2,3]`, `null`, `7` and `"go forward"` raised while plain garbage (`"not json at all"`) was handled safely. Its two sibling implementations both guard this and `OpenAICompatibleLLMGateway` documents a "never raises" invariant — the **default** backend was the one without the guard, and `llama_cpp` is also the documented off-network fallback, so the degraded path is where it would bite | `llm_gateway/gateway.py`; executed in §8.2 |
 | **D-9** | **Medium** | ~~**The loop-latency histogram is survivorship-biased, so any published p99 would be misleading.**~~ **ADDRESSED (§9)** — the bias is intentional per telemetry invariant 5 and stays; what was missing was the denominator, now recorded, and the caveat, now documented. `_finish_tick_timing` latches the duration on every path but **returns before recording when `ok is False`**. A tick that raises — including one cancelled by `asyncio.wait_for(self.tick(), tick_timeout_s)` — contributes no histogram sample **and** no `tick_overruns` increment. `histogram_quantile(0.99, ...)` is therefore a p99 *of successful ticks*, structurally blind to the 1.0 s timeout class in P5 | `orchestrator/_telemetry_experience_mixin.py::_finish_tick_timing` |
@@ -417,6 +420,61 @@ Frames arrived, so the sensor is answering; all-ones is a true reading of that r
 
 ---
 
+### 8.10 The cache key that could not see its own runtime, and the 0700 that was not
+
+The permission claim, tested rather than read:
+
+```
+umask-derived mode: 0o755    group/other readable: True
+```
+
+`mkdir(parents=True, exist_ok=True)` passes no `mode=`, and `grep -rn "chmod\|0o700\|0o600" src/`
+returns nothing. The control the `SECURITY:` comment names does not exist anywhere in the tree.
+
+The cache key, before and after. `_runtime_identity()` on this host:
+
+```
+('torch=2.14.0+cu130', 'cuda=13.0', 'tensorrt=unavailable',
+ 'torch2trt=unavailable', 'compute=unavailable')
+```
+
+Each component moves the fingerprint; before the fix none of them did:
+
+```
+fingerprint          : 3f5096e526fee2da
+torch changed        : 1942f87828394401
+tensorrt now present : 03a89de485b10949
+```
+
+Absent components are **recorded** as `unavailable` rather than omitted. Omitting them would make
+the key of a host that cannot report a component collide with one that can — the same collision
+being fixed.
+
+The guard, end to end:
+
+```
+after save, cache mode: 0o700  private=True
+loosened to           : 0o755  private=False
+direct load_compiled  : refused -> refusing to deserialize .../engine_deadbeef.pth ...
+compile_model         : returned TopLevelTracedModule (no exception)
+self-healed mode      : 0o700  private=True
+```
+
+Note the fourth line. `compile_model` **recompiles** rather than raising, and the recompile's save
+restores the permissions. A cache is an optimization: declining to trust an entry must mean rebuild
+it, never fail. Raising would have dropped every rig to eager PyTorch through
+`OptimizedInference._ensure_compiled`'s `except Exception` — a silent performance cliff.
+
+One negative result worth recording, because it shaped the tests. The first attempt to demonstrate
+the guard produced `direct load_compiled : LOADED (guard did not fire)` — correctly. Without
+torch2trt installed the compiler JIT-traces, so the cached engine **is** TorchScript,
+`torch.jit.load` succeeds and the pickle branch is never entered. The pickle path is reachable only
+for a genuine torch2trt engine, which is saved with `torch.save`. The guard costs nothing on any
+host without TensorRT, and a test that did not write a non-TorchScript file would have been
+vacuous.
+
+---
+
 ### 8.8 Baseline
 
 `python scripts/select_next.py` → `F-008  USB-C rover smoke passes on the physical Jetson
@@ -571,6 +629,75 @@ while writing the tests for the corrected version — which means the corrected 
 wrong, in a quieter way: it would have shipped an interlock that resolves correctly in config and
 cannot fire on the two most likely hardware failures. Both corrections come from the same habit and
 neither came from re-reading the plan: trace the value to its consumers, then execute it.
+
+---
+
+### 9.2 Third batch — the TensorRT engine cache, and a misrating repeated
+
+**D-7 — the cache key now names the runtime that built the engine.**
+`_model_fingerprint` gains `_runtime_identity()`: torch version, `torch.version.cuda`, TensorRT
+version, torch2trt version, GPU compute capability. Each resolves through one guarded accessor that
+returns an explicit `"unavailable"` sentinel — **recorded, never omitted**, because an omitted
+component collides a host that cannot report it with one that can. That sentinel path is the CI and
+dev path, not an edge case: neither `tensorrt` nor `torch2trt` is installed on either.
+
+This **invalidates every previously cached engine by design** — old keys never match, so a stale
+engine is ignored rather than mis-loaded. The cost is one recompile per model after an upgrade.
+
+**D-25 — the 0700 claim is now true, enforced, and fails to a rebuild.** `_save_compiled` creates
+the directory `mode=stat.S_IRWXU` *and* `chmod`s it, because `mkdir`'s mode is umask-masked and
+mode alone would have left the same false claim in a new place. `load_compiled` refuses to unpickle
+from a group- or world-accessible directory, raising the named `UntrustedEngineCacheError` — a
+named exception, not an `assert`, because `PYTHONOPTIMIZE=1` in `Dockerfile.jetson` strips asserts
+and would turn the guard into no guard. The `except Exception` around `torch.jit.load` is narrowed
+to `RuntimeError`, with the honest note that narrowing alone does **not** separate a
+version-mismatched engine from a hostile pickle — both arrive as `RuntimeError`. D-7 prevents the
+first, this guard the second.
+
+`compile_model` treats an untrusted cache as a **MISS and recompiles**, and the recompile self-heals
+the permissions. This is a correction to the first design: raising would have dropped every existing
+rig to eager PyTorch via `OptimizedInference._ensure_compiled`'s `except Exception`, logged once at
+warning level — a performance cliff nobody would notice. The permission mode is deliberately **not
+configurable**, following `EmergencyLatchConfig`'s absent fail-open knob and
+`LidarScan.sensor_responding` being a bool rather than a threshold.
+
+**D-26 — `tensorrt_enabled` now says it is inert.** Four shipped configs set it `true` while
+nothing constructs a compiler. Corrected as a description, not a default flip: the flag expresses
+the right intent for the day the seam is wired.
+
+Pinned across the unit tier and a regression pair — 81 tests, 11 red against pre-fix semantics:
+
+- `tests/unit/efficiency/test_tensorrt.py` — the identity table (one named row per component, so a
+  component dropped from the tuple names itself on failure), the sentinel and raising-probe paths,
+  directory mode, miss-and-rebuild, self-heal, direct-load refusal, and a pin that a TorchScript
+  engine never reaches the pickle path at all.
+- `tests/regression/test_tensorrt_cache_identity_aqa.py` — a structural `ast` gate that every
+  `weights_only=False` call sits inside a function that consults `cache_dir_is_private`, **with a
+  self-test in both directions** (it must flag a known-bad sample and accept a known-good one),
+  because this review's earlier NaN-clamp gate shipped coupled to two files' variable names and
+  flagged neither of its own samples.
+- `tests/regression/test_tensorrt_cache_identity_backwards_compat.py` — no new config field, every
+  shipped overlay loads, the cache-dir default and the digest format are untouched,
+  `tensorrt_enabled: false` is still a pure pass-through, and **two pins that nothing in `src/`
+  constructs `OptimizedInference` or calls `build_tensorrt_compiler`** — the tests that make D-25's
+  latent rating revisitable the day someone wires the seam, instead of leaving it to be rediscovered.
+
+**The misrating, recorded because it is the third instance of the same lesson.** A first draft of
+this batch called D-25 a live RCE and "the sharpest thing left". It is not live: nothing constructs
+`OptimizedInference`, nothing calls `build_tensorrt_compiler`, and `vulture` already reports both as
+unused. That is exactly the D-0 error — rating a mechanism without tracing it to its consumers —
+committed *after* this review had written the lesson into its own §9 and into the pull request. The
+generalisable form is narrower than "trace to consumers", which I evidently can recite without
+applying: **the trace has to happen before the severity is written down, because a severity, once
+written, is what the rest of the analysis anchors to.**
+
+A second, smaller correction from the same pass: I also reasoned that raising on a loose cache would
+"brick every existing rig". It would not — `optimized_inference.py:108` catches it and falls back to
+eager PyTorch. The right objection was subtler (a silent performance cliff), and the fix is the
+miss-and-rebuild above.
+
+Also recorded, not fixed: **D-27**, a `PRE_ACTION` hook cannot change the executing action, and the
+sharpened **D-6** trace. Both found while tracing this batch.
 
 Not fixed here, recorded for triage: **D-1 through D-7 and D-9 through D-16.** D-1 (human
 detection) and D-5 (automatic restart of a motion system) are the two that should be triaged
