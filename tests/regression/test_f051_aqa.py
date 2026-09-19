@@ -118,10 +118,15 @@ def test_the_compose_fallback_equals_the_schema_default() -> None:
     mounts = [m for m in _volume_mounts() if m.startswith(f"{_CACHE_VOLUME}:")]
     container_path = mounts[0].split(":", 1)[1]
     fallback = container_path.split(":-", 1)[1].rstrip("}")
-    schema_default = JetsonConfig().tensorrt_cache_dir
-    assert fallback == str(schema_default), (
+    # ``as_posix()``, not ``str()``: this is a path *inside the Linux container*,
+    # so it is POSIX whatever the host running the test uses. ``str()`` on a
+    # ``WindowsPath`` renders it as ``\opt\mousedroid\tensorrt_cache`` and the
+    # comparison fails on the ``test-windows`` job for a reason that has nothing
+    # to do with the drift this test exists to catch.
+    schema_default = JetsonConfig().tensorrt_cache_dir.as_posix()
+    assert fallback == schema_default, (
         f"compose fallback {fallback!r} must equal JetsonConfig."
-        f"tensorrt_cache_dir {str(schema_default)!r}"
+        f"tensorrt_cache_dir {schema_default!r}"
     )
 
 
