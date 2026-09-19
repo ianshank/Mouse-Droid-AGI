@@ -312,3 +312,63 @@ rule's keywords.
 - **GIVEN** a `tegrastats` report whose header includes the rover hostname
 - **WHEN** it is produced
 - **THEN** it lands on a gitignored path and is not committed
+
+
+## ADDED Requirements — round 3
+
+### Requirement: The consumer ceiling SHALL be computed before any optimization is built
+
+The proposal SHALL carry an Amdahl bound for `observe_step`, derived by the method
+`scripts/spike_step_distillation.py:57-61` already implements and prints: "MCTS plan() makes
+~500-650 imagine_step calls; rollouts are ~40% of them, so end-to-end planner gain caps at
+~1.25-1.6x regardless of the primitive speedup."
+
+That bound is for the rollout leg. `observe_step` is one call per tick, so its share is
+strictly smaller and its ceiling strictly worse. The calculation needs no hardware.
+
+If the ceiling does not justify I/O binding, FP16 and an engine cache, the optimization
+SHALL NOT be built, and the instrumentation, artifact-integrity, provider-proof and delivery
+work SHALL land on their own merits.
+
+#### Scenario: The ceiling does not justify the work
+
+- **GIVEN** a computed end-to-end ceiling below what the added surface costs to maintain
+- **WHEN** the proposal is reviewed
+- **THEN** the latency work is deferred and the remaining phases proceed
+
+### Requirement: Promotion SHALL use the repository's existing three-part rubric
+
+`docs/analysis/alayaworld-distillation-spike.md:65-75` defines the GO rubric for accelerating
+this world model, all three required: a ≥3× p95 primitive speedup **on Jetson**; ≥0.90 action
+agreement at that operating point against a **trained-checkpoint** teacher; and a written
+consumer case whose projected end-to-end gain justifies the added surface.
+
+No new promotion rubric SHALL be invented. Criterion 2 SHALL be recorded as **blocked**, not
+passed, while the production model loads no trained weights — the same spike recorded 0.422 /
+0.609 / 0.422 action agreement and attributed it to a random-init teacher making "the argmax
+grid nearly a coin toss". Non-monotonicity in that series is the signature of a
+noise-dominated measurement.
+
+FP16 promotion SHALL therefore be gated on action agreement against the FP32 torch engine, in
+addition to the tensor tolerances in `specs/onnx-runtime`. Tensor tolerances alone do not
+answer whether behaviour changed.
+
+#### Scenario: Tensor parity passes but behaviour diverges
+
+- **GIVEN** FP16 outputs within `rtol=1e-2, atol=1e-3` of the torch engine
+- **WHEN** action agreement is measured over a recorded episode
+- **THEN** agreement below the bar blocks promotion regardless of the tensor result
+
+### Requirement: `new_z` SHALL NOT carry a precision tolerance
+
+`reports/drift_comparison.json` reports baseline mean MSE of 0.0304 for `latent_h` against
+1.7669 for `latent_z`, and finals of 0.0349 against 1.8447 — roughly 58× the variance. The
+`z` signal is dominated by posterior sampling variance, so a precision tolerance on it
+measures nothing. Compare `post_mean` and `post_logvar` instead, as
+`specs/onnx-runtime` already requires.
+
+#### Scenario: A tolerance is proposed for the sampled latent
+
+- **GIVEN** a proposed FP16 drift gate over `new_z`
+- **WHEN** it is reviewed against `reports/drift_comparison.json`
+- **THEN** it is rejected as unmeasurable and replaced by a distribution comparison

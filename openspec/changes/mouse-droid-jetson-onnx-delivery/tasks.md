@@ -77,6 +77,16 @@ coverage plugin's `fail_under = 90` (`:411`) fails any narrow run without `--no-
 
 **Phase 1b — Preconditions round 2 found (gate for everything after)**
 
+- [ ] 1b.0 **Compute the consumer ceiling on paper, first.** This is a desk calculation and
+      needs no rover. `scripts/spike_step_distillation.py:57-61` already implements the
+      method and states the result for the rollout leg: "MCTS plan() makes ~500-650
+      imagine_step calls; rollouts are ~40% of them, so end-to-end planner gain caps at
+      ~1.25-1.6x **regardless of the primitive speedup**". Apply the same method to
+      `observe_step`, which is **one** call per tick — a strictly smaller share, so a strictly
+      worse ceiling. Write the number into `proposal.md`. If it does not justify I/O binding,
+      FP16 and a cache, stop here and land only Phases 1b.3-1b.5, 2, 3, 6 and 7. Concluding
+      "not worth it" on this calculation is a successful outcome, not a failed one.
+
 - [ ] 1b.1 State in the proposal, not as a caveat: the production world model **loads no
       trained weights**. `build_world_model` returns `DualStreamRSSM(cfg.model)`
       (`factory/world_model.py:108`) or `RSSM(cfg.model)` (`:113`) freshly constructed; there
@@ -225,10 +235,23 @@ coverage plugin's `fail_under = 90` (`:411`) fails any narrow run without `--no-
       `mousedroid_tick_overruns_total`, torch engine, actuation disabled, and commit the
       raw samples via `evidence-commit` with a `reports/jetson_onnx_benchmark/` entry added
       to `.gitignore`'s per-directory list (`.gitignore:173-196`).
-- [ ] 4.5 **Decision gate.** If `phase="world_model"` is not a material share of the tick,
-      stop here: record the negative result, close F-050 on the instrumentation and
-      artifact-integrity work alone, and do not build I/O binding. This is a real exit, not
-      a formality.
+- [ ] 4.5 **Decision gate — use the repository's existing rubric, not a new one.**
+      `docs/analysis/alayaworld-distillation-spike.md:65-75` is the ratified three-part GO
+      rubric for accelerating this world model, all three required: (1) ≥3x p95 primitive
+      speedup **on Jetson**; (2) >=0.90 action agreement against the torch engine with a
+      **trained-checkpoint** teacher; (3) a written consumer case whose projected end-to-end
+      gain justifies the added surface. Its own verdict for a sibling optimization was
+      **DEFER**, on criterion 3 alone — "This alone justifies DEFER over ADOPT regardless of
+      accuracy" (`:93-95`). Criterion 2 is unattainable while pins 57-58 hold, so record it
+      as blocked rather than passing it vacuously. If the rubric does not return GO, close
+      F-050 on the instrumentation and artifact-integrity work and do not build I/O binding.
+      This is a real exit.
+- [ ] 4.6 Note the pattern this phase is joining: `reports/endurance/` holds only
+      `.gitkeep`; `reports/spike_step_distillation.json` says "Jetson measurement pending
+      operator run"; and `alayaworld-distillation-spike.md:54-63`'s "Results — Jetson Orin
+      Nano (operator run — PENDING)" table is still a row of em-dashes with "**The Jetson
+      criterion is UNMET until this section is filled**". Three CPU-side spikes, none closed
+      on hardware. Do not open a fourth without an operator committed to closing it.
 
 **Phase 5 — Provider options and proof**
 

@@ -719,3 +719,101 @@ weights; production runs `RSSM`, not `DualStreamRSSM`), fix pin 59 (off-loop war
 pin 60 (install `onnxruntime-gpu`, fail loud on provider downgrade). Pins 57 and 58 are not
 this change's to fix, but a latency A/B across two architectures on random weights is not
 evidence, and the proposal must say so rather than imply otherwise.
+
+---
+
+# Round 3 — AI/ML and DevOps lenses
+
+A third pass through two lenses the first two rounds did not apply: the model itself, and
+release engineering. Verified against `a46fbad`.
+
+**Round 3 finds that this exact decision has already been made in this repository, against a
+sibling optimization, with a written rubric — and the verdict was DEFER.**
+
+## The house rubric already exists, and this plan scores zero against it
+
+66. **`docs/analysis/alayaworld-distillation-spike.md:65-75` is a ratified three-part GO
+    rubric for accelerating the world model**, all three required:
+
+    > 1. **Primitive**: ≥3× p95 primitive speedup at the chosen k **on Jetson**.
+    > 2. **Accuracy**: ≥0.90 action agreement at that k (trained-checkpoint teacher).
+    > 3. **Consumer case**: a written plan for the MCTS rollout-leg integration whose
+    >    projected end-to-end gain (bounded by the ~1.25-1.6× ceiling) justifies the added
+    >    model + maintenance — or an alternative consumer … with its own budget case.
+
+    Its verdict: **"Recommendation (provisional): DEFER."** Scoring this plan against it as
+    the tree stands: (1) unmeasured — no on-device latency evidence exists anywhere;
+    (2) unattainable — there is no trained checkpoint and production runs random weights
+    (pin 57); (3) never performed. The plan proposes a larger change than the spike and
+    supplies less evidence.
+
+67. **The Amdahl ceiling is already computed, verified against the planner, and printed to
+    the operator.** `scripts/spike_step_distillation.py:57-61`:
+
+    > ```python
+    > # Consumer-ceiling constants for the report (verified against MCTSPlanner at
+    > # defaults: 9-candidate expand + 50 sims x depth-5 rollouts + re-expansions).
+    > _PLAN_CALLS_ESTIMATE = "500-650"
+    > _ROLLOUT_SHARE = "~40%"
+    > _CONSUMER_CEILING = "~1.25-1.6x"
+    > ```
+
+    and `:340-342` prints: "MCTS plan() makes ~500-650 imagine_step calls; rollouts are ~40%
+    of them, so end-to-end planner gain caps at ~1.25-1.6x **regardless of the primitive
+    speedup above**." That bound applies to optimizing the *rollout* leg — 500-650 calls at
+    ~40% share. This plan optimizes `observe_step`: **one** call per tick. Its share is
+    strictly smaller, so its end-to-end ceiling is strictly worse, and it is derivable today
+    by the same method without touching the rover. The plan must compute it in the proposal.
+
+68. **Measured world-model step latency is sub-millisecond to ~1 ms.**
+    `reports/spike_step_distillation.json` records `primitive_latency_ms` p50 of 0.274 ms
+    (k=2), 0.532 ms (k=4) and 1.136 ms (k=8) on `container-cpu`. Against a 33.33 ms period
+    that is roughly 1–3% of a tick. These are k-step primitives on a random-init `RSSM`, not
+    `observe_step` on `DualStreamRSSM`, so treat them as scale-setting rather than as the
+    number — but they are the only measured world-model latencies in the repository, and they
+    put the optimization target an order of magnitude below the budget it is being justified
+    against.
+
+69. **Correcting pin 26.** I estimated ~300 `imagine_step` calls per `plan()` from
+    `n_simulations_base × (1 + rollout_depth)`. The repo's own verified figure is
+    **500-650**, because it also counts the 9-candidate initial expansion and re-expansions
+    (`spike_step_distillation.py:57-58`). Use the repo's number.
+
+70. **The house accuracy gate is task-level action agreement, not tensor tolerance.** The
+    rubric asks for ≥0.90 action agreement; the spike measured 0.422 / 0.609 / 0.422 at
+    k=2/4/8 and explicitly attributed the failure to the teacher: "the teacher is a
+    random-init RSSM (near-flat reward surfaces make the argmax grid nearly a coin toss
+    across similar candidates)" (`:86-89`), concluding "The Jetson run must use a trained
+    checkpoint before this criterion is judged." Note the non-monotonicity in k — 0.42 →
+    0.61 → 0.42 — which is what noise-dominated measurement looks like. Rev C's FP16 gate
+    should adopt action agreement against the torch engine as its task-level criterion,
+    alongside (not instead of) the tensor tolerances, because that is the metric this repo
+    already uses to decide.
+
+71. **`new_z` is empirically ~58× noisier than `new_h`, in the repo's own measurement.**
+    `reports/drift_comparison.json` (F-023 drift comparison, 8 episodes, seq_len 48) reports
+    baseline mean MSE `latent_h` 0.0304 versus `latent_z` 1.7669, and finals 0.0349 versus
+    1.8447. That independently justifies ADR-008's exclusion of `new_z` from the parity
+    check, and it means any FP16 tolerance placed on `z` would be meaningless — the signal is
+    dominated by the sampling variance, not by precision.
+
+72. **Three never-closed on-device gates form a pattern this plan would extend.**
+    `reports/endurance/` holds only `.gitkeep` (pin 30); `reports/spike_step_distillation.json`
+    carries `"environment": "container-cpu (Jetson measurement pending operator run)"`; and
+    `docs/analysis/alayaworld-distillation-spike.md:54-63` has a "Results — Jetson Orin Nano
+    (operator run — PENDING)" section whose table is a single row of em-dashes, with
+    "**The Jetson criterion is UNMET until this section is filled**". The repository reliably
+    produces careful CPU-side spikes and reliably does not close them on hardware. Rev C's
+    Phase 4 is the fourth such gate, and it should say plainly that the pattern is the risk.
+
+### What this changes in rev C
+
+Replace the invented "material share" criterion in Phase 4 with the existing three-part
+rubric, and compute the `observe_step` consumer ceiling — by the method
+`spike_step_distillation.py` already implements — **in the proposal, before Phase 2**. It is
+a desk calculation, needs no rover, and on the evidence above it is likely to return a number
+that does not justify I/O binding, FP16 or CUDA Graph. That is a successful outcome for a
+review, not a failed one: the instrumentation (Phase 2), narrative corrections (Phase 3),
+artifact integrity (Phase 6), the `onnxruntime-gpu` install and provider proof (Phase 1b), and
+the delivery and security hardening (Phase 7) all stand on their own merits and are worth
+landing regardless of whether the latency work ever does.

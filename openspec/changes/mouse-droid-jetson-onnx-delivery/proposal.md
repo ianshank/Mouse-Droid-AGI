@@ -8,18 +8,32 @@
 - owner: ianshank
 - created: 2026-09-19
 - basis_commit: 18aba56
-- rev: B (revision of the external plan `jetson-onnx-runtime-and-pc-delivery`, rev A)
+- rev: C (revision of the external plan `jetson-onnx-runtime-and-pc-delivery`, rev A; three review rounds recorded in `peer-review.md`)
 
 ## Why
 
 Rev A of this plan proposed optimizing `DualStreamRSSM.observe_step` with ONNX Runtime
 I/O binding, FP16, TensorRT engine caches and CUDA Graph, then promoting it to the rover
 through a new release/symlink deployment scheme. Peer review against the tree
-(`peer-review.md`) found the direction sound and five load-bearing premises false. Rev B
+(`peer-review.md`) found the direction sound and five load-bearing premises false. Rev C
 keeps the architecture and re-sequences the work behind what the repository can actually
 prove.
 
-Three facts reorder everything:
+**Round 3 added the fact that should have come first: this decision already has a
+precedent in this repository, and it went the other way.**
+`docs/analysis/alayaworld-distillation-spike.md:65-75` is a ratified three-part GO rubric for
+accelerating this exact world model — a ≥3× p95 primitive speedup on Jetson, ≥0.90 action
+agreement with a trained-checkpoint teacher, and a written consumer case — and its verdict for
+a sibling optimization was **DEFER**, on the consumer case alone: "This alone justifies DEFER
+over ADOPT regardless of accuracy." The Amdahl bound behind that is computed, verified against
+the planner, and printed to the operator by `scripts/spike_step_distillation.py:57-61`:
+`plan()` makes ~500-650 `imagine_step` calls, rollouts are ~40% of them, so end-to-end planner
+gain caps at ~1.25-1.6× *regardless of the primitive speedup*. This change targets
+`observe_step` — **one** call per tick, a strictly smaller share, so a strictly worse ceiling.
+That number is a desk calculation, and rev C computes it before Phase 2 rather than after a
+rover campaign.
+
+Four facts reorder everything:
 
 1. **The stage is unmeasured.** `reports/` holds three files and `smoke-reports/` two;
    none carries an `observe_step`, `tick_phase` or `world_model` measurement. The only
@@ -36,14 +50,22 @@ Three facts reorder everything:
    `tests/performance/test_observe_step_budget.py` — the timer brackets `session.run`
    only (`:255-258`), excluding both `pack_observation` and the NumPy round-trip that
    I/O binding exists to remove.
-3. **The path is not enabled on the rover.** No `config/*.yaml` sets a `world_model:`
+3. **The model is not worth optimizing yet.** `build_world_model` returns a
+   freshly-constructed module — no `load_state_dict` anywhere in it or in `orchestrator/`,
+   and `factory/telemetry.py:315` `build_weight_update_loader` returns `None`
+   unconditionally. So the rover runs **random weights**, which makes a numerical-parity gate
+   vacuous and the rubric's accuracy criterion unattainable. And production does not even
+   build the architecture under optimization: `config/jetson_production.yaml` has no `model:`
+   block, so `cfc_hidden_dim` is `0` and `factory/world_model.py:91` falls through to plain
+   `RSSM`, not `DualStreamRSSM`. A torch-vs-ONNX A/B would compare two different models.
+4. **The path is not enabled on the rover.** No `config/*.yaml` sets a `world_model:`
    block, so `engine` sits at its `"torch"` default. Worse, `engine: onnx_trt` cannot be
    switched on from the overlay ADR-008 documents: `_build_onnx_world_model` raises when
    `cfg.model.cfc_hidden_dim <= 0` (`factory/world_model.py:246-253`), the schema default
    is `0` (`world_model.py:205`), and only `config/jetson_dual_stream.yaml:29` sets `64`.
 
 So rev A would have optimized a code path the rover does not execute, measured by a metric
-that never emits, against a baseline that does not exist. Rev B makes instrumentation and
+that never emits, against a baseline that does not exist. Rev C makes instrumentation and
 enablement the price of admission, and makes the FP16 / I/O-binding / CUDA-Graph work
 conditional on evidence that `world_model` is in fact the dominant tick phase.
 
@@ -126,7 +148,7 @@ at worst.
   (`docker-compose.jetson.yml:80`) is a git checkout carrying an editable install and
   rover-local WIP commits. Rev A's `releases/<id>` + `current`/`previous` symlink scheme
   changes the identity of that path and breaks the compose mount, `sync_jetson_overlay.sh`,
-  `jetson-nightly.yml:87` and `preflight_check.sh:29-31`. Rev B keeps the spine and uses
+  `jetson-nightly.yml:87` and `preflight_check.sh:29-31`. Rev C keeps the spine and uses
   the established rollback anchor — `docker tag mousedroid:jetson
   mousedroid:jetson-rollback-<date>` — which already rolls back offline without rebuilding.
 - `imagine_step` stays PyTorch. `CompositeWorldModel` also delegates `get_safety_trace`
@@ -187,7 +209,7 @@ worktrees the SHA in `deployments/jetson-image.json` (`032942b5…`) and validat
 against the old `Settings`. At that SHA `WorldModelConfig` is a plain `BaseModel`
 (`schema.py:1597`), i.e. `extra="ignore"` — so a new `world_model.*` key in
 `config/jetson_production.yaml` passes the gate and is then ignored by the pinned schema.
-A new *top-level* block hard-fails instead. Rev B therefore adds no `world_model:` key to
+A new *top-level* block hard-fails instead. Rev C therefore adds no `world_model:` key to
 any tracked overlay; `config/jetson_onnx_fp16.yaml` is an explicitly-selected overlay, and
 Phase 8 re-pins the record post-merge.
 
@@ -201,7 +223,7 @@ SHA this change records inherits `mouse-droid-deploy-repin`'s pin-reachability s
 installing `[onnx_world_model]` and it carries `continue-on-error: true`
 (`ci.yml:579-583`), tracked with `promote_after_days: 180` since 2026-05-16 — due
 2026-11-12, and the real bar is a 7-consecutive-green-run count the tracker admits nobody
-has re-derived. Rev B does not claim coverage it lacks: the config, provider-policy and
+has re-derived. Rev C does not claim coverage it lacks: the config, provider-policy and
 artifact-contract tests land in the blocking `test` job via `tests/regression`; only the
 ORT-dependent integration tests stay advisory, and Phase 8 records the streak impact.
 
