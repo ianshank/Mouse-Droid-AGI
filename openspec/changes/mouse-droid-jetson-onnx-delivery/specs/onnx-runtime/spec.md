@@ -315,3 +315,39 @@ paths — no precedent for that exists in the tree.
 - **GIVEN** a pre-placed artifact under an unvalidated path
 - **WHEN** the factory resolves it
 - **THEN** the path is validated before the file is accepted
+
+
+### Requirement: A random-weight fallback SHALL be observable and refusable
+
+Any model that falls back to random initialisation SHALL increment a metric and SHALL be
+refusable by config, mirroring `onnx_require_primary_provider`'s fail-closed shape. Every
+benchmark and promotion record SHALL state which weight source loaded.
+
+`_resolve_bdi_weights` (`factory/cognitive.py:38-85`) currently falls through to
+`NeuralBDI()` with only `_log.warning("weights_not_found_using_random_initialization")`; the
+`weights_source` label it returns reaches nothing but a structured log at `:133`. And
+`build_world_model` never loads weights at all. So the rover can run a random-weight world
+model and a random-weight cognitive core with no metric, no health-check failure and no
+startup refusal.
+
+The same download path takes no `revision=` and performs no digest check, while the
+fail-closed `verify_sha256` + `sha256.txt` machinery exists on the OTA path — and this is the
+path that executes on every boot, since `config/jetson_production.yaml:200,203` set
+`cognitive.enabled: true` and `auto_download: true`.
+
+Evidence measured against an unrecorded weight state is the same defect as evidence measured
+against an unrecorded execution provider.
+
+#### Scenario: Weight download fails at boot
+
+- **GIVEN** no local BDI weights and a failed Hugging Face fetch
+- **WHEN** the cognitive core is built
+- **THEN** a random-init metric increments and, under a strict policy, startup fails rather
+  than proceeding on random weights
+
+#### Scenario: A benchmark records its weight provenance
+
+- **GIVEN** a promotion benchmark run
+- **WHEN** the record is written
+- **THEN** it names the weight source and digest for every model loaded, alongside the
+  observed execution provider

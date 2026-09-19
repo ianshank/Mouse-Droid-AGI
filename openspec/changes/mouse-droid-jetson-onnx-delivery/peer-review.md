@@ -817,3 +817,29 @@ review, not a failed one: the instrumentation (Phase 2), narrative corrections (
 artifact integrity (Phase 6), the `onnxruntime-gpu` install and provider proof (Phase 1b), and
 the delivery and security hardening (Phase 7) all stand on their own merits and are worth
 landing regardless of whether the latency work ever does.
+
+## MLOps pins — round 3
+
+73. **The production action path can run on random weights, observable only as one log
+    line.** `_resolve_bdi_weights` (`factory/cognitive.py:38-85`) tries local weights, then a
+    Hugging Face download, then falls through to
+    `_log.warning("weights_not_found_using_random_initialization")` and returns `NeuralBDI()`
+    — random init. The `weights_source` label it returns is used only in a structured log at
+    `:133`; there is **no metric, no health-check gate and no startup refusal**. Combined with
+    pin 57, the rover can be flying a random-weight world model *and* a random-weight
+    cognitive core, and nothing observable distinguishes that from a trained deployment.
+74. **The BDI download has no integrity verification either.** The same function calls
+    `download_weights_from_huggingface(repo_id=..., filenames=[belief/desire/intention/affect
+    .npz], ...)` with no `revision=` pin and no digest check (`grep sha256|verify_sha|revision`
+    over `factory/cognitive.py` returns nothing). This is the path that actually executes on
+    every boot, since `cognitive.enabled: true` and `auto_download: true` in
+    `config/jetson_production.yaml:200,203`. Pin 39's point therefore applies more urgently
+    here than to the ONNX artifact the plan is about: the fail-closed `verify_sha256` +
+    `sha256.txt` machinery exists and this path does not use it.
+75. **Generalising the plan's own best idea.** `onnx_require_primary_provider` — fail closed
+    when the intended execution provider is not actually active — is the right pattern, and
+    the repository has no equivalent for weights. Rev C should carry a matching requirement:
+    a model that falls back to random initialisation SHALL increment a metric and SHALL be
+    refusable by config, and any benchmark or promotion record SHALL state which weight
+    source loaded. Otherwise the plan's evidence is measured against an unrecorded weight
+    state, which is the same defect as an unrecorded execution provider.
