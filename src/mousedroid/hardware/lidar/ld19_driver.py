@@ -108,12 +108,12 @@ class LD19LidarDriver:
         """
         if self._serial is None:
             _log.warning("ld19_read_scan_no_serial")
-            return empty_scan()
+            return empty_scan(sensor_responding=False)
 
         frames = await asyncio.to_thread(self._read_frames_blocking)
         if not frames:
             _log.warning("ld19_no_frames_received")
-            return empty_scan()
+            return empty_scan(sensor_responding=False)
 
         return self._assemble_scan(frames, self._cfg)
 
@@ -121,12 +121,12 @@ class LD19LidarDriver:
         """Read a scan together with low-level serial and parser statistics."""
         if self._serial is None:
             _log.warning("ld19_read_scan_no_serial")
-            return empty_scan(), LD19ReadStats()
+            return empty_scan(sensor_responding=False), LD19ReadStats()
 
         frames, stats = await asyncio.to_thread(self._read_frames_with_stats_blocking)
         if not frames:
             _log.warning("ld19_no_frames_received")
-            return empty_scan(), stats
+            return empty_scan(sensor_responding=False), stats
 
         return self._assemble_scan(frames, self._cfg), stats
 
@@ -267,6 +267,18 @@ class LD19LidarDriver:
                 all_confidences.append(point.confidence)
 
         if not all_angles:
+            # Frames arrived, so the sensor IS responding -- every point just
+            # fell outside ``[min_range_m, max_range_m]``. On the LD19 a
+            # no-return beam reports 0 mm (below ``min_range_m``), so a room
+            # with nothing inside ``max_range_m`` lands here legitimately.
+            # Leaving ``sensor_responding`` True is what keeps peer review
+            # D-24's fail-closed fix from stopping a rover in an open space.
+            _log.debug(
+                "ld19_all_points_out_of_range",
+                min_range_m=cfg.min_range_m,
+                max_range_m=cfg.max_range_m,
+                n_frames=len(frames),
+            )
             return empty_scan()
 
         # Sort by angle for consistent scan ordering.

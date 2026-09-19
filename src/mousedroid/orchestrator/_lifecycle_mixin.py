@@ -29,9 +29,14 @@ class _LifecycleMixin(_OrchestratorState):
         # exposes this, but that is an on-demand API response, not a boot
         # artefact — this is the one boot-time touch-point.
         _log.info("mock_hardware_resolved", value=self._cfg.mock_hardware)
+        # Before anything can move: orchestrator/CLAUDE.md notes the firmware
+        # may still hold a velocity from a previous unclean stop, so a latch
+        # must be known before connect() (D-5).
+        await self._load_emergency_latch()
         if self._hailo_runtime is not None:
             await self._hailo_runtime.start()
         await self._esp32.connect()
+        await self._halt_on_connect()
         await self._sensor_manager.start()
         if self._cognitive_core is not None:
             await self._cognitive_core.start()
@@ -360,14 +365,38 @@ class _LifecycleMixin(_OrchestratorState):
             try:
                 await asyncio.wait_for(self.tick(), timeout=tick_timeout)
             except asyncio.TimeoutError:
+                elapsed_s = self._clock.monotonic() - tick_start
+                # Peer review D-9. Telemetry invariant 5 forbids recording a
+                # success-path *measurement* from work that did not complete,
+                # so the aborted tick's partial duration deliberately never
+                # reaches the latency histogram. The consequence, before this,
+                # was that a failed tick left no trace in metrics at all -- so
+                # ``histogram_quantile(0.99, ...loop_latency_ms_bucket)`` was a
+                # p99 of *successful* ticks with no denominator to disclose
+                # that. Counting the failure through the existing
+                # ``FailureRecorder`` restores the denominator without
+                # weakening invariant 5: it is a failure counter, which is
+                # what that component exists for, not a latency sample.
+                self._failure_recorder.record(
+                    "orchestrator",
+                    "tick_timeout",
+                    level="critical",
+                    extra={"timeout_s": tick_timeout, "elapsed_s": round(elapsed_s, 4)},
+                )
                 _log.critical(
                     "tick_timeout",
                     timeout_s=tick_timeout,
-                    elapsed_s=self._clock.monotonic() - tick_start,
+                    elapsed_s=elapsed_s,
                 )
                 await self._esp32.emergency_stop()
                 await self._voice_lifecycle("error")
             except Exception:
+                # Same rationale as the timeout branch above (D-9).
+                self._failure_recorder.record(
+                    "orchestrator",
+                    "tick_error",
+                    level="error",
+                )
                 _log.exception("tick_error")
                 await self._esp32.emergency_stop()
                 await self._voice_lifecycle("error")
@@ -380,6 +409,85 @@ class _LifecycleMixin(_OrchestratorState):
             sleep_time = max(0.0, control_period - elapsed)
             if sleep_time > 0:
                 await self._clock.sleep(sleep_time)
+
+    async def _load_emergency_latch(self) -> None:
+        """Read a latched emergency stop left by a previous run (D-5).
+
+        A latched rover **starts** rather than refusing to. Exiting
+        non-zero would meet ``Restart=on-failure`` / ``RestartSec=5`` on a
+        unit with no ``StartLimitBurst`` and crash-loop forever; a
+        crash-looping process never reaches ``_halt_actuators`` and so
+        never sends ``emergency_stop()``, leaving the wheels with nobody
+        driving the brake. It would also kill the telemetry that tells the
+        operator why.
+
+        Instead the latch makes ``evaluate`` return ``is_emergency`` on
+        every tick, so the existing emergency branch in ``tick()`` holds
+        the rover still. That branch already e-stops, publishes telemetry
+        and returns before action selection -- **the existing emergency
+        path is the no-motion mode**, so no new branch is needed. This is
+        consistent with CHARTER section 3: a latched rover holds the
+        default no-motion posture rather than leaving it.
+        """
+        if self._emergency_latch is None:
+            return
+        if not await self._emergency_latch.load():
+            return
+        record = self._emergency_latch.record
+        _log.error(
+            "estop_latch_active_at_boot",
+            reason=record.reason,
+            causes=list(record.causes),
+            tripped_at_iso=record.tripped_at_iso,
+            rearm_cmd=("python -m mousedroid.cli.rearm --operator <you> --confirm-area-clear"),
+        )
+
+    async def _persist_emergency_latch(self) -> None:
+        """Write the latch record if it changed. Never raises into the loop."""
+        if self._emergency_latch is None:
+            return
+        try:
+            await self._emergency_latch.persist()
+        except Exception:
+            # The motors are already stopped; losing the record must not
+            # also take down the orchestrator that is holding them stopped.
+            _log.exception("estop_latch_persist_failed")
+
+    async def _halt_on_connect(self) -> None:
+        """Command zero velocity before the first tick (peer review C4(d)).
+
+        The chassis firmware latches the last velocity it was given. A
+        previous unclean stop -- ``SIGKILL``, a power cut, a dropped USB
+        link -- therefore leaves the wheels driving, and nothing in the
+        bring-up sequence contradicted that until the first tick produced
+        an action. :mod:`mousedroid.orchestrator`'s own ``CLAUDE.md``
+        states the consequence outright: *"the rover can be moving
+        throughout bring-up"*.
+
+        This is deliberately a zero-velocity command rather than
+        :meth:`emergency_stop`: it is the normal, expected opening of a
+        session, and reserving the e-stop path for genuine faults keeps
+        the ``esp32_emergency_stop`` log event meaningful as an incident
+        signal rather than something every boot emits.
+
+        Failure is logged and swallowed. A driver that cannot accept a
+        stop here is already reported by ``connect()``; raising would turn
+        a best-effort safety improvement into a new way for startup to
+        fail, which is the wrong trade for a fail-safer measure.
+        """
+        if not self._cfg.esp32.stop_on_connect:
+            _log.warning(
+                "bringup_halt_skipped",
+                reason="esp32.stop_on_connect is False",
+            )
+            return
+        try:
+            await self._esp32.send_velocity(0.0, 0.0, 0.0)
+        except Exception:
+            # Never block startup on this. See the docstring.
+            _log.warning("bringup_halt_failed", exc_info=True)
+            return
+        _log.info("bringup_halt_sent")
 
     def request_shutdown(self, reason: str) -> None:
         """Ask the control loop to wind down cooperatively (S-1).

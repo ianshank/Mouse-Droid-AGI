@@ -8,6 +8,338 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Safety — an emergency stop now survives a restart, and only a human clears it
+
+`MouseDroidSafetyMonitor.evaluate` opened `is_emergency = False` and recomputed it
+from scratch every tick, so the instant a triggering condition cleared, the next tick
+resumed driving with no human in the loop. The shipped deployment compounded it:
+`scripts/mousedroid.service` and `scripts/mousedroid-docker.service` both set
+`Restart=on-failure`, and `docker-compose.jetson.yml` sets `restart: unless-stopped`
+— so a fault could also be cleared by a restart. That is the single most quotable
+prohibition in ISO 3691-4, the standard the external review recommends this project
+adopt: an emergency stop must not be reset automatically, only by deliberate human
+action, and the reset must not by itself command motion.
+
+New `safety/latch.py` holds the stop. `FileEmergencyLatch.trip()` is synchronous and
+touches no filesystem — `evaluate` runs at 30 Hz *and* is called from the MCP tool
+bridge on an async request path, so a blocking write there would land on both;
+`persist()`, `load()` and `rearm()` are async and push their syscalls through
+`asyncio.to_thread`. The record is written atomically (temp + `os.replace`) and
+durably (`fsync` on the file and its directory), because `os.replace` gives atomicity
+but not durability and a Jetson losing power is the exact scenario.
+
+**It fails closed, deliberately inverting a neighbouring precedent.**
+`learning/on_device/slot_store.py::load_active` returns `None` on a corrupt manifest,
+which is right there — "no active slot" is the safe answer. Here the safe answer is
+the opposite: a corrupt, truncated, unreadable or future-versioned record is evidence
+that *something wrote a latch* and the write or the media failed, so all of those read
+as **latched**. Absence of the file is the only unlatched state.
+
+There is no TTL and there must never be one — an age-based auto-clear *is* an
+automatic restart after an emergency stop. `tripped_at_iso` is recorded for the
+operator; nothing compares it to now. There is likewise no fail-open knob, following
+the `LIDAR_UNAVAILABLE_DIST_M` precedent: making it tunable would only create a way to
+configure the fail-closed path back open. Both absences are pinned by tests.
+
+`evaluate` gained no branch. It sits at 13 against the `ruff C901` ceiling of 15, so
+the merge lives in `_apply_emergency_latch`, which returns a tuple; the seven trip
+sites each append a cause named after the log event already emitted there
+(`forward_clearance_violation`, `battery_critical`, `sensor_stale`,
+`insufficient_valid_sensors`, `loop_overrun`, `lidar_emergency`, `human_proximity`),
+so a latch record greps straight into the journal. `SafetyContext` gains one appended
+`emergency_latched` field; `is_emergency` remains the single field every consumer
+gates motion on and is now `live_emergency or latched`.
+
+**A latched rover starts, in no-motion, rather than refusing to start.** Exiting
+non-zero would meet `Restart=on-failure` on a unit with no `StartLimitBurst` and
+crash-loop forever; a crash-looping process never reaches `_halt_actuators` and so
+never sends `emergency_stop()`, leaving the wheels with nobody driving the brake — and
+it would kill the telemetry that tells the operator why. Because the latch makes
+`evaluate` return `is_emergency` every tick, the existing emergency branch in `tick()`
+holds the rover still: **that branch already is the no-motion mode**, so no new branch
+was needed. Consistent with CHARTER §3 — a latched rover holds the default no-motion
+posture rather than leaving it.
+
+The reset is `python -m mousedroid.cli.rearm --operator <name> --confirm-area-clear`.
+Both flags are required, with no defaults and no env fallback, because an unattributed
+re-arm is not a re-arm; `--status` reports without changing anything. Clearing the
+record does not command motion — the rover arms on its next start, keeping reset and
+resumption two separate acts. Three surfaces were considered and rejected, and the
+reasons are in the module docstring: **not** the telemetry REST API (LAN-reachable
+behind a bearer token, i.e. a *remote* re-arm, sharing an ingress with the
+natural-language mission endpoint), **not** an MCP tool (that would let the model that
+caused the stop undo it, straight through the actuation gate), and **not**
+`scripts/preflight_check.sh` (it runs as systemd `ExecStartPre` with no human attached,
+so anything it clears, `Restart=on-failure` clears automatically — the defect again).
+Operator procedure: `docs/runbooks/emergency-stop-rearm.md`.
+
+`safety.emergency_latch.enabled` defaults **False**, so every shipped overlay is
+byte-identical to pre-latch behaviour: no latch object, no directory, no file, and
+`_apply_emergency_latch` returns on its first line. Latching is strictly fail-safer,
+so invariant 6 would have permitted defaulting True — it ships False on operational
+grounds only, because a default-on latch on a fleet without the re-arm CLI and runbook
+deployed turns the first transient sensor dropout into a rover that will not move and
+an operator with no documented way to fix it. The ratchet to on is a separate change,
+the same shape as the #135 soak gate. `state_dir` is validated against absolute paths
+and `..` traversal under both POSIX and Windows separator semantics, reusing the
+validator that already guards the two slot stores — parameterised by field name so the
+error names `state_dir` rather than sending an operator hunting for a `slot_dir` key
+they do not have.
+
+No CHARTER §3 carve-out is required, and that conclusion is recorded rather than
+assumed: a carve-out gates *expansion* of the read-only / no-motion / off-loop posture.
+This restricts it — it adds a human gate where none existed, defaults to the
+pre-existing behaviour, and performs every byte of I/O off the hot loop.
+
+Pinned by `tests/unit/safety/test_emergency_latch.py`,
+`tests/regression/test_estop_latch_backwards_compat.py` (which parametrises over every
+shipped overlay) and `tests/e2e/test_estop_latch_restart.py`, which builds one
+orchestrator through the real factory, trips the latch, tears it down, and builds a
+second over the same experience root that must come up already latched. Proved against
+pre-fix semantics: making the latch inert turns the defect pin red.
+
+
+### Safety — the wheels are now commanded to zero before the first tick
+
+`_LifecycleMixin.start` connected the ESP32 and went straight on to sensors,
+telemetry, MCP and the LLM gateway. The chassis firmware latches the last velocity
+it was given, so a previous unclean stop — `SIGKILL`, a power cut, a dropped USB
+link — left the wheels driving and nothing contradicted that until the first tick
+produced an action. `src/mousedroid/orchestrator/CLAUDE.md` states the consequence
+outright: *"the rover can be moving throughout bring-up"*.
+
+`start()` now issues a zero-velocity command immediately after `connect()`, gated by
+`ESP32Config.stop_on_connect` (default `True`, the fail-safer direction). Deliberately
+a plain stop rather than `emergency_stop()`: every boot emitting
+`esp32_emergency_stop` would destroy that event's value as an incident signal. A
+driver that cannot accept the stop is logged and swallowed — `connect()` already
+reports an unreachable driver, and a best-effort safety measure must not become a new
+way for startup to fail.
+
+This is the one item from the peer review's chassis-failsafe list (C4) that needs no
+firmware change and no working ESP32; the rest are gated on F-008.
+
+### Safety — the human-detection interlocks are now typed, and their absence is audible
+
+`MouseDroidSafetyMonitor.evaluate` read human presence as
+`getattr(observation, "human_detected", False)`. No such field exists on
+`ObservationProtocol` or `MouseDroidObservationBundle`, and nothing in `src/` ever
+assigned one — so `SafetyContext.human_detected` was permanently `False`, and three
+interlocks were unreachable code: the Law-1 stop in `MouseDroidNavigationAgent.act`,
+the human clamp in `GeometricSafetyProjector.project`, and `evaluate`'s own human
+branch. `SafetyProjectorConfig.human_keepout_m`, `human_proximity_speed_mps` and
+`ThreeLawsConfig.human_safety_radius_m` were declared budgets with no consumable
+input. **The `getattr` default is what hid it** — a typed member would have failed
+`mypy --strict`.
+
+Widening `ObservationProtocol` was the wrong repair and was measured, not assumed: a
+Protocol member's default does not help *structural* implementers, so adding one
+breaks all 14 of them — two in `src/` (`MouseDroidObservationBundle` and
+`learning.on_device.seed_states._RecordObservation`), which fails the blocking
+`typecheck` stage. An experience record has no human channel at all, so it could
+satisfy the member only by hardcoding `False`: the same lie, type-checked.
+
+Presence is therefore its own collaborator. New
+`sensing/human_presence.py` defines a `@runtime_checkable HumanPresenceProtocol`, a
+frozen `HumanPresence` reading and a `NullHumanPresenceDetector` whose `can_detect`
+is `False`; `factory/safety.py::build_human_presence_detector` resolves it and
+`build_safety_monitor` injects it. `evaluate`'s two `getattr` calls become one typed
+call. The monitor logs `human_presence_source_unavailable` at construction, naming
+the three inert interlocks, the three unconsumable budgets and the remedy — the same
+shape as S-11's `esp32_heartbeat_unavailable`, and logged from `__init__` rather than
+the factory for the same reason: the factory is only one of several construction
+paths.
+
+Deliberately log-only and behaviourally identical. Failing closed here would mean
+assuming a human at zero distance, i.e. a permanent emergency stop. **The gap is not
+closed — no detector ships — it is now visible, type-checked and greppable instead of
+silent.** Constructor compatibility is preserved: `human_presence` is keyword-only
+with a `None` default, so the ~20 existing `MouseDroidSafetyMonitor(SafetyConfig())`
+call sites are untouched.
+
+### Fixed — following the repo's own documentation made the rover fail to boot
+
+`tests/hardware/test_e2e_sense_plan_act.py` documented a deadline-miss threshold at
+`cfg.loop.max_miss_pct` and read it through a `getattr` chain with a literal fallback.
+`LoopConfig` never declared that field. Because `LoopConfig` is a `StrictBaseModel`
+(`extra="forbid"`), an operator who believed the documentation and set
+`max_miss_pct` in YAML got a `ValidationError` at settings load — the rover failed to
+start. The failure mode was not "the fallback quietly wins"; this is why the defect
+was re-rated from Low to High on review.
+
+`LoopConfig.max_miss_pct` is now declared (`5.0`, `ge=0.0`, `le=100.0`), which is the
+fix invariant 2 asks for — deleting the reference would have left the threshold
+hardcoded in a test. The legacy `MOUSEDROID_E2E_MAX_MISS_PCT` env var still wins when
+set, so any bench script already exporting it keeps working; `MOUSEDROID_LOOP__MAX_MISS_PCT`
+is the schema-native replacement. Separately,
+`test_e2e_5sec_run.py::test_deadline_miss_rate_below_threshold` computed a p90 over
+10 mock ticks and no miss rate at all, so it is renamed
+`test_p90_tick_latency_within_ci_budget` to match what it asserts.
+
+### Changed — failed ticks are now counted, so a latency percentile can be read honestly
+
+Telemetry invariant 5 forbids recording a success-path measurement from work that did
+not complete, so an aborted tick's partial duration deliberately never reaches
+`mousedroid_loop_latency_ms`. That is correct and unchanged. The consequence was that a
+failed tick left no trace in metrics *at all*: `histogram_quantile(0.99, ...)` was a p99
+of **successful** ticks, with no denominator to disclose it, and `tick_timeout_s`
+defaults to 1.0 s — 30x the 33.3 ms budget — so the slowest class of tick is exactly the
+class the histogram cannot see.
+
+`run()` now records `orchestrator`/`tick_timeout` and `orchestrator`/`tick_error`
+through the existing `FailureRecorder`, which is the component that exists for counting
+failures, so invariant 5 is untouched and no new metric family is introduced.
+`_finish_tick_timing`'s docstring carries the survivorship caveat and the PromQL that
+makes a published percentile honest.
+
+### Docs — four claims the code contradicts
+
+- `src/mousedroid/orchestrator/CLAUDE.md` asserted as a directory invariant that
+  `emergency_stop()` *"halts motor execution immediately"*. It writes a stop frame and
+  returns once the bytes reach the serial port; stock `General_Driver` firmware sends no
+  per-command ACK and nothing observes motion ceasing.
+- `ESP32Config.emergency_stop_budget_ms` described itself as a latency "for
+  emergency_stop **ack**" — a round trip that does not exist.
+- The MCP `read_encoders` tool advertised *"odometry pose"* to a language model and
+  returns `odometry_x_m` / `odometry_y_m` that are never non-zero on any firmware that
+  exists. (Precisely: the *legacy* codec does parse `ox`/`oy`, but no firmware
+  implementing that protocol was ever committed.)
+- `ObservationProtocol.motor_state` was documented as `[vx, vy, omega, battery_v]` in six
+  places. `SensorManager._safe_motor_read` packs `[left_wheel_mps, right_wheel_mps,
+  heading_rad, battery_v]` — per-wheel speeds and an absolute angle, not a body-frame
+  velocity pair and an angular rate. **Noted while correcting it:**
+  `training/rover_obs_adapter.py` genuinely packs `[vx, 0.0, omega, battery_v]` for sim
+  pretraining, so slot 2 carries an angular *rate* in training and an *angle* on the
+  rover. That is a real train/serve difference, not a doc error on either side, and it is
+  recorded rather than papered over.
+- `docs/planning/NEXT_STEPS.md` listed *"Odometry drift accumulates over long runs; reset
+  via landmarks"* as a known limitation. Neither exists, and the row's left column implied
+  a dead-reckoning layer that merely lacked correction.
+
+
+### Docs — the prompt-injection filter named a blast-radius bound that does not exist
+
+`docs/CHARTER.md` §3's cloud-egress carve-out is the ratified argument for letting rover
+natural-language reach `api.anthropic.com`, and it rests on two compensating controls. The first
+is the velocity clamp (below). The second was named in `security/injection_filter.py`, which is
+otherwise admirably candid about its own limits — *"a literal-pattern denylist, not a semantic
+classifier … best-effort against a motivated adversary, not a complete defense"* — and then said:
+
+> blast radius is bounded elsewhere: parsed mission output is still clamped by
+> `LLMConfig.max_vx_norm_mps`/`max_vy_norm_mps`/`max_omega_norm_rads`
+
+Nothing reads those three fields. They are declared in two schemas (`config/schema/llm.py`,
+`llm_gateway/config.py`), validated `gt=0`, copied into `GatewayConfig` by
+`factory.build_llm_gateway`, and asserted in a unit test — and an exhaustive repo-wide grep finds
+no read anywhere. Executed: with `max_vx_norm_mps=0.01`, `LLMGateway._parse_response` still
+returns `vx_target=1.0`, 100× the documented bound. The parser clamps to a hardcoded `[-1, 1]`
+instead — the same clamp that, until this release, turned `NaN` into `1.0`.
+
+This is the S-11 defect class again: an operator reading `config/*.yaml` sees
+`max_vx_norm_mps: 0.5` and concludes LLM output is limited to 0.5 m/s, and nothing enforces or
+warns. The fields are also dimensionally incoherent with what they claimed to bound — declared in
+m/s and rad/s against a `GoalVector` documented as normalised `[-1, 1]` — so they are **not**
+wired up here: doing so naively would silently halve the achievable command, which is a design
+decision rather than a bug fix.
+
+The docstring now states what actually bounds a parsed goal (`clamp_unit`'s `[-1, 1]`, then
+`ESP32Config.max_velocity_mps` and `comms._utils.clamp` downstream), records the fields as
+unconsumed with the unit mismatch, and notes that no production path actuates on an LLM-derived
+`GoalVector` at all. Two pins in `tests/regression/test_goal_vector_clamp_aqa.py` hold the line:
+one asserting the false claim does not return, one that fails loudly *if* the fields are ever
+consumed, so the docstring and the unit question are revisited together.
+
+
+### Safety — a non-finite velocity was transmitted to the motors as full scale
+
+`max(lo, min(hi, value))` returns the **upper** bound for `NaN`, because every NaN comparison is
+False: `min(hi, nan)` keeps `hi` and the enclosing `max` passes it through. That idiom sat on
+every layer of the motor path, so a `NaN` arriving from any source was bounded *upward* into the
+largest command the layer could express, silently and without raising.
+
+The worst instance was the terminal one. `comms/_utils.py::clamp` is the single shared guard for
+**both** codecs — the last check before a frame goes on the wire. Executed against the real
+builder before the fix:
+
+```
+build_velocity_cmd(nan, nan, nan) -> {'T': 1, 'vx': 255, 'vy': 255, 'omega': 255}
+```
+
+Full-scale PWM on all three axes. It did not raise: a reader might assume `int(nan)` would have
+thrown `ValueError` and failed safe, but the clamp resolved the NaN to `1.0` before `int()` ever
+saw it. `WaveshareStockCodec.build_velocity` emits `max_velocity_mps` / `max_omega_rads` the same
+way — and that is the codec `NEXT_STEPS.md` item 3 is about to switch the rover to.
+
+Two sibling paths shared the defect. `common/tools/motor_tools.py::_clamp` guards the MCP
+`set_velocity` tool, whose arguments come from a language model, making it the only LLM-reachable
+`send_velocity` in the tree (gated by `mcp.enabled: false` in both shipped configs).
+`orchestrator/_action_mixin.py::_execute_action`, on the live 30 Hz tick, had **no bound at all** —
+`float(action[0]) * max_v`, resting on an invariant its own docstring merely *assumed*.
+
+One rule now holds at every layer: **a non-finite velocity is a malformed velocity, and a
+malformed velocity means no motion.** `clamp` and `_clamp` return `0.0` and log at error;
+`_execute_action` zeroes every axis when any component is non-finite and logs
+`action_non_finite_zeroed` — all three axes rather than only the offending one, because a NaN in
+any component means the policy output is untrustworthy and driving the rest on that basis is not
+safer. Every finite result, every saturation case and every frame shape is unchanged; `clamp`'s
+five call sites were checked first and none depended on the old behaviour.
+
+Pinned by `tests/regression/test_velocity_clamp_actuation_{aqa,backwards_compat}.py`, which
+exercise the real codec entry points end to end rather than only the helper, and include a
+source-level gate that no module on the motor path may carry the two-sided idiom without a finite
+check. Proved against pre-fix semantics: 22 red, 19 green, the greens being exactly the finite and
+saturation cases that must not change.
+
+### Safety — a `NaN` velocity from the LLM became a full-scale goal target
+
+The same idiom in the three `LLMGatewayProtocol` implementations. `json.loads` accepts the bare
+`NaN`, `Infinity` and `-Infinity` literals by default, the decoded payload is a well-formed dict
+so the `isinstance(doc, dict)` guard passed, and `float()` did not raise — so a model emitting
+`{"vx": NaN}` produced `vx_target=1.0` with no warning and no degraded flag.
+
+Scope, stated precisely: **this one does not actuate.** Every `vx_target` consumer in the tree is
+a structlog field, the REST `POST /api/v1/mission` response body, or an MCP tool result. No
+production path drives the motors from an LLM-derived `GoalVector`; the only module that applies a
+goal as a velocity is `orchestrator/autonomous.py`, parked with zero production callers (ADR-016).
+The live effect was therefore that a `NaN` came back to a language model as a confident `1.0`.
+It is fixed anyway because it sits on the seam that goal-conditioned planning would connect to
+actuation.
+
+`GOAL_VECTOR_MIN`, `GOAL_VECTOR_MAX` and a NaN-safe `clamp_unit()` now live once in
+`llm_gateway/protocol.py`, beside the `GoalVector` they constrain; all three implementations
+import it rather than carrying their own copy — the defect shipped in three places precisely
+because the expression was duplicated three times. **Deliberate behaviour change:** `±Infinity`
+previously clamped to `±1.0` and is now `0.0`.
+
+Noted for the record: the repo has two same-named `GoalVector` types.
+`interfaces/protocols.py::GoalVector` is a pydantic `BaseModel` whose `ge`/`le` constraints reject
+`NaN` outright; the LLM path uses the unvalidated frozen dataclass in `llm_gateway/protocol.py`.
+
+### Fixed — valid JSON that was not an object crashed the default LLM gateway
+
+`LLMGateway._parse_response` caught `(json.JSONDecodeError, KeyError, TypeError)`. But `dict.get`
+cannot raise `KeyError`, and a non-dict always raises `AttributeError`, which the tuple did not
+name. So `[1, 2, 3]`, `null`, `7` and `"go forward"` — all valid JSON — raised out of the parser,
+while plain garbage (`"not json at all"`) was handled safely. The inversion was the tell: input
+that was *not* JSON was safe; input that *was* JSON was not.
+
+Its two siblings both guard this, and `OpenAICompatibleLLMGateway._parse_goal_vector` documents a
+"never raises" invariant as a contract — so the hardening had been applied to two of three
+implementations and the **default** backend (`LLMConfig.backend` defaults `llama_cpp`) was the one
+left without it. `llama_cpp` is also the documented off-network `fallback_backend`, and a
+quantised local GGUF model is a likelier source of a bare list than Claude is, so the degraded path
+is where it would have bitten. The `FallbackLLMGateway` composite does contain the exception when
+one is configured, but `fallback_backend` defaults to `none`, so the default configuration had no
+composite to catch it.
+
+`_parse_response` now takes the `isinstance(data, dict)` guard its siblings have, logs
+`llm_parse_non_object`, and narrows its `except` to `(TypeError, ValueError)`.
+
+All five defects were found by the 2026-09-19 peer review
+(`docs/analysis/positioning-safety-peer-review-2026-09-19.md`, D-0, D-8 and D-17..D-19) and are
+pinned by two regression pairs, each proved red against pre-fix semantics before it counted.
+
+
 ### Safety — the chassis heartbeat failsafe reads as armed while being dormant
 
 `ESP32Config.heartbeat_enabled` defaults `True` and `heartbeat_window_ms`

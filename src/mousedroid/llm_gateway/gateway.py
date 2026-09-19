@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from mousedroid.constants import MILLISECONDS_PER_SECOND
 from mousedroid.llm_gateway._telemetry import extract_token_pair, record_round_trip_metrics
-from mousedroid.llm_gateway.protocol import GoalVector
+from mousedroid.llm_gateway.protocol import GoalVector, clamp_unit
 from mousedroid.logging.setup import get_logger
 from mousedroid.security.injection_filter import (
     PromptInjectionFilterProtocol,
@@ -292,12 +292,29 @@ class LLMGateway:
         """
         try:
             data = json.loads(raw.strip())
+        except json.JSONDecodeError:
+            _log.warning("llm_parse_failed", raw=raw)
+            return GoalVector()
+        if not isinstance(data, dict):
+            # A top-level list, scalar or ``null`` is valid JSON, so it clears
+            # ``json.loads`` and then dies on ``.get`` with an AttributeError —
+            # which the old ``except (JSONDecodeError, KeyError, TypeError)``
+            # did not name (``.get`` cannot raise KeyError at all). The two
+            # sibling implementations, ``AnthropicLLMGateway._parse_goal_vector``
+            # and ``OpenAICompatibleLLMGateway._parse_goal_vector``, both guard
+            # this; this leaf did not, so the *default* backend was the one
+            # without the guard. Quantised local GGUF models are the likeliest
+            # source of a bare list, and ``llama_cpp`` is also the documented
+            # off-network fallback — the degraded path is where it would bite.
+            _log.warning("llm_parse_non_object", raw=raw)
+            return GoalVector()
+        try:
             return GoalVector(
-                vx_target=max(-1.0, min(1.0, float(data.get("vx", 0.0)))),
-                vy_target=max(-1.0, min(1.0, float(data.get("vy", 0.0)))),
-                omega_target=max(-1.0, min(1.0, float(data.get("omega", 0.0)))),
+                vx_target=clamp_unit(float(data.get("vx", 0.0))),
+                vy_target=clamp_unit(float(data.get("vy", 0.0))),
+                omega_target=clamp_unit(float(data.get("omega", 0.0))),
             )
-        except (json.JSONDecodeError, KeyError, TypeError):
+        except (TypeError, ValueError):
             _log.warning("llm_parse_failed", raw=raw)
             return GoalVector()
 

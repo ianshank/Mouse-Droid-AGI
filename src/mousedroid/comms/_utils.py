@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, Any
 
 from mousedroid.logging.setup import get_logger
@@ -30,7 +31,25 @@ ESP32_CMD_TYPE_BATTERY: int = 2  # hardcoded-ok: vendor protocol constant
 
 
 def clamp(value: float, lo: float, hi: float) -> float:
-    """Clamp a value between lo and hi.
+    """Clamp a value between lo and hi. Non-finite input resolves to ``0.0``.
+
+    This is the terminal bound on the motor path: every velocity command
+    reaching the wire passes through here, from both
+    :class:`~mousedroid.comms.command_set.LegacyCommandCodec` (via
+    :func:`build_velocity_cmd`) and
+    :class:`~mousedroid.comms.command_set.WaveshareStockCodec`.
+
+    A bare ``max(lo, min(hi, value))`` returns ``hi`` for ``NaN``, because
+    every NaN comparison is False — so ``min(hi, nan)`` keeps ``hi`` and the
+    enclosing ``max`` passes it through. On the legacy path that became
+    ``int(1.0 * MAX_PWM)`` = full-scale PWM, and on the stock path
+    ``max_velocity_mps`` in the ``CMD_ROS_CTRL`` frame. Neither raised, so a
+    ``NaN`` anywhere upstream was transmitted as *maximum commanded speed*
+    rather than stopping the rover. The function whose job is to bound
+    actuation was manufacturing the largest command it could.
+
+    Non-finite input now resolves to ``0.0`` — the failure direction is no
+    motion. Every finite result is unchanged.
 
     Args:
         value: Value to clamp.
@@ -38,8 +57,11 @@ def clamp(value: float, lo: float, hi: float) -> float:
         hi: Upper bound.
 
     Returns:
-        Clamped value.
+        Clamped value, or ``0.0`` when ``value`` is NaN or infinite.
     """
+    if not math.isfinite(value):
+        _log.error("velocity_clamp_non_finite", value=repr(value), lo=lo, hi=hi)
+        return 0.0
     return max(lo, min(hi, value))
 
 

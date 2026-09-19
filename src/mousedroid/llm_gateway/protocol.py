@@ -2,8 +2,39 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
+
+# ``GoalVector`` velocity-axis bounds. Not config-driven: the bounds are part
+# of the ``GoalVector`` semantic contract (normalised in ``[-1, 1]``), not an
+# operator-tunable knob. Defined here, beside the type they constrain, so the
+# three ``LLMGatewayProtocol`` implementations share one definition instead of
+# each carrying its own copy.
+GOAL_VECTOR_MIN = -1.0
+GOAL_VECTOR_MAX = 1.0
+
+
+def clamp_unit(value: float) -> float:
+    """Clamp ``value`` into the ``GoalVector`` ``[-1, 1]`` range, NaN-safe.
+
+    A bare ``max(MIN, min(MAX, value))`` returns ``MAX`` for ``NaN``: every
+    NaN comparison is False, so ``min(1.0, nan)`` keeps ``1.0`` and the
+    surrounding ``max`` passes it through. ``json.loads`` accepts the bare
+    ``NaN`` / ``Infinity`` / ``-Infinity`` literals by default, so a model
+    emitting ``{"vx": NaN}`` was translated into a **full-scale** velocity
+    target rather than a neutral one — the clamp that exists to bound
+    actuation was the thing manufacturing the maximum command.
+
+    Every non-finite input therefore resolves to ``0.0``. That matches how
+    these parsers treat every other malformed field (non-JSON, non-object and
+    non-numeric all yield a neutral ``GoalVector``), and it makes the failure
+    direction *no motion*. Note this is a deliberate behaviour change for
+    ``±Infinity``, which previously clamped to ``±1.0``.
+    """
+    if not math.isfinite(value):
+        return 0.0
+    return max(GOAL_VECTOR_MIN, min(GOAL_VECTOR_MAX, value))
 
 
 @dataclass(frozen=True)

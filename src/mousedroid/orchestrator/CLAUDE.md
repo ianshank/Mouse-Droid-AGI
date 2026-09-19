@@ -7,9 +7,14 @@
 
 1. **Strict 33.3 ms Cadence**: The main loop ticks at 30 Hz. I/O-bound tasks run concurrently
    via `asyncio.gather` / `asyncio.create_task`. Blocking calls go through `asyncio.to_thread`.
-2. **Emergency Stop (E-Stop)**: `self._esp32.emergency_stop()` halts motor execution
-   immediately. Cooperative task cancellation (`asyncio.CancelledError`, a `BaseException`
-   subclass — never caught by a bare `except Exception`) must always propagate.
+2. **Emergency Stop (E-Stop)**: `self._esp32.emergency_stop()` writes a zero-velocity stop
+   frame to the ESP32 and returns once those bytes are handed to the serial port. It does
+   **not** wait for, nor observe, motion ceasing — stock `General_Driver` firmware sends no
+   per-command ACK, so nothing downstream confirms the wheels stopped. Corrected 2026-09-19
+   (peer review D-12); this line previously claimed it "halts motor execution immediately".
+   `ESP32Config.emergency_stop_budget_ms` bounds that write, not a stopping time or distance.
+   Cooperative task cancellation (`asyncio.CancelledError`, a `BaseException` subclass — never
+   caught by a bare `except Exception`) must always propagate.
 3. **Telemetry Server & Shared Registry**: Handed a single `MetricsRegistry` from `factory/`
    via keyword-only argument `metrics: MetricsRegistry | None = None`.
 4. **Safety Filter Projection**: Every action passes through `self._safety_monitor.evaluate(...)`

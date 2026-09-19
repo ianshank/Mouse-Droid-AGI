@@ -73,6 +73,29 @@ class _TelemetryExperienceMixin(_OrchestratorState):
         invariant 5 — a cancelled tick's partial duration is not a control-loop
         latency sample, and ``run()`` already logs and e-stops that case.
 
+        **Survivorship caveat — read this before quoting a percentile**
+        (peer review D-9). Because publication is success-only, every
+        consumer of ``mousedroid_loop_latency_ms`` is looking at a
+        distribution over *successful* ticks. A tick aborted by
+        ``asyncio.wait_for(self.tick(), loop.tick_timeout_s)`` contributes
+        no sample, and ``tick_timeout_s`` defaults to 1.0 s — 30x the
+        33.3 ms budget — so the slowest class of tick is exactly the class
+        the histogram cannot see. A ``histogram_quantile(0.99, ...)`` over
+        it is therefore a p99 *of ticks that finished*, and must be quoted
+        that way or it is misleading.
+
+        The denominator that makes it honest lives in
+        ``mousedroid_subsystem_failures_total``: ``run()`` records
+        ``orchestrator``/``tick_timeout`` and ``orchestrator``/``tick_error``
+        through the :class:`FailureRecorder`, so the share of ticks that
+        never produced a sample is::
+
+            rate(mousedroid_subsystem_failures_total{subsystem="orchestrator"}[5m])
+            / rate(mousedroid_loop_latency_ms_count[5m])
+
+        Publishing a latency percentile without that ratio beside it
+        overstates the result.
+
         Args:
             loop_start: Monotonic timestamp captured at the top of ``tick()``.
             ok: Whether the tick completed without raising.

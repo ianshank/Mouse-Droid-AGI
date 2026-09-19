@@ -33,7 +33,7 @@ import aiohttp
 
 from mousedroid.constants import MILLISECONDS_PER_SECOND
 from mousedroid.llm_gateway._telemetry import extract_token_pair, record_round_trip_metrics
-from mousedroid.llm_gateway.protocol import GoalVector
+from mousedroid.llm_gateway.protocol import GoalVector, clamp_unit
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
@@ -59,13 +59,13 @@ _BEARER_PREFIX = "Bearer "
 # response. Not config-driven because the bounds are part of the
 # ``GoalVector`` semantic contract (normalised in ``[-1, 1]``), not an
 # operator-tunable knob.
-_GOAL_VECTOR_MIN = -1.0
-_GOAL_VECTOR_MAX = 1.0
-
-
-def _clamp_unit(value: float) -> float:
-    """Clamp ``value`` to the GoalVector ``[-1, 1]`` velocity range."""
-    return max(_GOAL_VECTOR_MIN, min(_GOAL_VECTOR_MAX, value))
+# ``GoalVector`` velocity-axis bounds and the clamp now live beside the type
+# they constrain, in ``llm_gateway.protocol``, so all three
+# ``LLMGatewayProtocol`` implementations share one NaN-safe definition rather
+# than three copies of ``max(MIN, min(MAX, value))`` — which returned the
+# upper bound for ``NaN`` and turned a malformed field into a full-scale
+# velocity target.
+_clamp_unit = clamp_unit
 
 
 class OpenAICompatibleLLMGateway:

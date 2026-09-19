@@ -42,3 +42,10 @@ class SafetyContext:
 
     # Computed
     is_emergency: bool = False
+
+    # Emergency latch (peer review D-5). ``is_emergency`` stays the single
+    # field every consumer gates motion on and is now
+    # ``live_emergency or latched``. This one answers a different question --
+    # "does clearing this need a human?" -- for the dashboard, the face
+    # controller and the boot log.
+    emergency_latched: bool = False

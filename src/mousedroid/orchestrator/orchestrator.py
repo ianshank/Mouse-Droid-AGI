@@ -59,6 +59,7 @@ if TYPE_CHECKING:
     from mousedroid.orchestrator.face_controller import FaceController
     from mousedroid.orchestrator.mission_dispatcher import MissionDispatcherProtocol
     from mousedroid.orchestrator.mission_lifecycle import MissionLifecycle
+    from mousedroid.safety.latch import EmergencyLatchProtocol
     from mousedroid.safety.projector_protocol import SafetyActionProjectorProtocol
     from mousedroid.safety.protocol import SafetyMonitorProtocol
     from mousedroid.sensing.manager import SensorManager
@@ -127,6 +128,7 @@ class MouseDroidOrchestrator(
         mission_dispatcher: MissionDispatcherProtocol | None = None,
         clock: ClockProtocol | None = None,
         failure_recorder: FailureRecorder | None = None,
+        emergency_latch: EmergencyLatchProtocol | None = None,
         liveness_tracker: Any | None = None,
         mock_telemetry_source: Any | None = None,
         metrics: MetricsRegistry | None = None,
@@ -200,6 +202,11 @@ class MouseDroidOrchestrator(
                 primitives. Defaults to :class:`RealClock` (production).
                 Pass a :class:`MockClock` in tests to control simulated time
                 without wall-clock delays.
+            emergency_latch: Optional latch holding an emergency stop until
+                an operator clears it (peer review D-5). ``None`` -- the
+                default, and what ``build_emergency_latch`` returns unless
+                ``safety.emergency_latch.enabled`` -- is byte-identical to
+                pre-latch behaviour.
             failure_recorder: Optional :class:`FailureRecorder` for emitting
                 structured failure events and Prometheus counters. Defaults
                 to a :class:`NullFailureRecorder` (no-op) when ``None``.
@@ -365,6 +372,7 @@ class MouseDroidOrchestrator(
         self._clock: ClockProtocol = clock if clock is not None else RealClock()
         from mousedroid.telemetry.failure_recorder import NullFailureRecorder
 
+        self._emergency_latch = emergency_latch
         self._failure_recorder: FailureRecorder = (
             failure_recorder if failure_recorder is not None else NullFailureRecorder()
         )
@@ -538,6 +546,10 @@ class MouseDroidOrchestrator(
 
                 if safety_ctx.is_emergency:
                     await self._esp32.emergency_stop()
+                    # Motors first, disk second (D-5): a slow SD card must
+                    # never delay the stop. No-ops when no latch is wired or
+                    # nothing changed.
+                    await self._persist_emergency_latch()
                     await self._voice_event("emergency_stop", observation)
                     await self._update_face(safety_ctx=safety_ctx, action=None)
                     _log.warning("emergency_stop_triggered")

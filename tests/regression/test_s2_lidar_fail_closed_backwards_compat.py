@@ -41,6 +41,32 @@ _SHIPPED_CONFIGS = [
     "mock_hardware.yaml",
 ]
 
+#: The argument this file asked for, made on 2026-09-19 (peer review D-3).
+#:
+#: ``jetson_lidar_only.yaml`` opts in, and it is the only overlay that may.
+#: ``_evaluate_lidar_clearance`` takes its "LiDAR available" branch only when
+#: ``len(lidar_features) > 0``, and LiDAR reaches the observation only when
+#: ``model.lidar_dim > 0``. This is the one shipped file that sets it (36);
+#: ``default.yaml`` sets 0 and ``jetson_production.yaml`` overrides no
+#: ``model:`` block. On every other stack an armed policy would not arm an
+#: interlock -- it would fire on every tick, forever, braking or e-stopping a
+#: rover that is working correctly.
+#:
+#: ``emergency`` rather than ``degrade`` because that overlay also sets
+#: ``ultrasonic: null``, making LiDAR the only obstacle sensor: a dead LiDAR
+#: there is total blindness, and braking-without-halting would be driving
+#: blind at reduced speed.
+#:
+#: The opt-in was only meaningful after peer review D-24, which made the
+#: policy branch *reachable* for a non-responding sensor at all. Before that
+#: fix, arming this would have produced an interlock that resolves correctly
+#: in config and cannot fire for an unplugged cable.
+#:
+#: Full coverage of the opted-in stack -- including the grace window and the
+#: projector -- lives in ``test_lidar_interlock_overlay_aqa.py`` and
+#: ``tests/integration/test_lidar_interlock_overlay_integration.py``.
+_OPTED_IN_POLICY = {"jetson_lidar_only.yaml": "emergency"}
+
 
 def test_policy_defaults_to_ignore_when_absent() -> None:
     """A pre-S-2 YAML has no ``lidar_unavailable_policy`` key at all."""
@@ -84,15 +110,36 @@ def test_policy_round_trips_when_present() -> None:
 
 
 @pytest.mark.parametrize("name", _SHIPPED_CONFIGS)
-def test_shipped_config_still_loads_and_stays_fail_open(name: str) -> None:
-    """Every committed overlay parses and keeps the pre-S-2 posture."""
+def test_shipped_config_still_loads_and_keeps_its_declared_posture(name: str) -> None:
+    """Every committed overlay parses and keeps the posture argued for above.
+
+    Renamed from ``..._stays_fail_open``: one overlay no longer does, and a
+    test whose name asserts the opposite of what it checks is worse than no
+    test. ``_OPTED_IN_POLICY`` is the exception list, and it carries the
+    reasoning so an opt-in cannot be added silently.
+    """
     path = _CONFIG_DIR / name
     if not path.exists():  # pragma: no cover - safety net for a moved fixture
         pytest.skip(f"{name} not present")
     with path.open(encoding="utf-8") as fh:
         data = yaml.safe_load(fh)
     cfg = Settings.model_validate(data)
-    assert cfg.safety.lidar_unavailable_policy == "ignore"
+    assert cfg.safety.lidar_unavailable_policy == _OPTED_IN_POLICY.get(name, "ignore")
+
+
+def test_an_opted_in_overlay_also_carries_a_grace() -> None:
+    """``emergency`` with a 0.0 grace e-stops on the first tick without features.
+
+    Kept here rather than only in the D-3 file because this is where the
+    opt-in is argued: whoever adds the next entry to ``_OPTED_IN_POLICY``
+    should meet this assertion in the same breath.
+    """
+    for name, policy in _OPTED_IN_POLICY.items():
+        if policy != "emergency":
+            continue
+        with (_CONFIG_DIR / name).open(encoding="utf-8") as fh:
+            cfg = Settings.model_validate(yaml.safe_load(fh))
+        assert cfg.safety.lidar_unavailable_grace_s > 0.0, name
 
 
 def _obs(lidar_features: np.ndarray | None) -> MouseDroidObservationBundle:

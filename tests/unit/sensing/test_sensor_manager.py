@@ -9,6 +9,7 @@ import numpy as np
 from mousedroid.comms.protocol import EncoderReading
 from mousedroid.config.schema import Settings
 from mousedroid.constants import DEFAULT_MOTOR_STATE_DIM
+from mousedroid.sensing.lidar_scan import LidarScan
 from mousedroid.sensing.manager import SensorManager
 
 
@@ -336,8 +337,18 @@ def _make_manager_with_lidar_extractor():
     lidar = AsyncMock()
     lidar.start = AsyncMock()
     lidar.stop = AsyncMock()
+    # A real ``LidarScan``, not a list of dicts: ``LidarProtocol.read_scan``
+    # returns that type, and ``_safe_lidar_read`` now reads
+    # ``scan.sensor_responding`` off it (peer review D-24). A double that is
+    # not the production type cannot show the production behaviour.
     lidar.read_scan = AsyncMock(
-        return_value=[{"angle": 0.0, "distance": 1.0}],
+        return_value=LidarScan(
+            angles_deg=np.array([0.0], dtype=np.float32),
+            distances_mm=np.array([1000.0], dtype=np.float32),
+            confidences=np.array([200], dtype=np.uint8),
+            timestamp=0.0,
+            n_points=1,
+        ),
     )
 
     extractor = AsyncMock()
@@ -824,12 +835,14 @@ async def test_lidar_raw_scan_still_cached_without_an_extractor():
     before feature extraction, so a rig with no extractor still publishes real
     points even though it publishes no feature vector.
     """
-    mgr, _lidar, _extractor = _make_manager_with_lidar_extractor()
+    mgr, lidar, _extractor = _make_manager_with_lidar_extractor()
     mgr._lidar_feature_extractor = None
 
     await mgr.read_all()
 
-    assert mgr.last_lidar_scan == [{"angle": 0.0, "distance": 1.0}]
+    assert mgr.last_lidar_scan is lidar.read_scan.return_value
+    assert mgr.last_lidar_scan is not None
+    assert mgr.last_lidar_scan.n_points == 1
 
 
 async def test_lidar_read_failure_leaves_ring_buffer_holding_none():

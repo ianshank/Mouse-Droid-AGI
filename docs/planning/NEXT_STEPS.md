@@ -669,4 +669,4 @@ Phase 5 = the deferred real-physics simulator.)
 | No GPU-accelerated BDI inference | BDI uses numpy MLPs; acceptable at 1 Hz slow loop |
 | MCTS action space is discrete (9 candidates) | Sufficient for corridor navigation; extend for open environments |
 | LLM gateway adds 200–500 ms latency | Runs async; does not block 30 Hz main loop |
-| No loop closure / SLAM | Odometry drift accumulates over long runs; reset via landmarks |
+| No localization of any kind | <!-- corrected 2026-09-19, peer review D-15: this row previously read "No loop closure / SLAM | Odometry drift accumulates over long runs; reset via landmarks". Both halves were false, and the left column implied a working dead-reckoning layer that merely lacked correction. --> There is no odometry, no pose estimator, no scan matcher, no map and no landmark system. The WAVE ROVER chassis is encoder-less (vendor audit R3) and `EncoderReading.odometry_*` is never non-zero on any firmware that exists. This is an absent capability, not a drifting one. |

@@ -49,7 +49,7 @@ from typing import TYPE_CHECKING, Any
 
 from mousedroid.constants import MILLISECONDS_PER_SECOND
 from mousedroid.llm_gateway._telemetry import extract_token_pair, record_round_trip_metrics
-from mousedroid.llm_gateway.protocol import GoalVector
+from mousedroid.llm_gateway.protocol import GoalVector, clamp_unit
 from mousedroid.logging.setup import get_logger
 from mousedroid.security.injection_filter import (
     PromptInjectionFilterProtocol,
@@ -62,14 +62,13 @@ if TYPE_CHECKING:
 
 _log = get_logger(__name__)
 
-# ``GoalVector`` velocity-axis bounds. Mirrors the clamp the legacy
-# in-process ``LLMGateway._parse_response`` and the OpenAI-compatible
-# ``_parse_goal_vector`` apply, so every backend produces equivalent
-# ``GoalVector`` output for the same model response. Not config-driven
-# because the bounds are part of the ``GoalVector`` semantic contract
-# (normalised in ``[-1, 1]``), not an operator-tunable knob.
-_GOAL_VECTOR_MIN = -1.0
-_GOAL_VECTOR_MAX = 1.0
+# ``GoalVector`` velocity-axis bounds and the clamp now live beside the type
+# they constrain, in ``llm_gateway.protocol``, so all three
+# ``LLMGatewayProtocol`` implementations share one NaN-safe definition rather
+# than three copies of ``max(MIN, min(MAX, value))`` — which returned the
+# upper bound for ``NaN`` and turned a malformed field into a full-scale
+# velocity target.
+_clamp_unit = clamp_unit
 
 # First ``{...}`` span in a response. Claude (and most chat models)
 # frequently wrap the requested JSON object in markdown code fences
@@ -79,11 +78,6 @@ _GOAL_VECTOR_MAX = 1.0
 # format. ``DOTALL`` lets the object span newlines; the greedy ``.*``
 # captures the outermost object so nested braces survive.
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
-
-
-def _clamp_unit(value: float) -> float:
-    """Clamp ``value`` to the GoalVector ``[-1, 1]`` velocity range."""
-    return max(_GOAL_VECTOR_MIN, min(_GOAL_VECTOR_MAX, value))
 
 
 class AnthropicLLMGateway:
