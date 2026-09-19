@@ -10,8 +10,12 @@ in the calling subsystems treat ``metrics is None`` as a no-op) — so this
 mixin, unlike most others, never needs to read ``self._cfg``.
 
 Label values use ``Literal`` aliases from :mod:`mousedroid.config.schema`
-(``ReplayOutcomeLiteral``, ``VLAActiveBackendLiteral``) so a backend rename in
-one place propagates to every caller via mypy.
+(``ReplayOutcomeLiteral``, ``VLAActiveBackendLiteral``, ``ModelArtifactLiteral``)
+so a backend rename in one place propagates to every caller via mypy.
+
+The world-model families here are the artifact's whole lifecycle: the
+``observe_step`` latency histogram for a graph that loaded, and the
+boot-path SHA-256 mismatch counter for one that was refused.
 """
 
 from __future__ import annotations
@@ -41,7 +45,7 @@ if TYPE_CHECKING:
 
 
 class _ReplayVlaMetricsMixin:
-    """Replay / VLA / VLM / world-model observe_step metric family."""
+    """Replay / VLA / VLM / world-model observe-step + artifact-integrity family."""
 
     def _init_replay_vla_metrics(self, cfg: MetricsConfig) -> None:
         """Initialise PR-A2 replay / VLA / VLM / world-model metrics.

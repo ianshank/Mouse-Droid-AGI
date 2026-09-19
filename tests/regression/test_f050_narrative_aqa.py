@@ -69,7 +69,25 @@ def _tracked(*globs: str) -> list[Path]:
         text=True,
         check=True,
     )
-    return [_REPO_ROOT / line for line in result.stdout.splitlines() if line.strip()]
+    return [
+        _REPO_ROOT / line
+        for line in result.stdout.splitlines()
+        if line.strip() and not _is_this_scanner(_REPO_ROOT / line)
+    ]
+
+
+def _is_this_scanner(path: Path) -> bool:
+    """Is ``path`` this very file?
+
+    A pattern scanner must not scan the module that *defines* its patterns.
+    Every forbidden phrase appears here verbatim as a search string, so once
+    this file became tracked, ``git ls-files`` started handing it to the sweep
+    and it reported itself as the offending surface. Excluding exactly one
+    path — this one, by resolved identity rather than by a name substring —
+    keeps the discovery-not-a-roster property the docstring above argues for,
+    while removing the only file whose *purpose* is to contain the strings.
+    """
+    return path.resolve() == Path(__file__).resolve()
 
 
 def _is_historical(path: Path) -> bool:
@@ -475,3 +493,46 @@ def test_no_live_surface_claims_the_artifact_is_downloadable() -> None:
         f"live surface(s) present the (empty) dual-stream Hub repo as carrying a "
         f"downloadable artifact: {offenders}"
     )
+
+
+def test_the_sweep_excludes_exactly_one_file_itself() -> None:
+    """The self-exclusion must stay a single file, not a growing allowlist.
+
+    ``_is_this_scanner`` is the only escape from the sweep, and it exists for
+    one reason: this module defines the forbidden phrases as literals, so
+    ``git ls-files`` hands it to its own scan. That is a real hazard to keep
+    narrow — a substring match on "test" or a directory prefix would silently
+    exempt every future test file that quotes a corrected claim, which is
+    exactly how a narrative sweep rots into a no-op.
+
+    Checked behaviourally rather than by reading the source: a sibling tracked
+    file is not exempt, and this file is.
+    """
+    assert _is_this_scanner(Path(__file__))
+    sibling = _REPO_ROOT / "tests" / "regression" / "test_f050_aqa.py"
+    assert sibling.is_file(), "premise: the sibling regression file exists"
+    assert not _is_this_scanner(sibling), (
+        "the exclusion widened beyond this file; a sweep that skips other "
+        "test files stops proving the corrections hold"
+    )
+
+
+def test_the_sweep_still_reaches_the_tracked_doc_surfaces() -> None:
+    """Self-exclusion must not have emptied the roster.
+
+    If ``_tracked`` returned nothing, every offender test above would pass
+    vacuously. Pin that the discovery still finds the docs the corrections
+    were made in.
+    """
+    # The same glob set the offender sweeps use at :228 and :489 — asserting
+    # against a glob of this test's own invention would prove nothing about them.
+    discovered = {
+        path.relative_to(_REPO_ROOT).as_posix()
+        for path in _tracked("*.md", "*.py", "*.yaml", "*.yml", "*.sh")
+    }
+    for expected in (
+        "docs/architecture.md",
+        "docs/architecture/ADR-008-world-model-onnx-engine.md",
+        "docs/planning/NEXT_STEPS.md",
+    ):
+        assert expected in discovered, f"{expected} fell out of the sweep's roster"

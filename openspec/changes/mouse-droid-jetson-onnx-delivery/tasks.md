@@ -409,7 +409,7 @@ unselectable.
 
 **Phase 8 — Delivery (F-051)**
 
-- [ ] 8.0 Record the container resource budget alongside the cache volume:
+- [x] 8.0 Record the container resource budget alongside the cache volume:
       `docker-compose.jetson.yml:145-153` is `memory: 6G` with no `memswap_limit`,
       `shm_size` or `pids_limit`. Unbounded swap means a 30 Hz loop thrashes instead of
       restarting cleanly, and every swapped page fault inside the synchronous
@@ -418,43 +418,43 @@ unselectable.
       ≥8 GiB disk guard and NVMe-swap requirement
       (`docs/superpowers/plans/2026-07-25-jetson-deploy-and-validation-campaign.md:123-126`) and
       `scripts/jetson_disk_cleanup.sh`.
-- [ ] 8.1 `docker-compose.jetson.yml`: named volume for the TensorRT engine/timing cache
+- [x] 8.1 `docker-compose.jetson.yml`: named volume for the TensorRT engine/timing cache
       beside `mousedroid_experience` and `promtail_positions` (`:165-169`). Nothing persists
       a TRT cache or `HF_HOME` today. The directory comes from
       `cfg.jetson.tensorrt_cache_dir`, not a literal in the compose file. Note for the
       record: there is **no** weights mount — weights persist transitively via
       `WORKDIR /opt/mousedroid` (`Dockerfile.jetson:49`) plus the relative
       `onnx_cache_dir` default (`world_model.py:68`) landing inside the bind mount.
-- [ ] 8.2 `scripts/docker_deploy.sh`: `--strict-health` failing on a dead telemetry
+- [x] 8.2 `scripts/docker_deploy.sh`: `--strict-health` failing on a dead telemetry
       endpoint, an unexpected ORT provider, or a digest mismatch. Today the telemetry leg is
       a `warn` (`:116-123`) and the whole function is softened at `:241`. Default behaviour
       unchanged (design D-10).
-- [ ] 8.3 `scripts/deploy_remote.sh`: dirty-target refusal plus `rover/wip-<date>`
+- [x] 8.3 `scripts/deploy_remote.sh`: dirty-target refusal plus `rover/wip-<date>`
       preservation before the `rsync -avz --delete` at `:151`. Never `git clean`, never
       rsync-delete over uncommitted rover work.
-- [ ] 8.3b Add the off-device archive the delivery spec requires, alongside the
+- [x] 8.3b Add the off-device archive the delivery spec requires, alongside the
       `rover/wip-<date>` branch: a whitespace-insensitive diff archived off the rover before
       any `rsync --delete`, per the campaign plan's B1 step. A branch alone does not survive a
       disk failure.
-- [ ] 8.3c Add a regression pin for the GitHub trust boundary the spec requires —
+- [x] 8.3c Add a regression pin for the GitHub trust boundary the spec requires —
       `tests/regression/test_workflow_trust_boundary_aqa.py` asserting `permissions:
       contents: read` on all five workflows, zero `secrets.*` references, no
       `pull_request_target`, and that `[self-hosted, jetson]` appears only in
       `jetson-nightly.yml`. The spec says "already satisfied — add a pin so it stays
       satisfied"; the generic F-051 pair does not prove it.
-- [ ] 8.4 `tests/unit/scripts/test_deploy_remote_guard.py` — there is no shellcheck gate in
+- [x] 8.4 `tests/unit/scripts/test_deploy_remote_guard.py` — there is no shellcheck gate in
       CI, so shell safety gets a Python test with a real fixture. Precedent:
       `tests/unit/scripts/test_repin_tags.py` (and the vacuous-assertion trap
       `mouse-droid-deploy-repin/tasks.md:19-32` records).
-- [ ] 8.5 `tests/regression/test_f051_aqa.py` + `test_f051_backwards_compat.py`.
-- [ ] 8.6 `deployments/jetson-image.json` extended in place with the model digest and proven
+- [x] 8.5 `tests/regression/test_f051_aqa.py` + `test_f051_backwards_compat.py`.
+- [x] 8.6 `deployments/jetson-image.json` extended in place with the model digest and proven
       provider — `config-compat.yml:8-10` documents the per-platform extension, and
       `test_config_no_dup_keys_and_deploy_record.py` pins
       `("sha","platform","image_tag")` plus a full 40-hex SHA. No parallel manifest.
-- [ ] 8.7 Rollback drill with the network disabled, using the established anchor
+- [ ] 8.7 **DOCUMENTED, NOT RUN — needs the physical rover.** The full procedure (pre-tag `mousedroid:jetson-rollback-<date>` *plus* the recorded commit, since the image alone does not revert bind-mounted code) is in `docs/runbooks/pc-to-jetson-promotion.md`, which states in the runbook itself that the drill is unverified and must run before the prior image is eligible for pruning. Sequenced behind F-008 like every other bench task. Original: Rollback drill with the network disabled, using the established anchor
       (`docker tag mousedroid:jetson mousedroid:jetson-rollback-<date>`) plus a checkout —
       no rebuild, no internet. Drill before the prior image is eligible for pruning.
-- [ ] 8.8 `docs/runbooks/jetson-onnx-benchmark.md` and
+- [x] 8.8 `docs/runbooks/jetson-onnx-benchmark.md` and
       `docs/runbooks/pc-to-jetson-promotion.md`, each opening with a `# ` H1
       (`tests/regression/test_runbooks_structure.py`), plus rows in `docs/README.md` (the
       declared canonical runbook index). Flag the overlap with `docs/deployment.md`,

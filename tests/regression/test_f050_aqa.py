@@ -16,13 +16,16 @@ collection, so every assertion here must run without ORT.
 
 from __future__ import annotations
 
+import ast
 import inspect
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 from numpy.typing import NDArray
+from pydantic_core import PydanticUndefined
 
 from mousedroid.config.schema import MetricsConfig, ModelConfig, Settings
 from mousedroid.factory.world_model import build_world_model
@@ -171,3 +174,238 @@ def test_timing_helper_uses_no_assert_statements() -> None:
     for line in helper.splitlines():
         stripped = line.strip()
         assert not stripped.startswith("assert "), f"assert in src/: {stripped}"
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 — artifact integrity (tasks 7.1, 7.1b, 7.2)
+#
+# Appended to this file rather than a second f050 regression module so
+# scripts/validations/F-050.sh keeps one entry point for the feature. Every
+# assertion is torch-only and reads config or parsed source, so the file stays
+# runnable without onnxruntime.
+# ---------------------------------------------------------------------------
+
+_SRC = _REPO_ROOT / "src" / "mousedroid"
+
+_NEW_WORLD_MODEL_FIELDS = (
+    "onnx_revision",
+    "onnx_sha256_manifest_filename",
+    "onnx_require_sha256_manifest",
+    "onnx_metadata_filename",
+)
+_NEW_COGNITIVE_FIELDS = (
+    "huggingface_revision",
+    "sha256_manifest_filename",
+    "require_sha256_manifest",
+)
+
+
+def _keyword_names_of_calls_to(source: str, func_name: str) -> list[set[str]]:
+    """Return one set of keyword names per call to ``func_name`` in ``source``."""
+    calls: list[set[str]] = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+        if name == func_name:
+            calls.append({kw.arg for kw in node.keywords if kw.arg is not None})
+    return calls
+
+
+class TestIntegrityFieldsAreSchemaDriven:
+    """CLAUDE.md invariants 2 and 6 for every field Phase 7 adds."""
+
+    def test_world_model_fields_exist_with_defaults_and_descriptions(self) -> None:
+        from mousedroid.config.schema import WorldModelConfig
+
+        for name in _NEW_WORLD_MODEL_FIELDS:
+            info = WorldModelConfig.model_fields[name]
+            assert info.default is not PydanticUndefined, f"{name} must carry a default"
+            assert info.description, f"{name} must carry a description"
+
+    def test_cognitive_fields_exist_with_defaults_and_descriptions(self) -> None:
+        from mousedroid.config.schema import CognitiveConfig
+
+        for name in _NEW_COGNITIVE_FIELDS:
+            info = CognitiveConfig.model_fields[name]
+            assert info.default is not PydanticUndefined, f"{name} must carry a default"
+            assert info.description, f"{name} must carry a description"
+
+    def test_the_strict_switches_default_off_so_todays_behaviour_is_preserved(self) -> None:
+        """The published repo carries no manifest yet; boot must not break."""
+        from mousedroid.config.schema import CognitiveConfig, WorldModelConfig
+
+        assert WorldModelConfig.model_validate({}).onnx_require_sha256_manifest is False
+        assert CognitiveConfig.model_validate({}).require_sha256_manifest is False
+
+    def test_the_revision_is_a_config_field_not_a_branch_name_in_code(self) -> None:
+        from mousedroid.config.schema import CognitiveConfig, WorldModelConfig
+
+        assert WorldModelConfig.model_validate({}).onnx_revision
+        assert CognitiveConfig.model_validate({}).huggingface_revision
+        for relative in ("factory/world_model.py", "factory/cognitive.py"):
+            source = (_SRC / relative).read_text(encoding="utf-8")
+            assert 'revision="' not in source, f"{relative} hardcodes a revision"
+
+    def test_every_hub_fetch_on_both_boot_paths_pins_a_revision(self) -> None:
+        for relative in ("factory/world_model.py", "factory/cognitive.py"):
+            source = (_SRC / relative).read_text(encoding="utf-8")
+            calls = _keyword_names_of_calls_to(source, "download_weights_from_huggingface")
+            assert calls, f"{relative}: expected at least one Hugging Face fetch"
+            for keywords in calls:
+                assert "revision" in keywords, f"{relative}: unpinned Hugging Face fetch"
+
+
+class TestOneSha256Implementation:
+    """Task 7.1b reuses ``verify_sha256``; a second hasher would be the defect."""
+
+    def test_the_gate_delegates_to_the_existing_helper(self) -> None:
+        source = (_SRC / "utils" / "artifact_integrity.py").read_text(encoding="utf-8")
+        assert "verify_sha256" in source
+
+    def test_the_gate_adds_no_second_hasher(self) -> None:
+        source = (_SRC / "utils" / "artifact_integrity.py").read_text(encoding="utf-8")
+        assert "hashlib" not in source, "hash through verify_sha256, not a new hasher"
+
+    def test_the_new_modules_use_no_assert_statements(self) -> None:
+        """ruff S101 is blocking in src/; PYTHONOPTIMIZE=1 strips asserts."""
+        for relative in ("utils/artifact_integrity.py", "world_model/onnx_export_metadata.py"):
+            source = (_SRC / relative).read_text(encoding="utf-8")
+            asserts = [n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.Assert)]
+            assert not asserts, f"assert statement in src/{relative}"
+
+
+class TestArtifactContract:
+    """A digest can be valid for the wrong kind of file."""
+
+    def test_a_checkpoint_is_never_substituted_for_the_graph(self, tmp_path: Path) -> None:
+        from mousedroid.utils.artifact_integrity import (
+            ArtifactContractError,
+            require_artifact_suffix,
+        )
+        from mousedroid.world_model.onnx_io import OBSERVE_STEP_ARTIFACT_SUFFIX
+
+        with pytest.raises(ArtifactContractError):
+            require_artifact_suffix(
+                tmp_path / "final.pt",
+                OBSERVE_STEP_ARTIFACT_SUFFIX,
+                repo_id="ianshank/mousedroid-dual-stream-rssm",
+            )
+
+    def test_a_missing_artifact_is_a_named_failure(self) -> None:
+        from mousedroid.utils.artifact_integrity import ArtifactMissingError
+
+        assert issubclass(ArtifactMissingError, FileNotFoundError)
+
+
+class TestMismatchCounterHygiene:
+    """Telemetry invariants 4 and 6 for the new counter."""
+
+    def test_the_registry_field_name_omits_the_render_suffix(self) -> None:
+        registry = MetricsRegistry(MetricsConfig.model_validate({}))
+        assert not registry._name_model_artifact_sha256_mismatches.endswith("_total")
+
+    def test_the_runtime_guard_mirrors_the_compile_time_literal(self) -> None:
+        from typing import get_args
+
+        from mousedroid.config.schema._primitives import ModelArtifactLiteral
+        from mousedroid.telemetry.metrics.primitives import _MODEL_ARTIFACT_KINDS
+
+        assert set(get_args(ModelArtifactLiteral)) == set(_MODEL_ARTIFACT_KINDS)
+
+    def test_the_family_is_seeded_in_the_promtool_sample(self) -> None:
+        from mousedroid.telemetry.metrics import generate_metrics_sample
+
+        sample = generate_metrics_sample()
+        for kind in ("world_model_onnx", "bdi_weights"):
+            assert f'artifact="{kind}"' in sample
+
+
+class TestExportMetadataGoesThroughOnnxIo:
+    """Task 7.2 — the IO contract has one owner, not three derivations."""
+
+    def test_input_names_come_from_the_accessor(self) -> None:
+        from mousedroid.world_model.onnx_export_metadata import input_specs_for_cfg
+        from mousedroid.world_model.onnx_io import all_input_names_for_cfg
+
+        cfg = _cfg()
+        assert tuple(input_specs_for_cfg(cfg)) == all_input_names_for_cfg(cfg)
+
+    def test_output_names_come_from_the_shared_tuple(self) -> None:
+        from mousedroid.world_model.onnx_export_metadata import output_specs_for_cfg
+        from mousedroid.world_model.onnx_io import OBSERVE_STEP_OUTPUT_NAMES
+
+        assert tuple(output_specs_for_cfg(_cfg())) == OBSERVE_STEP_OUTPUT_NAMES
+
+    def test_the_metadata_module_imports_no_onnx_runtime(self) -> None:
+        """Buildable in the blocking ``test`` job, which installs no ORT."""
+        source = (_SRC / "world_model" / "onnx_export_metadata.py").read_text(encoding="utf-8")
+        imported: set[str] = set()
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.Import):
+                imported.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module is not None:
+                imported.add(node.module.split(".")[0])
+        assert not imported & {"onnxruntime", "onnx", "torch"}
+
+    def test_the_builder_is_callable_without_touching_the_filesystem(self) -> None:
+        from mousedroid.world_model.onnx_export_metadata import build_export_metadata
+
+        record = build_export_metadata(
+            cfg=_cfg(),
+            opset=17,
+            artifact_filename="observe_step.onnx",
+            artifact_sha256="ab" * 32,
+            checkpoint_path=None,
+            checkpoint_sha256=None,
+            git_sha=None,
+            tool_versions={},
+        )
+        assert record["checkpoint"] == {"path": None, "sha256": None}
+
+
+class TestUnsafeLoadersAreFenced:
+    """Task 7.1b — neither loader may reach arbitrary pickle by omission."""
+
+    def test_the_migration_loader_defaults_to_the_safe_mode(self) -> None:
+        from mousedroid.world_model.checkpoint_migration import load_rssm_with_migration
+
+        signature = inspect.signature(load_rssm_with_migration)
+        assert signature.parameters["allow_unsafe_pickle"].default is False
+        assert signature.parameters["expected_sha256"].default is None
+
+    def test_no_loader_hardcodes_the_unsafe_mode(self) -> None:
+        """Parsed, not grepped, so the docstring explaining the fence cannot pass it."""
+        for relative in ("world_model/checkpoint_migration.py",):
+            source = (_SRC / relative).read_text(encoding="utf-8")
+            unsafe = [
+                kw.value
+                for node in ast.walk(ast.parse(source))
+                if isinstance(node, ast.Call)
+                for kw in node.keywords
+                if kw.arg == "weights_only"
+                and isinstance(kw.value, ast.Constant)
+                and kw.value.value is False
+            ]
+            assert not unsafe, f"{relative} hardcodes weights_only=False"
+
+    def test_the_export_script_has_no_silent_legacy_fallback(self) -> None:
+        source = (_REPO_ROOT / "scripts" / "export_dual_stream_rssm_onnx.py").read_text(
+            encoding="utf-8"
+        )
+        loader = next(
+            node
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.FunctionDef) and node.name == "_load_checkpoint"
+        )
+        assert not [n for n in ast.walk(loader) if isinstance(n, ast.Try)]
+        values = [
+            kw.value
+            for node in ast.walk(loader)
+            if isinstance(node, ast.Call)
+            for kw in node.keywords
+            if kw.arg == "weights_only"
+        ]
+        assert values
+        assert all(isinstance(v, ast.Constant) and v.value is True for v in values)
