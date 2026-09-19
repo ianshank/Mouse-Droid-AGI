@@ -27,6 +27,7 @@ stopping, never toward the bound.
 from __future__ import annotations
 
 import math
+import re
 from pathlib import Path
 
 import pytest
@@ -105,32 +106,93 @@ def test_motor_tool_clamp_finite_unchanged(value: float, expected: float) -> Non
 # --------------------------------------------------------------------------
 
 
-def test_no_actuation_path_reimplements_the_nan_blind_clamp() -> None:
-    """Source-level pin: the bare two-sided idiom is gone from the motor path.
+# The two-sided clamp idiom, in BOTH operand orders. Order matters: builtin
+# ``min``/``max`` keep the FIRST operand when the comparison is False, and
+# every comparison against NaN is False — so the two forms fail *differently*:
+#
+#   max(-1.0, min(1.0, nan)) == 1.0   <- fabricates the UPPER BOUND
+#   max(min(nan, 12.0), 0.0) == nan   <- PROPAGATES NaN
+#
+# An earlier version of this gate matched only the first form, which means it
+# would have passed a file carrying the second. Both are matched now.
+_CLAMP_IDIOM = re.compile(
+    r"max\(\s*[^,()]+,\s*min\(" r"|" r"max\(\s*min\(",
+)
 
-    The defect shipped in four separate modules because four of them each
-    wrote their own ``max(lo, min(hi, v))``. Matching on source text (not
-    AST) keeps this consistent with the suppression-budget and
-    cancellation-hygiene gates, which take the same approach.
+# Every module that clamps a velocity, range or actuation quantity. Listed
+# explicitly rather than globbed so that adding a new actuation module is a
+# deliberate act that shows up in review.
+_GUARDED_MODULES = (
+    _SRC / "comms" / "_utils.py",
+    _SRC / "comms" / "command_set.py",
+    _SRC / "common" / "tools" / "motor_tools.py",
+    _SRC / "orchestrator" / "_action_mixin.py",
+    _SRC / "hardware" / "motor_controller.py",
+    _SRC / "hardware" / "lidar_driver.py",
+)
+
+
+def _carries_unguarded_idiom(text: str) -> bool:
+    """True when the clamp idiom appears with no finiteness guard in the file."""
+    if not _CLAMP_IDIOM.search(text):
+        return False
+    return "math.isfinite" not in text and "math.isnan" not in text
+
+
+def test_no_actuation_path_reimplements_the_nan_blind_clamp() -> None:
+    """No module that bounds an actuation quantity may clamp without a guard.
+
+    The defect shipped in four modules because each wrote its own
+    ``max(lo, min(hi, v))``. Matching on source text (not AST) keeps this
+    consistent with the suppression-budget and cancellation-hygiene gates,
+    which take the same approach.
+
+    ``hardware/motor_controller.py`` and ``hardware/lidar_driver.py`` are in
+    the list because they already did this correctly — an explicit
+    ``isnan``/``isinf`` check before the clamp. They are the in-repo
+    precedent the ESP32 path should have followed, and pinning them keeps
+    that precedent from eroding.
     """
-    guarded = (
-        _SRC / "comms" / "_utils.py",
-        _SRC / "comms" / "command_set.py",
-        _SRC / "common" / "tools" / "motor_tools.py",
-        _SRC / "orchestrator" / "_action_mixin.py",
-    )
-    offenders = []
-    for path in guarded:
-        text = path.read_text(encoding="utf-8", errors="replace")
-        # The hardened definitions keep the idiom as their *final* return,
-        # guarded by an isfinite check above it -- so require the guard.
-        has_idiom = "min(hi, value)" in text or "min(upper, value)" in text
-        if has_idiom and "math.isfinite" not in text:
-            offenders.append(path.name)
+    offenders = [
+        p.name
+        for p in _GUARDED_MODULES
+        if _carries_unguarded_idiom(p.read_text(encoding="utf-8", errors="replace"))
+    ]
     assert offenders == [], (
-        f"{offenders} clamp without a finite guard; a NaN there resolves to the "
-        "upper bound and is transmitted as maximum commanded speed"
+        f"{offenders} clamp an actuation quantity with no finiteness guard; "
+        "depending on operand order a NaN there either resolves to the bound "
+        "and is transmitted as maximum commanded speed, or propagates"
     )
+
+
+def test_the_gate_itself_catches_both_orderings() -> None:
+    """The gate must flag a known-bad sample — in either operand order.
+
+    A gate that has never been shown to fail is not evidence. The earlier
+    version of this test matched only the fabricating form and would have
+    passed the propagating one, which is the form
+    ``hardware/motor_controller.py`` uses.
+    """
+    fabricating = "def clamp(v, lo, hi):\n    return max(lo, min(hi, v))\n"
+    propagating = "def clamp(v, lo, hi):\n    return max(min(v, hi), lo)\n"
+    guarded = (
+        "import math\n"
+        "def clamp(v, lo, hi):\n"
+        "    if not math.isfinite(v):\n"
+        "        return 0.0\n"
+        "    return max(lo, min(hi, v))\n"
+    )
+
+    assert _carries_unguarded_idiom(fabricating), "gate missed the fabricating form"
+    assert _carries_unguarded_idiom(propagating), "gate missed the propagating form"
+    assert not _carries_unguarded_idiom(guarded), "gate false-positives on guarded code"
+
+
+def test_both_orderings_really_do_differ() -> None:
+    """Pin the language behaviour the gate exists because of."""
+    nan = float("nan")
+    assert max(-1.0, min(1.0, nan)) == 1.0  # fabricates the upper bound
+    assert math.isnan(max(min(nan, 12.0), 0.0))  # propagates
 
 
 def test_execute_action_has_a_finite_guard() -> None:

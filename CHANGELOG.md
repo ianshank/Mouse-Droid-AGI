@@ -8,6 +8,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Docs — the prompt-injection filter named a blast-radius bound that does not exist
+
+`docs/CHARTER.md` §3's cloud-egress carve-out is the ratified argument for letting rover
+natural-language reach `api.anthropic.com`, and it rests on two compensating controls. The first
+is the velocity clamp (below). The second was named in `security/injection_filter.py`, which is
+otherwise admirably candid about its own limits — *"a literal-pattern denylist, not a semantic
+classifier … best-effort against a motivated adversary, not a complete defense"* — and then said:
+
+> blast radius is bounded elsewhere: parsed mission output is still clamped by
+> `LLMConfig.max_vx_norm_mps`/`max_vy_norm_mps`/`max_omega_norm_rads`
+
+Nothing reads those three fields. They are declared in two schemas (`config/schema/llm.py`,
+`llm_gateway/config.py`), validated `gt=0`, copied into `GatewayConfig` by
+`factory.build_llm_gateway`, and asserted in a unit test — and an exhaustive repo-wide grep finds
+no read anywhere. Executed: with `max_vx_norm_mps=0.01`, `LLMGateway._parse_response` still
+returns `vx_target=1.0`, 100× the documented bound. The parser clamps to a hardcoded `[-1, 1]`
+instead — the same clamp that, until this release, turned `NaN` into `1.0`.
+
+This is the S-11 defect class again: an operator reading `config/*.yaml` sees
+`max_vx_norm_mps: 0.5` and concludes LLM output is limited to 0.5 m/s, and nothing enforces or
+warns. The fields are also dimensionally incoherent with what they claimed to bound — declared in
+m/s and rad/s against a `GoalVector` documented as normalised `[-1, 1]` — so they are **not**
+wired up here: doing so naively would silently halve the achievable command, which is a design
+decision rather than a bug fix.
+
+The docstring now states what actually bounds a parsed goal (`clamp_unit`'s `[-1, 1]`, then
+`ESP32Config.max_velocity_mps` and `comms._utils.clamp` downstream), records the fields as
+unconsumed with the unit mismatch, and notes that no production path actuates on an LLM-derived
+`GoalVector` at all. Two pins in `tests/regression/test_goal_vector_clamp_aqa.py` hold the line:
+one asserting the false claim does not return, one that fails loudly *if* the fields are ever
+consumed, so the docstring and the unit question are revisited together.
+
+
 ### Safety — a non-finite velocity was transmitted to the motors as full scale
 
 `max(lo, min(hi, value))` returns the **upper** bound for `NaN`, because every NaN comparison is

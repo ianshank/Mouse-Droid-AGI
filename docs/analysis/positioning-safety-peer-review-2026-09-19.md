@@ -32,18 +32,22 @@
 
 ## 1. The five things that matter most
 
-1. **The last bound before the motors fails open: a `NaN` velocity is transmitted as full
-   scale.** `comms/_utils.py::clamp` is `max(lo, min(hi, value))`, which returns `hi` for `NaN`
-   because every NaN comparison is False. It is the terminal guard on the motor path, shared by
-   **both** codecs. Executed: `build_velocity_cmd(nan, nan, nan)` returned
-   `{'T': 1, 'vx': 255, 'vy': 255, 'omega': 255}` — full-scale PWM on all three axes, with no
-   exception raised, because the clamp resolved the NaN to `1.0` before `int()` ever saw it. The
-   stock codec, which `NEXT_STEPS.md` item 3 is about to flip to, emits `max_velocity_mps` the
-   same way. Two sibling paths share the defect: `motor_tools.py::_clamp` guards `set_velocity`,
-   an MCP tool and therefore the only LLM-reachable `send_velocity` in the tree, and
-   `_action_mixin.py::_execute_action` on the live 30 Hz tick had **no bound at all**, relying on
-   an invariant its own docstring merely *assumed*. **All three fixed in this change (§9).**
-   [Certain — §8.4]
+1. **Both compensating controls CHARTER §3 names for the cloud-egress carve-out are broken.** The
+   carve-out is the ratified argument for letting rover NL reach `api.anthropic.com`, and it rests
+   on two things. *Control 1* — the velocity clamp. `comms/_utils.py::clamp` is
+   `max(lo, min(hi, value))`, which returns `hi` for `NaN` because every NaN comparison is False.
+   It is the terminal guard on the motor path, shared by **both** codecs. Executed:
+   `build_velocity_cmd(nan, nan, nan)` returned `{'T': 1, 'vx': 255, 'vy': 255, 'omega': 255}` —
+   full-scale PWM on all three axes, no exception, because the clamp resolved the NaN to `1.0`
+   before `int()` saw it. Two siblings shared it: `motor_tools.py::_clamp`, guarding the MCP
+   `set_velocity` tool and therefore the only LLM-reachable `send_velocity` in the tree, and
+   `_action_mixin.py::_execute_action` on the live 30 Hz tick, which had **no bound at all**.
+   *Control 2* — `security/injection_filter.py` is honest that it is *"best-effort … not a
+   complete defense"* and says the real protection is that output is *"clamped by
+   `LLMConfig.max_vx_norm_mps`/`max_vy_norm_mps`/`max_omega_norm_rads`"*. **Nothing reads those
+   three fields.** Executed: with `max_vx_norm_mps=0.01`, `_parse_response` still returns
+   `vx_target=1.0` — 100× the documented bound. **All of Control 1 is fixed in this change; Control
+   2's false claim is corrected and the fields recorded as unconsumed (§9).** [Certain — §8.4, §8.6]
 
 2. **The convergent diagnosis is a restatement of the project constitution, not a discovery.**
    `docs/CHARTER.md` §1 already reads: *"an edge-AI / robotics engineering project, **not a
@@ -147,6 +151,8 @@ Ordered by severity. Each is live on `2469588` unless marked fixed.
 
 | ID | Severity | Defect | Evidence |
 |---|---|---|---|
+| **D-21** | **High** | ~~**The blast-radius bound the injection filter names does not exist.**~~ **CORRECTED IN THIS CHANGE (§9).** `security/injection_filter.py` is candid that it is *"a literal-pattern denylist, not a semantic classifier … best-effort against a motivated adversary"*, and located the real protection elsewhere: *"parsed mission output is still clamped by `LLMConfig.max_vx_norm_mps`/`max_vy_norm_mps`/`max_omega_norm_rads`"*. Those three fields are declared in **two** schemas, validated `gt=0`, copied into `GatewayConfig` by `factory.build_llm_gateway`, and asserted in a unit test — and an exhaustive repo-wide grep finds **no read anywhere**. Executed: with `max_vx_norm_mps=0.01`, `_parse_response` returns `vx_target=1.0`, 100× the documented bound. Two aggravations: it is the S-11 class again (an operator reading `config/*.yaml` sees `max_vx_norm_mps: 0.5` and concludes LLM output is limited to 0.5 m/s), and the fields are **dimensionally incoherent** with what they claimed to bound — declared in m/s and rad/s against a `GoalVector` documented as normalised `[-1, 1]`, so wiring them naively would silently halve the achievable command. The false claim is corrected here; whether to delete the fields or give them coherent semantics is a maintainer decision, pinned so it cannot drift back | `security/injection_filter.py`, `config/schema/llm.py`, `llm_gateway/config.py`, `factory/llm_gateway.py`; executed in §8.6 |
+| ~~D-20~~ | — | **WITHDRAWN.** A draft of this review recorded `hardware/motor_controller.py`'s two `max(min(val, max_val), -max_val)` sites as carrying the same defect. They do not: both are preceded by an explicit `if math.isnan(val) or math.isinf(val): return 0.0`. The sweep that found them matched the clamp line and missed the guard above it. Recorded rather than deleted because the correction is the point — `motor_controller.py` and `lidar_driver.py::_sanitize_scan` both got this right, which makes the ESP32 path's omission an **internal inconsistency** rather than an unforeseeable gap, and strengthens D-17..D-19 | `hardware/motor_controller.py`, `hardware/lidar_driver.py` |
 | **D-17** | **Critical** | ~~**The terminal bound before the motors fails open on `NaN`.**~~ **FIXED IN THIS CHANGE (§9).** `comms/_utils.py::clamp` is `max(lo, min(hi, value))` and is the single shared guard for **both** codecs. Executed: `build_velocity_cmd(nan, nan, nan)` → `{'T': 1, 'vx': 255, 'vy': 255, 'omega': 255}` — full-scale PWM on every axis, no exception, because the clamp resolved the NaN to `1.0` before `int()` saw it. `WaveshareStockCodec.build_velocity` emits `max_velocity_mps` / `max_omega_rads` the same way, and that is the codec `NEXT_STEPS.md` item 3 is about to switch to. The repo's own on-device learning with hot-swappable weight slots is a plausible NaN source | `comms/_utils.py::clamp`, `::build_velocity_cmd`, `comms/command_set.py::WaveshareStockCodec.build_velocity`; executed in §8.4 |
 | **D-18** | **High** | ~~**`_execute_action` had no bound at all on the live 30 Hz tick.**~~ **FIXED IN THIS CHANGE (§9).** `vx = float(action[0]) * max_v` with no range or finiteness check; the docstring says the action is *"assumed already restricted"*, and nothing on the path enforced it. `MouseDroidNavigationAgent.act` clamps with `torch.max(torch.min(...))`, but the cognitive and VLA branches are separate action sources with their own guarantees, and an out-of-range action scaled straight through | `orchestrator/_action_mixin.py::_execute_action` |
 | **D-19** | **High** | ~~**The only LLM-reachable `send_velocity` in the tree failed open on `NaN`.**~~ **FIXED IN THIS CHANGE (§9).** `motor_tools.py::_clamp` carried the same idiom and guards the MCP `set_velocity` tool, whose arguments come from a model. Executed: `_clamp(nan, lower=-0.5, upper=0.5)` → `0.5`; `_clamp(nan, lower=-1.5, upper=1.5)` → `1.5`. Gated by a default-OFF toggle (`mcp.enabled: false` in both shipped configs, `Settings.mcp = None`), which is why this is High rather than Critical — it is one opt-in flip from live | `common/tools/motor_tools.py::_clamp`, `::_set_velocity` |
@@ -191,7 +197,21 @@ Ordered by severity. Each is live on `2469588` unless marked fixed.
 
 ## 7. What survives review unchanged
 
-Correct, well-argued, and worth carrying into any rev. B:
+Correct, well-argued, and worth carrying into any rev. B.
+
+Two things the **repo** already got right, recorded because this review spent most of its length
+on what is wrong:
+
+- **`hardware/lidar_driver.py::_sanitize_scan` and `hardware/motor_controller.py` both guard
+  non-finite input before clamping** — an explicit `isnan`/`isinf` check, exactly the pattern the
+  ESP32 path lacked. They are the in-repo precedent, and they are now pinned by the §9 gate so the
+  precedent cannot erode.
+- **No credential material is in the repository.** `NEXT_STEPS.md` item 1 treats the
+  `ANTHROPIC_API_KEY` as compromised; no `sk-ant-*` string appears in the working tree or anywhere
+  in git history (`git log --all -S`). The rotation is an operator action on the rover, not a repo
+  leak — recorded so the next reader does not re-investigate.
+
+And from the external review:
 
 - **An explicit ODD with declared exclusions**, and ISO 3691-4 / UL 4600 *vocabulary* with an
   explicitly compliance-**shaped**, not compliance-**certified** posture. Genuine greenfield
@@ -317,7 +337,34 @@ change. With the fix: **41 passed**. Regression + comms tiers: **1527 passed**; 
 and 21 collection errors reproduce identically on a clean tree (`torch` / `cv2` / `hypothesis`
 absent from this sandbox). `ruff` and `mypy --strict` clean. [Certain]
 
-### 8.6 Baseline
+### 8.6 The bound the filter named is never read
+
+```
+configured max_vx_norm_mps   = 0.01
+parsed goal from the model   = GoalVector(vx_target=1.0, vy_target=1.0, omega_target=1.0)
+vx_target 1.0 EXCEEDS the documented bound 0.01 by 100x
+```
+
+Repo-wide, the only attribute accesses of `max_vx_norm_mps` / `max_vy_norm_mps` /
+`max_omega_norm_rads` are `factory/llm_gateway.py`'s copy of `LLMConfig` into `GatewayConfig`, and
+the `injection_filter.py` docstring naming them. No consumer. [Certain]
+
+### 8.7 The idiom's NaN behaviour is argument-order-dependent
+
+Builtin `min`/`max` keep the **first** operand when the comparison is False, and every comparison
+against NaN is False. So the same code shape has opposite failure modes:
+
+```
+max(-1.0, min(1.0, nan))  = 1.0   <- fabricates the UPPER BOUND   (comms/_utils.py form)
+max(min(nan, 12.0), 0.0)  = nan   <- PROPAGATES NaN               (hardware/ form)
+```
+
+This is why the source-level gate in §9 matches both orders and carries a self-test. The gate's
+first version matched the literal substrings `min(hi, value)` / `min(upper, value)`, so it was
+coupled to the variable names in the two files it was written against and flagged **neither**
+synthetic sample. A gate that has never been shown to fail is not evidence. [Certain]
+
+### 8.8 Baseline
 
 `python scripts/select_next.py` → `F-008  USB-C rover smoke passes on the physical Jetson
 (priority=critical, tier=hardware)`. Unchanged by this review.
@@ -326,10 +373,22 @@ absent from this sandbox). `ruff` and `mypy --strict` clean. [Certain]
 
 ## 9. Changes made alongside this review
 
-Five software-only defects, all strictly fail-safer, none needing a CHARTER carve-out (a
-carve-out gates *expansion* of the no-motion posture; every one of these reduces commanded
-motion). One shared rule now holds everywhere a velocity is bounded: **a non-finite velocity is a
-malformed velocity, and a malformed velocity means no motion.**
+Five software-only defects fixed and one false claim corrected, all strictly fail-safer, none
+needing a CHARTER carve-out (a carve-out gates *expansion* of the no-motion posture; every one of
+these reduces commanded motion or reduces what the docs assert). One shared rule now holds
+everywhere a velocity is bounded: **a non-finite velocity is a malformed velocity, and a malformed
+velocity means no motion.**
+
+**D-21 — the filter no longer claims a bound that does not exist.**
+`security/injection_filter.py`'s blast-radius paragraph now states what actually bounds a parsed
+goal (`clamp_unit`'s `[-1, 1]`, then `ESP32Config.max_velocity_mps` and `comms._utils.clamp`
+downstream), records the three `*_norm_*` fields as unconsumed with their unit mismatch, and notes
+that no production path actuates on an LLM-derived `GoalVector` at all. The fields are **not**
+wired up here: they are declared in m/s against a normalised `[-1, 1]` quantity, so wiring them
+naively would change actuation scale, and that is a maintainer decision rather than a bug fix. Two
+pins in `test_goal_vector_clamp_aqa.py` hold the line — one asserting the false claim does not
+return, one that fails loudly *if* someone consumes the fields, so the docstring and the unit
+question get revisited together.
 
 **D-17 — the terminal bound before the motors.** `comms/_utils.py::clamp` returns `0.0` for
 non-finite input and logs `velocity_clamp_non_finite` at error. Every finite result is unchanged,
@@ -364,8 +423,12 @@ Pinned by two regression pairs per the house convention:
 
 - `tests/regression/test_velocity_clamp_actuation_{aqa,backwards_compat}.py` — the actuation
   contract, exercising the real codec entry points end to end rather than only the helper, both
-  codecs, the MCP tool and the tick guard. Includes a source-level gate that no module on the
-  motor path may carry the two-sided idiom without a finite check, and an explicit pin that the
+  codecs, the MCP tool and the tick guard. Includes a source-level gate over every module that
+  bounds an actuation quantity, matching **both** operand orderings (§8.7) and carrying a
+  self-test that asserts it flags a known-bad sample in each — the gate's first version matched
+  literal substrings tied to two files' variable names and would have flagged neither. The
+  already-correct `hardware/motor_controller.py` and `hardware/lidar_driver.py` are in the gate's
+  list precisely because they are the precedent worth keeping. Also an explicit pin that the
   legacy path never raised (a reader might assume `int(nan)` would have failed safe; it could
   not, because the clamp resolved the NaN before `int()` saw it).
 - `tests/regression/test_goal_vector_clamp_aqa.py` — the contract (non-finite → no motion; NaN is
@@ -384,12 +447,17 @@ Both pairs were proved against pre-fix semantics rather than assumed: the gatewa
 finite cases that must not change.
 
 **A note on how this change reached its final shape, because it bears on how the review should be
-read.** The first pass found the idiom in the LLM gateways, rated it Critical, and fixed it there.
-Only the second pass traced every `send_velocity` call site — and found that the gateways are the
-one place the idiom does *not* actuate, while three paths that do actuate carried it untouched.
-D-0's row records that correction in place. The generalisable lesson is the one the review levels
-at the external synthesis in §1 item 2: a finding that has not been traced to its consumers is a
-hypothesis, not a result.
+read.** It took three passes, and each one corrected the previous. The first found the idiom in
+the LLM gateways, rated it Critical, and fixed it there. The second traced every `send_velocity`
+call site and found the gateways are the one place it does *not* actuate, while three paths that
+do carried it untouched — D-0's row records that correction in place. The third found that the
+gate shipped by the second was coupled to two files' variable names and would have caught neither
+form of the idiom, that `hardware/motor_controller.py` had been wrongly accused (D-20, withdrawn),
+and that the *other* control CHARTER §3 leans on was a phantom (D-21).
+
+The generalisable lesson is the one this review levels at the external synthesis in §1 item 2: a
+finding that has not been traced to its consumers is a hypothesis, not a result — and that applies
+to the reviewer's findings first.
 
 Not fixed here, recorded for triage: **D-1 through D-7 and D-9 through D-16.** D-1 (human
 detection) and D-5 (automatic restart of a motion system) are the two that should be triaged

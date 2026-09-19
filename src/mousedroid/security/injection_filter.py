@@ -55,11 +55,36 @@ class RegexInjectionFilter:
     Capability caveat: this is a literal-pattern denylist, not a semantic
     classifier — it does not normalize whitespace runs, paraphrasing, or
     unicode confusables/homoglyphs before matching, so it is best-effort
-    against a motivated adversary, not a complete defense. Blast radius is
-    bounded elsewhere: parsed mission output is still clamped by
-    ``LLMConfig.max_vx_norm_mps``/``max_vy_norm_mps``/``max_omega_norm_rads``
-    regardless of what the LLM returns, and the operator Q&A channel's own
-    system prompt states it cannot perform actions.
+    against a motivated adversary, not a complete defense.
+
+    Blast radius, stated accurately (corrected 2026-09-19, peer review D-21).
+    An earlier version of this docstring named
+    ``LLMConfig.max_vx_norm_mps`` / ``max_vy_norm_mps`` / ``max_omega_norm_rads``
+    as the bound on parsed mission output. **Those three fields are not
+    consumed by anything.** They are declared in two schemas, copied into
+    ``GatewayConfig`` by ``factory.build_llm_gateway``, and never read —
+    setting ``max_vx_norm_mps=0.01`` still yields ``vx_target=1.0`` from
+    ``LLMGateway._parse_response``. They are also dimensionally incoherent
+    with what they claimed to bound: they are declared in m/s and rad/s,
+    while ``GoalVector`` is normalised to ``[-1, 1]``, so they cannot simply
+    be wired up — giving them coherent semantics or removing them is a
+    maintainer decision, tracked as D-21.
+
+    What actually bounds a parsed goal today:
+
+    * ``llm_gateway.protocol.clamp_unit`` holds every axis in ``[-1, 1]``
+      and resolves non-finite input to ``0.0``;
+    * downstream, ``ESP32Config.max_velocity_mps`` / ``max_omega_rads``
+      scale and bound the physical setpoint, and ``comms._utils.clamp``
+      is the terminal guard before the wire.
+
+    Note also that no production path actuates on an LLM-derived
+    ``GoalVector`` at all — it is consumed by logs, the REST mission
+    response and MCP tool results. The LLM-reachable actuation surface is
+    the MCP ``set_velocity`` tool, bounded by ``motor_tools._clamp``.
+
+    Finally, the operator Q&A channel's own system prompt states it cannot
+    perform actions.
     """
 
     def __init__(self, patterns: Iterable[str], *, max_len: int) -> None:
