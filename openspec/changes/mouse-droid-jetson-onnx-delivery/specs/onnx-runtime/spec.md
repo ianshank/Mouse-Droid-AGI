@@ -194,3 +194,124 @@ safety-envelope regression.
 - **GIVEN** FP16 enabled and a multi-step recurrent rollout
 - **WHEN** drift is measured against the PyTorch reference
 - **THEN** a single-call comparison is insufficient and the multi-step result governs
+
+## ADDED Requirements — round 2
+
+### Requirement: The graph's input set SHALL be validated against the loading config
+
+At warmup, the runtime SHALL compare `session.get_inputs()` names against
+`all_input_names_for_cfg(cfg)` and SHALL raise a named exception on any mismatch, naming the
+missing and unexpected inputs.
+
+The exported graph's input set is config-dependent: `onnx_io.py` declares six always-present
+inputs plus `ultrasonic`, `audio`, `lidar` and `imu`, each gated on `cfg.<modality>_dim > 0`.
+Today nothing checks them. `run_session_with_zeros` builds warmup feeds from
+`session.get_inputs()` (`common/onnx_session.py:142`) — the graph, not the config — and
+`session.get_inputs()` is used nowhere else, so an artifact exported under a different
+modality set loads, warms, reports healthy, and then raises inside `observe_step` on the
+30 Hz path. A SHA-256 check does not detect this: the digest can be perfectly valid for the
+wrong graph.
+
+The export and the runtime SHALL both derive their input-name set from `onnx_io.py`'s
+accessors. There are currently three independent derivations of one set — the export via
+`build_example_inputs(cfg)` (`export_dual_stream_rssm_onnx.py:264`), the runtime via
+`packed.<modality> is not None` (`dual_stream_rssm_onnx.py:238-253`), and the accessors
+themselves, which are referenced only by `tests/unit/world_model/test_onnx_io.py`. That is
+exactly the drift `onnx_io.py`'s docstring exists to prevent.
+
+The export metadata SHALL record the modality dimensions the artifact was built from.
+
+#### Scenario: Artifact exported with a different modality set
+
+- **GIVEN** an `.onnx` exported with `lidar_dim = 0` and a config with `lidar_dim > 0`
+- **WHEN** warmup runs
+- **THEN** it raises a named exception naming `lidar` as an expected-but-absent graph input
+- **AND** the failure occurs at warmup, not on the first tick
+
+#### Scenario: Digest valid, graph wrong
+
+- **GIVEN** an artifact whose SHA-256 matches its manifest but whose modality set does not
+  match the config
+- **WHEN** the factory resolves and the runtime warms it
+- **THEN** the digest check passes and the input-set check fails closed
+
+### Requirement: TensorRT shape profiles SHALL be derived per input
+
+`_dynamic_axes_for_inputs` (`export_dual_stream_rssm_onnx.py:228-240`) marks axis 0 as the
+symbolic `batch` dimension for every input **and** every output. The TensorRT EP therefore
+requires `trt_profile_min_shapes` / `_opt_` / `_max_` as name-indexed shape strings covering
+every dynamic input.
+
+A single scalar batch field cannot express that. The implementation SHALL build the profile
+strings from `all_input_names_for_cfg(cfg)` plus the `ModelConfig` dimensions, and the
+benchmark record SHALL report the profile actually passed.
+
+A fixed-batch export SHALL NOT be treated as a pure optimization: the dynamic axis is
+deliberate, so the same `.onnx` can be reused at training-time batch sizes, per the
+`CFC_ONNX_SPIKE_REPORT.md` rationale quoted in that function's docstring. Removing it is a
+behaviour change requiring its own decision record.
+
+#### Scenario: Profile covers every dynamic input
+
+- **GIVEN** a config enabling ultrasonic, lidar and imu but not audio
+- **WHEN** the TensorRT provider options are built
+- **THEN** the min/opt/max profile strings name all nine inputs present in the graph
+
+### Requirement: The recorded digest SHALL be enforced at load, not merely recorded
+
+Digest verification SHALL reuse `utils/weights_manager.py::verify_sha256` and the
+`sha256.txt`-manifest-in-the-same-repo convention, SHALL increment a mismatch counter, and
+SHALL fail closed. The Hugging Face fetch SHALL pin `revision=`.
+
+This mechanism already exists, fail-closed and metricised, on the OTA weight path:
+`cloud/weight_update_poller.py:303`, the `sha256_manifest_filename` field
+(`config/schema/gcp_cloud.py:412-420`, "a download is refused if the local SHA does not match
+this manifest"), and `inc_cloud_weight_update_sha256_mismatch`
+(`telemetry/metrics/_registry_cloud.py:234`). The world-model ONNX path uses none of it:
+`factory/world_model.py:290-361` checks only `model_path.is_file()` and passes no `revision`.
+Recording a digest in a deploy record without enforcing it at load changes nothing.
+
+Any `.pt` arriving over the network SHALL be loaded with `weights_only=True` after digest
+verification, following `growth/slot_store.py:112-121`.
+`world_model/checkpoint_migration.py:293` (`weights_only=False`, no preceding digest check)
+and the silent legacy-loader fallback at `export_dual_stream_rssm_onnx.py:353-359` SHALL be
+fixed or explicitly fenced with a stated trusted-source precondition.
+
+#### Scenario: Digest mismatch on a downloaded artifact
+
+- **GIVEN** a downloaded `.onnx` whose SHA-256 differs from the repo's `sha256.txt` entry
+- **WHEN** the factory resolves the path
+- **THEN** the load is refused, the mismatch counter increments, and the revision is not
+  marked seen
+
+### Requirement: Cache-path fields SHALL be validated before any directory is created
+
+New engine- and timing-cache path fields SHALL carry a `field_validator` modelled on
+`config/schema/learning.py:15-58` (`_validate_relative_slot_dir` — relative-only, no `..`,
+POSIX and Windows semantics), and the directory SHALL be validated on **every** branch,
+before `mkdir`.
+
+Today `factory/world_model.py:320-321` calls `mkdir(parents=True, exist_ok=True)` on a bare
+`str` config value, while the protected-root guard lives inside the download helper
+(`utils/weights_manager.py:120-132`) which runs afterwards — and is skipped entirely when
+`model_path.is_file()` short-circuits at `:324-330` or an explicit `onnx_path` returns at
+`:305-307`. The container runs as root (`Dockerfile.jetson` declares no `USER`) with
+`privileged: true` (`docker-compose.jetson.yml:21`) and `/opt/mousedroid` mounted
+read-write, so an unvalidated config-supplied path is a root-authority write primitive with
+host reach.
+
+The 0700 mode that `efficiency/tensorrt.py:300` assumes in a comment SHALL be enforced for
+any cache directory this change introduces. No requirement is made about rejecting unwritable
+paths — no precedent for that exists in the tree.
+
+#### Scenario: Traversal path rejected at config load
+
+- **GIVEN** a cache dir of `../../etc/mousedroid`
+- **WHEN** `Settings` loads
+- **THEN** validation fails with an operator-actionable message and no directory is created
+
+#### Scenario: Cache hit does not skip validation
+
+- **GIVEN** a pre-placed artifact under an unvalidated path
+- **WHEN** the factory resolves it
+- **THEN** the path is validated before the file is accepted

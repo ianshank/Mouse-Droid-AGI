@@ -130,8 +130,13 @@ at worst.
   the established rollback anchor — `docker tag mousedroid:jetson
   mousedroid:jetson-rollback-<date>` — which already rolls back offline without rebuilding.
 - `imagine_step` stays PyTorch. `CompositeWorldModel` also delegates `get_safety_trace`
-  to it (`composite.py:128-150`), so the PyTorch graph is load-bearing for the safety
-  monitor, not only MCTS.
+  to it (`composite.py:128-150`) — but round 2 found that method has **zero production
+  callers**, and `factory/world_model.py:267-270`'s claim that "the safety monitor's CfC
+  inspection" needs it is false (`safety/monitor.py` never references it). The MCTS
+  rollout path is likewise reached only from `_try_cognitive_action`'s `except` branch.
+  So the retained PyTorch engine serves one exception-path method and one dead one; both
+  comments are corrected in Phase 3 rather than the engine being removed, because
+  `imagine_step` on the degraded path is still real.
 - No second direct-TensorRT runtime. ADR-008 already reserves `torch2trt` via
   `JetsonTensorRTCompiler` as a separate future option.
 - No INT8. No Cosmos — already catalogued as F-049 `deferred`. No Isaac ROS. No stereo

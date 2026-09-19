@@ -171,3 +171,144 @@ Documentation SHALL NOT claim blocking coverage for ORT-dependent tests.
 - **GIVEN** a new config field with a wrong default
 - **WHEN** CI runs on the PR
 - **THEN** `tests/regression/test_f050_aqa.py` fails in the blocking `test` job
+
+## ADDED Requirements — round 2
+
+### Requirement: Whole-tick evidence SHALL come from the existing endurance test
+
+`tests/performance/test_jetson_endurance.py` SHALL be the whole-tick harness. No new
+whole-tick benchmark script SHALL be written.
+
+It already runs the full orchestrator loop and validates GPU temperature, RSS stability
+within 10%, and "Loop time p95 < 33ms at 30Hz target", writing `duration_s`, `p95_ms`,
+`rss_start_mb`, `rss_end_mb` and `max_gpu_temp_c` to
+`${MOUSEDROID_ENDURANCE_REPORT_DIR:-reports/endurance}/endurance-<utc>.json` (`:50`,
+`:88-95`). It is `pytestmark = [hardware, slow]` (`:53`) with a configurable
+`MOUSEDROID_ENDURANCE_DURATION_S` (default 60 s), and `MOUSEDROID_ENDURANCE_FORCE_REAL=1`
+for the real-hardware opt-in. `reports/endurance/` contains only `.gitkeep`: it has never
+been run and committed.
+
+Its RSS-stability assertion is also the answer to the memory question this change raises —
+`CompositeWorldModel` holds a PyTorch `DualStreamRSSM` alongside the ORT session, plus an
+engine plan cache and persistent device buffers, on an 8 GB unified-memory board.
+
+It is excluded from CI because the `performance` job runs `-m "not hardware"`, which
+`docs/analysis/positioning-safety-peer-review-2026-09-19.md:147` names as the reason that
+job is "a tripwire, not a benchmark", its remaining tests running at a deliberately loosened
+2.0× budget. Evidence SHALL therefore be produced on the rover and committed, not expected
+from CI.
+
+#### Scenario: Whole-tick evidence produced
+
+- **GIVEN** a rover with actuation disabled
+- **WHEN** the endurance test runs for the full-validation duration
+- **THEN** its JSON lands in `reports/endurance/` and is committed via `evidence-commit`
+
+### Requirement: The whole-tick gate SHALL be treated as a prerequisite, not a deliverable
+
+`LoopConfig.planning_hz = 10.0` (`config/schema/misc.py:178`, "MCTS planning rate (Hz)",
+set in `config/default.yaml:9`) has **zero consumers** in `src/`. There is no tick
+decimation, modulo or `_should_plan` gate in `orchestrator/`, so planning runs at
+`control_hz` (30 Hz), not 10 Hz, and `_select_action` blocks the tick synchronously.
+
+The repository has recorded this twice:
+`docs/analysis/autonomy-baseline-peer-review-2026-09-17.md:79` (S4) — "30 Hz plan-act is
+fiction… the multi-rate contract was declared and never wired" — and
+`docs/analysis/positioning-safety-peer-review-2026-09-19.md:148` (P5) — "**BOTH STILL
+OPEN** … `LoopConfig.planning_hz` still has zero consumers", with `:198` directing that P5
+be closed "before publishing, not after". That second document landed one commit before
+this bundle.
+
+Until P5 closes, this change SHALL report component latency only and SHALL state that the
+whole-tick gate is blocked on it. Wiring `planning_hz` — using the budget/timeout/fallback
+pattern `_try_vla_action` already demonstrates — is named in that review as unblocked work
+and belongs to its own change, not to this one.
+
+#### Scenario: A 30 Hz claim is withheld
+
+- **GIVEN** `planning_hz` still has zero consumers
+- **WHEN** benchmark results are published
+- **THEN** they are labelled component measurements and name P5 as the open prerequisite
+
+### Requirement: Evidence SHALL cover both action paths
+
+`_select_action` (`orchestrator/_action_mixin.py:30-68`) tries the cognitive core first,
+then the VLA branch (inert by default — `policy_selector='nav_agent'`), then falls through
+to `self._agents[0].act(...)` → `MouseDroidNavigationAgent.act`
+(`agents/navigation.py:84-88`) → `MCTSPlanner.plan()`.
+
+That fallback is reachable in production from an ordinary failure:
+`factory/orchestrator.py:158-170` builds the cognitive core when `cfg.cognitive.enabled`,
+and on exception with `cognitive.fallback_to_mcts: true` — the schema default, set
+explicitly at `config/jetson_production.yaml:204` — `cognitive_core` stays `None` and every
+subsequent tick takes the MCTS path. A failed BDI weight download at boot suffices.
+
+The cost asymmetry is large. Per `plan()` call, `n_simulations_base=50` × (one expansion
+`imagine_step` at `world_model/mcts.py:257` plus `rollout_depth=5` rollout calls at `:277`)
+is roughly 300 `imagine_step` invocations, rising to about 1200 at `n_simulations_max=200`,
+against **one** `observe_step` per tick. The published model card for
+`ianshank/mousedroid-weights` records `mcts_tuning` at p50 109–110 ms and p95 125 ms, and
+`scripts/benchmark_latency.py` defaults to `--mcts-target-ms 50.0` against
+`--rssm-target-ms 15.0`. Treat those as indicative, not as production tick measurements:
+the simulation count and host state behind them are not recorded.
+
+The budget also scales with surprise: `agents/_planning.py:23-24` gives
+`clamp(int(base × min(surprise+1, max/base)), base, max)`, so with
+`surprise.high_threshold: 2.0` high surprise means 150 simulations and critical means 200.
+The surprise input is `observe_step`'s own fourth return value, so worst-case planning
+latency occurs in the most novel situations.
+
+#### Scenario: Cognitive core unavailable
+
+- **GIVEN** BDI weight loading fails and `fallback_to_mcts` is true
+- **WHEN** the tick runs
+- **THEN** evidence for the MCTS path exists separately and is not conflated with the
+  cognitive-core path
+
+### Requirement: Percentiles SHALL use the repo's existing summariser
+
+All latency statistics SHALL come from `validation/latency_stats.py::summarize`, whose
+`LatencySummary` is min / mean / p50 / p95 / p99 / max (`:29`, `_P50, _P95, _P99`).
+
+p90 SHALL NOT be reported: it appears nowhere in the repository, and
+`docs/analysis/positioning-safety-peer-review-2026-09-19.md:144` names p50/p95/p99 as the
+house convention. A second percentile implementation SHALL NOT be introduced.
+
+Any published whole-tick percentile SHALL carry its denominator and the timeout class
+alongside it. `_finish_tick_timing`
+(`orchestrator/_telemetry_experience_mixin.py`) latches the duration on every path but
+returns before recording when `ok is False`, so a tick that raises — including one cancelled
+by `asyncio.wait_for(self.tick(), tick_timeout_s)` — contributes neither a histogram sample
+nor a `tick_overruns` increment. That bias is intentional per telemetry invariant 5 and is
+recorded as addressed at `:178` (D-9), with the denominator now captured; so it is not an
+open defect, but `histogram_quantile(0.99, …)` remains a p99 *of successful ticks* and must
+be labelled as such.
+
+#### Scenario: A published percentile is qualified
+
+- **GIVEN** a whole-tick p99 derived from `mousedroid_loop_latency_ms`
+- **WHEN** it is written into an evidence artifact
+- **THEN** it is accompanied by the sample denominator and the count of failed or timed-out
+  ticks
+
+### Requirement: Evidence artifacts SHALL NOT commit host fingerprints
+
+Benchmark and deploy reports SHALL be written to a gitignored `reports/<name>/` path, per the
+precedent at `.gitignore:173-188`. Anything committed SHALL carry only host-independent
+facts, as `deployments/jetson-image.json` does.
+
+`smoke-reports/smoke_report.md` and `smoke_report.json` are tracked, not gitignored, and
+publish the rover's LAN IP, mDNS name, SSH username, WiFi SSID, dev-box identity, JetPack
+version and on-device HEAD in a public repository. `.gitleaks.toml` extends only the default
+ruleset and no default rule matches an IP, hostname, SSH alias or SSID, so those files pass
+the blocking gate — which is the proof that gitleaks is not the control for this class.
+
+A committed digest field SHALL be named `sha256` or `digest`, never a name containing `key`,
+`token`, `secret`, `auth`, `api` or `credential`, which are the default `generic-api-key`
+rule's keywords.
+
+#### Scenario: A benchmark report carries a hostname
+
+- **GIVEN** a `tegrastats` report whose header includes the rover hostname
+- **WHEN** it is produced
+- **THEN** it lands on a gitignored path and is not committed

@@ -10,6 +10,30 @@ bash scripts/validations/F-050.sh
 
 Task ordering is binding: each task lands green before the next starts.
 
+Two standing constraints apply to every task below.
+
+**No new suppressions.** `python -m tools.ratchet_budgets` currently reports `noqa: 19`
+against a ceiling of 19, `type_ignore: 8` against 8, and `hardcoded_ok: 26` against 26 — all
+three at the ceiling. `tests/regression/test_suppression_budget.py` enforces them in the
+blocking `test` job and `--strict` runs in `local-gates`. So no `# noqa`, `# type: ignore` or
+`# hardcoded-ok` may be added under `src/mousedroid/**` without first removing an existing
+one, and a file-level `per-file-ignores` entry is not an escape — that set is frozen too.
+This bites specifically on ORT's `Any`-shaped `InferenceSession` / `io_binding()` under
+`mypy --strict`.
+
+**New branches must be coverable without onnxruntime.** `common/onnx_session.py` and
+`world_model/dual_stream_rssm_onnx.py` are **not** in `check_branch_coverage.py`'s allowlist
+(`_ALLOWED_DIR_PREFIXES` covers `config/schema/` and `telemetry/metrics/`; `_ALLOWED_FILES`
+covers `factory/world_model.py`), and the allowlist's contents are themselves pinned by
+`tests/unit/scripts/test_check_branch_coverage_base_ref.py:429-484` and
+`tests/regression/test_f042_aqa.py`. Policy logic — mode selection, the strict-versus-fallback
+decision, provider validation and its error text — must therefore be pure or stub-ORT-testable
+and land in always-on test files, following the `sys.modules` stub fixture at
+`tests/unit/common/test_onnx_session.py:106-115`. Only real-`InferenceSession`, I/O-binding
+and numerical work may sit behind `importorskip`. Also note `common/` and `world_model/` are
+**not** exempt from `check_no_hardcoded_values.py` (`:59-66`), so new provider literals belong
+in schema config or in `DEFAULT_ORT_PROVIDERS`.
+
 There is no `openspec` CLI in this repository (`openspec/project.md:1-6`), so the bundle is
 validated by `make gates` plus the two validation scripts, never by `openspec validate`.
 Narrow pytest selections use the `Makefile::regression` form —
@@ -25,7 +49,17 @@ coverage plugin's `fail_under = 90` (`:411`) fails any narrow run without `--no-
       `features.schema.json`: `id, name, category, priority, status, verification,
       depends_on`. IDs are next-free, not sequential — ADR-013:63-74 makes F-009–F-014 and
       F-033 intentional holes.
-- [ ] 1.2 `scripts/validations/F-050.sh` and `F-051.sh` in the `F-048.sh` shape:
+- [ ] 1.2 `scripts/validations/F-050.sh` and `F-051.sh` **must exist and be non-empty in
+      this same commit**: `tests/regression/test_harness_spec_aqa.py:125-137`
+      (`test_referenced_validation_scripts_exist`) has no status filter and runs in the
+      blocking `test` job. They will not be *executed* while status is `in_progress` —
+      `harness/spec.py:362-363` skips any feature whose `status != "done"` before both the
+      git-reachability check and the `runner(f)` call — but `scripts/validate.py --check
+      F-050` bypasses both filters, so the stubs must fail honestly rather than `exit 0`.
+      F-050 must be `tier: fast` pointing at always-on stub-ORT tests; the real-hardware
+      claim belongs to F-051 as `tier: hardware`, because `harness.yml` never installs ONNX
+      extras and `_run_always_on_pytest.sh` fails on `passed=0` ("skip-all is not done").
+      Shape follows `F-048.sh`:
       `set -euo pipefail`, `cd "$(dirname "$0")/../.."`, then
       `bash scripts/validations/_run_always_on_pytest.sh F-0NN <paths>`. Do not restate
       `--import-mode=importlib --no-cov -q` — the helper appends them and fails when
@@ -40,6 +74,64 @@ coverage plugin's `fail_under = 90` (`:411`) fails any narrow run without `--no-
 - [ ] 1.5 Amend `src/mousedroid/world_model/CLAUDE.md` invariant 3 to scope
       "No In-Place Tensor Mutation" to the PyTorch autograd graph, per design D-12. This
       lands before any I/O-binding code.
+
+**Phase 1b — Preconditions round 2 found (gate for everything after)**
+
+- [ ] 1b.1 State in the proposal, not as a caveat: the production world model **loads no
+      trained weights**. `build_world_model` returns `DualStreamRSSM(cfg.model)`
+      (`factory/world_model.py:108`) or `RSSM(cfg.model)` (`:113`) freshly constructed; there
+      is no `load_state_dict` in that module or in `orchestrator/`; and
+      `factory/telemetry.py:315` `build_weight_update_loader` unconditionally returns `None`.
+      A numerical-parity gate against random weights is vacuous. Not this change's to fix —
+      but it must be said.
+- [ ] 1b.2 State that production runs **plain `RSSM`, not `DualStreamRSSM`**:
+      `config/jetson_production.yaml` has no `model:` block, so `cfc_hidden_dim` is `0` and
+      `factory/world_model.py:91` falls through to `RSSM`. Only
+      `config/jetson_dual_stream.yaml:29` sets `64`, self-gated at `:8` behind human review
+      of training metrics. So a torch-vs-ONNX A/B compares two architectures. Any benchmark
+      must run both arms on `config/jetson_dual_stream.yaml` or report the confound.
+- [ ] 1b.3 **Off-loop warmup, before any `engine: onnx_trt` code lands.** `observe_step`
+      warms lazily (`dual_stream_rssm_onnx.py:223-224`), `_update_world_model` is synchronous
+      (`_world_model_state_mixin.py:28`), and `run()` wraps the tick in
+      `asyncio.wait_for(..., tick_timeout_s)` defaulting to `1.0`
+      (`_lifecycle_mixin.py:366`, `config/schema/misc.py:181-184`), whose timeout path calls
+      `emergency_stop()` (`:380-392`). `wait_for` cannot preempt a synchronous call, so a
+      cold TensorRT build e-stops the rover. Add a `start()`-time
+      `await asyncio.to_thread(wm.warmup)` and a test that a slow warmup does not reach the
+      tick. `loop_overrun_warmup_ticks: 30` does not cover this — it gates the safety
+      monitor's `max_loop_time_ms`, not `tick_timeout_s`.
+- [ ] 1b.4 **Install `onnxruntime-gpu` in `Dockerfile.jetson`.** It runs
+      `pip install --no-cache-dir -e "."` with no extras and says so at `:88`; the only
+      transitive ORT is the CPU wheel `piper-tts` pulls (`:146`). Since
+      `resolve_providers` silently returns `("CPUExecutionProvider",)` on an empty
+      intersection (`common/onnx_session.py:94-100`), `engine: onnx_trt` would run slower
+      than the baseline with only an INFO log. Pair the install with
+      `onnx_require_primary_provider` defaulting **true** in the FP16 overlay. Record whether
+      `dustynv/l4t-pytorch:r36.4.0` already ships a GPU-enabled ORT — not knowable from the
+      tree.
+- [ ] 1b.5 Correct two false comments: `factory/world_model.py:267-270` ("the safety
+      monitor's CfC inspection") and `composite.py:135` ("keeps the safety monitor wired").
+      `get_safety_trace` has zero production callers, and `build_planner` — named at
+      `ADR-008:80` — does not exist; the real builder is `factory/cognitive.py:34`. Fold into
+      the Phase 3 narrative sweep.
+- [ ] 1b.6 Size the memory budget before enabling caches. `docker-compose.jetson.yml:145-153`
+      is `memory: 6G` with no `memswap_limit`/`shm_size`/`pids_limit`, against 7.4 GB usable
+      and ~4.6 GB measured available. `config/jetson_production.yaml:66` sets
+      `workspace_gb: 2.0` — 2 GiB of TensorRT builder workspace for a ~574 k-parameter graph
+      — and nothing currently reads it on an ORT path (`build_tensorrt_compiler`,
+      `factory/hardware.py:422`, has zero production callers; `gpu_memory_fraction` is
+      schema-only). Separate build-time peak from steady state, and justify or shrink the
+      workspace. Note `docs/runbooks/jetson-claude-pilot-deploy.md:118-122` records that a
+      second full-offload GPU tenant already failed with `unable to allocate CUDA0 buffer`,
+      though its attribution to the world model looks wrong — the world model is CPU-resident
+      today (no `set_default_device`, no live `.to(cuda)`, latents on CPU at
+      `orchestrator.py:468-477`).
+- [ ] 1b.7 Bind only `new_h` and `new_z` to persistent device buffers.
+      `_world_model_state_mixin.py:41` discards `obs_embed` and `surprise`
+      (`self._h, self._z, _, _ = …`), and `SafetyContext.surprise` is never assigned from the
+      world model (`safety/context.py:21` default `0.0` is its only value), so
+      `compute_mcts_budget` is permanently pinned at `n_simulations_base`. Paying a
+      device-to-host copy for two discarded outputs is waste.
 
 **Phase 2 — Make the stage measurable**
 
@@ -75,6 +167,23 @@ coverage plugin's `fail_under = 90` (`:411`) fails any narrow run without `--no-
       `safety.loop_soft_budget_factor / loop.control_hz`, and
       `mousedroid_tick_phase_ms{phase="world_model"}` (`orchestrator.py:522`) already gives
       per-phase attribution.
+
+- [ ] 2.8 Close the pre-existing hole this change lands inside:
+      `tests/unit/factory/test_factory_world_model_engine.py` is the **only** test file that
+      constructs `WorldModelConfig`, and it executes in **no** CI job — it
+      `importorskip`s `onnx`/`onnxruntime` (`:22-24`) so it skip-alls in the blocking `test`
+      job, and the advisory `onnx-world-model-extras` job runs only `tests/unit/world_model`
+      plus `tests/unit/training/test_export_dual_stream_rssm_onnx.py` (`ci.yml:600-601`).
+      Either add `tests/unit/factory/` to that job's path list or add always-on integration
+      coverage for `build_world_model`'s dispatch through a stubbed ORT seam. Without this,
+      eight new config fields land completely unpinned.
+- [ ] 2.9 Fill the missing tiers: a `tests/property/` test for provider and mode resolution
+      (order preservation, idempotence, strict implies raise-or-exact-match — there is no
+      ONNX property test today), a `tests/integration/` test exercising the new fields
+      through the factory with a stubbed ORT, and a `tests/smoke/` assertion that the new
+      config parses. Do **not** register a new pytest marker — `pyproject.toml:382-387`
+      registers exactly `slow`, `hardware`, `smoke`, `pillar` and `--strict-markers` turns an
+      unregistered marker into a collection error.
 
 **Phase 3 — Correct the narrative and reach the ONNX path**
 
@@ -188,6 +297,15 @@ coverage plugin's `fail_under = 90` (`:411`) fails any narrow run without `--no-
 
 **Phase 7 — Delivery (F-051)**
 
+- [ ] 7.0 Record the container resource budget alongside the cache volume:
+      `docker-compose.jetson.yml:145-153` is `memory: 6G` with no `memswap_limit`,
+      `shm_size` or `pids_limit`. Unbounded swap means a 30 Hz loop thrashes instead of
+      restarting cleanly, and every swapped page fault inside the synchronous
+      `_update_world_model` counts against `tick_timeout_s: 1.0`. Decide explicitly whether
+      to bound swap before enabling engine builds on-device; note the campaign plan's
+      ≥8 GiB disk guard and NVMe-swap requirement
+      (`docs/superpowers/plans/2026-07-25-…:123-126`) and
+      `scripts/jetson_disk_cleanup.sh`.
 - [ ] 7.1 `docker-compose.jetson.yml`: named volume for the TensorRT engine/timing cache
       beside `mousedroid_experience` and `promtail_positions` (`:165-169`). Nothing persists
       a TRT cache or `HF_HOME` today. The directory comes from
