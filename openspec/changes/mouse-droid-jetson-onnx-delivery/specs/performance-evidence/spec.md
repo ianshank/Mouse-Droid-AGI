@@ -186,7 +186,7 @@ within 10%, and "Loop time p95 < 33ms at 30Hz target", writing `duration_s`, `p9
 `:88-95`). It is `pytestmark = [hardware, slow]` (`:53`) with a configurable
 `MOUSEDROID_ENDURANCE_DURATION_S` (default 60 s), and `MOUSEDROID_ENDURANCE_FORCE_REAL=1`
 for the real-hardware opt-in. `reports/endurance/` contains only `.gitkeep`: it has never
-been run and committed.
+been run on hardware.
 
 Its RSS-stability assertion is also the answer to the memory question this change raises —
 `CompositeWorldModel` holds a PyTorch `DualStreamRSSM` alongside the ORT session, plus an
@@ -195,8 +195,8 @@ engine plan cache and persistent device buffers, on an 8 GB unified-memory board
 It is excluded from CI because the `performance` job runs `-m "not hardware"`, which
 `docs/analysis/positioning-safety-peer-review-2026-09-19.md:147` names as the reason that
 job is "a tripwire, not a benchmark", its remaining tests running at a deliberately loosened
-2.0× budget. Evidence SHALL therefore be produced on the rover and committed, not expected
-from CI.
+2.0× budget. Evidence SHALL therefore be produced on the rover and retained there as a
+declared local-only chain, not expected from CI and not git-committed.
 
 #### Scenario: Whole-tick evidence produced
 
