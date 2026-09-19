@@ -8,6 +8,124 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Safety — the wheels are now commanded to zero before the first tick
+
+`_LifecycleMixin.start` connected the ESP32 and went straight on to sensors,
+telemetry, MCP and the LLM gateway. The chassis firmware latches the last velocity
+it was given, so a previous unclean stop — `SIGKILL`, a power cut, a dropped USB
+link — left the wheels driving and nothing contradicted that until the first tick
+produced an action. `src/mousedroid/orchestrator/CLAUDE.md` states the consequence
+outright: *"the rover can be moving throughout bring-up"*.
+
+`start()` now issues a zero-velocity command immediately after `connect()`, gated by
+`ESP32Config.stop_on_connect` (default `True`, the fail-safer direction). Deliberately
+a plain stop rather than `emergency_stop()`: every boot emitting
+`esp32_emergency_stop` would destroy that event's value as an incident signal. A
+driver that cannot accept the stop is logged and swallowed — `connect()` already
+reports an unreachable driver, and a best-effort safety measure must not become a new
+way for startup to fail.
+
+This is the one item from the peer review's chassis-failsafe list (C4) that needs no
+firmware change and no working ESP32; the rest are gated on F-008.
+
+### Safety — the human-detection interlocks are now typed, and their absence is audible
+
+`MouseDroidSafetyMonitor.evaluate` read human presence as
+`getattr(observation, "human_detected", False)`. No such field exists on
+`ObservationProtocol` or `MouseDroidObservationBundle`, and nothing in `src/` ever
+assigned one — so `SafetyContext.human_detected` was permanently `False`, and three
+interlocks were unreachable code: the Law-1 stop in `MouseDroidNavigationAgent.act`,
+the human clamp in `GeometricSafetyProjector.project`, and `evaluate`'s own human
+branch. `SafetyProjectorConfig.human_keepout_m`, `human_proximity_speed_mps` and
+`ThreeLawsConfig.human_safety_radius_m` were declared budgets with no consumable
+input. **The `getattr` default is what hid it** — a typed member would have failed
+`mypy --strict`.
+
+Widening `ObservationProtocol` was the wrong repair and was measured, not assumed: a
+Protocol member's default does not help *structural* implementers, so adding one
+breaks all 14 of them — two in `src/` (`MouseDroidObservationBundle` and
+`learning.on_device.seed_states._RecordObservation`), which fails the blocking
+`typecheck` stage. An experience record has no human channel at all, so it could
+satisfy the member only by hardcoding `False`: the same lie, type-checked.
+
+Presence is therefore its own collaborator. New
+`sensing/human_presence.py` defines a `@runtime_checkable HumanPresenceProtocol`, a
+frozen `HumanPresence` reading and a `NullHumanPresenceDetector` whose `can_detect`
+is `False`; `factory/safety.py::build_human_presence_detector` resolves it and
+`build_safety_monitor` injects it. `evaluate`'s two `getattr` calls become one typed
+call. The monitor logs `human_presence_source_unavailable` at construction, naming
+the three inert interlocks, the three unconsumable budgets and the remedy — the same
+shape as S-11's `esp32_heartbeat_unavailable`, and logged from `__init__` rather than
+the factory for the same reason: the factory is only one of several construction
+paths.
+
+Deliberately log-only and behaviourally identical. Failing closed here would mean
+assuming a human at zero distance, i.e. a permanent emergency stop. **The gap is not
+closed — no detector ships — it is now visible, type-checked and greppable instead of
+silent.** Constructor compatibility is preserved: `human_presence` is keyword-only
+with a `None` default, so the ~20 existing `MouseDroidSafetyMonitor(SafetyConfig())`
+call sites are untouched.
+
+### Fixed — following the repo's own documentation made the rover fail to boot
+
+`tests/hardware/test_e2e_sense_plan_act.py` documented a deadline-miss threshold at
+`cfg.loop.max_miss_pct` and read it through a `getattr` chain with a literal fallback.
+`LoopConfig` never declared that field. Because `LoopConfig` is a `StrictBaseModel`
+(`extra="forbid"`), an operator who believed the documentation and set
+`max_miss_pct` in YAML got a `ValidationError` at settings load — the rover failed to
+start. The failure mode was not "the fallback quietly wins"; this is why the defect
+was re-rated from Low to High on review.
+
+`LoopConfig.max_miss_pct` is now declared (`5.0`, `ge=0.0`, `le=100.0`), which is the
+fix invariant 2 asks for — deleting the reference would have left the threshold
+hardcoded in a test. The legacy `MOUSEDROID_E2E_MAX_MISS_PCT` env var still wins when
+set, so any bench script already exporting it keeps working; `MOUSEDROID_LOOP__MAX_MISS_PCT`
+is the schema-native replacement. Separately,
+`test_e2e_5sec_run.py::test_deadline_miss_rate_below_threshold` computed a p90 over
+10 mock ticks and no miss rate at all, so it is renamed
+`test_p90_tick_latency_within_ci_budget` to match what it asserts.
+
+### Changed — failed ticks are now counted, so a latency percentile can be read honestly
+
+Telemetry invariant 5 forbids recording a success-path measurement from work that did
+not complete, so an aborted tick's partial duration deliberately never reaches
+`mousedroid_loop_latency_ms`. That is correct and unchanged. The consequence was that a
+failed tick left no trace in metrics *at all*: `histogram_quantile(0.99, ...)` was a p99
+of **successful** ticks, with no denominator to disclose it, and `tick_timeout_s`
+defaults to 1.0 s — 30x the 33.3 ms budget — so the slowest class of tick is exactly the
+class the histogram cannot see.
+
+`run()` now records `orchestrator`/`tick_timeout` and `orchestrator`/`tick_error`
+through the existing `FailureRecorder`, which is the component that exists for counting
+failures, so invariant 5 is untouched and no new metric family is introduced.
+`_finish_tick_timing`'s docstring carries the survivorship caveat and the PromQL that
+makes a published percentile honest.
+
+### Docs — four claims the code contradicts
+
+- `src/mousedroid/orchestrator/CLAUDE.md` asserted as a directory invariant that
+  `emergency_stop()` *"halts motor execution immediately"*. It writes a stop frame and
+  returns once the bytes reach the serial port; stock `General_Driver` firmware sends no
+  per-command ACK and nothing observes motion ceasing.
+- `ESP32Config.emergency_stop_budget_ms` described itself as a latency "for
+  emergency_stop **ack**" — a round trip that does not exist.
+- The MCP `read_encoders` tool advertised *"odometry pose"* to a language model and
+  returns `odometry_x_m` / `odometry_y_m` that are never non-zero on any firmware that
+  exists. (Precisely: the *legacy* codec does parse `ox`/`oy`, but no firmware
+  implementing that protocol was ever committed.)
+- `ObservationProtocol.motor_state` was documented as `[vx, vy, omega, battery_v]` in six
+  places. `SensorManager._safe_motor_read` packs `[left_wheel_mps, right_wheel_mps,
+  heading_rad, battery_v]` — per-wheel speeds and an absolute angle, not a body-frame
+  velocity pair and an angular rate. **Noted while correcting it:**
+  `training/rover_obs_adapter.py` genuinely packs `[vx, 0.0, omega, battery_v]` for sim
+  pretraining, so slot 2 carries an angular *rate* in training and an *angle* on the
+  rover. That is a real train/serve difference, not a doc error on either side, and it is
+  recorded rather than papered over.
+- `docs/planning/NEXT_STEPS.md` listed *"Odometry drift accumulates over long runs; reset
+  via landmarks"* as a known limitation. Neither exists, and the row's left column implied
+  a dead-reckoning layer that merely lacked correction.
+
+
 ### Docs — the prompt-injection filter named a blast-radius bound that does not exist
 
 `docs/CHARTER.md` §3's cloud-egress carve-out is the ratified argument for letting rover

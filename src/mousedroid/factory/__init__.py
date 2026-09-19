@@ -183,6 +183,7 @@ from mousedroid.factory.orchestrator import (
     build_orchestrator,
 )
 from mousedroid.factory.safety import (
+    build_human_presence_detector,
     build_safety_monitor,
     build_safety_projector,
 )
@@ -346,6 +347,7 @@ __all__ = [
     "build_hailo_runtime",
     "build_health_monitor",
     "build_hook_registry",
+    "build_human_presence_detector",
     "build_injection_filter",
     "build_journal",
     "build_latent_context",

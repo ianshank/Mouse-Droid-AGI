@@ -12,9 +12,39 @@ if TYPE_CHECKING:
     from mousedroid.config.schema import (
         Settings,
     )
+    from mousedroid.sensing.human_presence import HumanPresenceProtocol
     from mousedroid.telemetry.metrics import MetricsRegistry
 
 _log = get_logger(__name__)
+
+
+def build_human_presence_detector(cfg: Settings) -> HumanPresenceProtocol:
+    """Resolve the human-presence source for the safety interlocks (D-1).
+
+    There is exactly one implementation today, and it detects nobody. The
+    builder exists anyway so the choice is made here, behind a Protocol,
+    rather than by a ``getattr`` on the observation -- which is what let
+    the gap go unnoticed. Deliberately no ``Literal`` selector field until
+    a second implementation exists, matching the discipline
+    ``SafetyActionProjectorProtocol`` documents for ``projector.kind``.
+
+    Args:
+        cfg: Root settings. Unused today; taken so adding a real detector
+            is a change to this function and nothing else.
+
+    Returns:
+        A source conforming to ``HumanPresenceProtocol``.
+    """
+    del cfg  # no selector yet -- see docstring
+    from mousedroid.sensing.human_presence import NullHumanPresenceDetector
+
+    detector = NullHumanPresenceDetector()
+    _log.info(
+        "human_presence_detector_built",
+        source=detector.source_name,
+        can_detect=detector.can_detect,
+    )
+    return detector
 
 
 def build_safety_monitor(cfg: Settings) -> SafetyMonitorProtocol:
@@ -28,7 +58,10 @@ def build_safety_monitor(cfg: Settings) -> SafetyMonitorProtocol:
     """
     from mousedroid.safety.monitor import MouseDroidSafetyMonitor
 
-    return MouseDroidSafetyMonitor(cfg.safety)
+    return MouseDroidSafetyMonitor(
+        cfg.safety,
+        human_presence=build_human_presence_detector(cfg),
+    )
 
 
 def build_safety_projector(

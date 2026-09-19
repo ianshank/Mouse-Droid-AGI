@@ -191,7 +191,7 @@ class TestDeadlineAdherence:
 
     @pytest.mark.asyncio
     @pytest.mark.timeout(60)
-    async def test_deadline_miss_rate_below_threshold(self, mock_cfg: Settings) -> None:
+    async def test_p90_tick_latency_within_ci_budget(self, mock_cfg: Settings) -> None:
         """Ticks should not regress catastrophically (p90 < CI budget)."""
         from mousedroid.factory import build_orchestrator
 

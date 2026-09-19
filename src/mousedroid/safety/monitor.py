@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
     from mousedroid.config.schema import SafetyConfig
+    from mousedroid.sensing.human_presence import HumanPresenceProtocol
     from mousedroid.sensing.protocol import ObservationProtocol
 
 _log = get_logger(__name__)
@@ -49,10 +50,30 @@ class MouseDroidSafetyMonitor:
 
     Args:
         cfg: Safety configuration thresholds.
+        human_presence: Source of human-presence readings. Keyword-only with
+            a ``None`` default so every existing caller -- the factory, the
+            MCP tool bridge and ~20 test sites that construct
+            ``MouseDroidSafetyMonitor(SafetyConfig())`` -- keeps working
+            unchanged. ``None`` resolves to
+            :class:`~mousedroid.sensing.human_presence.NullHumanPresenceDetector`.
     """
 
-    def __init__(self, cfg: SafetyConfig) -> None:
+    def __init__(
+        self,
+        cfg: SafetyConfig,
+        *,
+        human_presence: HumanPresenceProtocol | None = None,
+    ) -> None:
         self._cfg = cfg
+        if human_presence is None:
+            # Local import: keeps ``mousedroid.safety`` from growing a runtime
+            # edge into ``sensing`` (whose package __init__ pulls in the full
+            # SensorManager). Mirrors orchestrator.py's NullHookRegistry default.
+            from mousedroid.sensing.human_presence import NullHumanPresenceDetector
+
+            human_presence = NullHumanPresenceDetector()
+        self._human_presence = human_presence
+        self._log_human_presence_capability()
         self._last_valid_timestamps: dict[int, float] = {}
         # Latch for the implausible-battery WARNING: a comms fault persists,
         # and this runs on every 30 Hz evaluation. Warn once per episode,
@@ -71,6 +92,49 @@ class MouseDroidSafetyMonitor:
         # ``_evaluate_lidar_clearance`` for why it is seeded there rather
         # than left unset.
         self._lidar_last_valid_ts: float | None = None
+
+    def _log_human_presence_capability(self) -> None:
+        """Announce whether the human-safety interlocks can actually fire.
+
+        Peer review D-1. Three interlocks -- the Law-1 stop in
+        ``MouseDroidNavigationAgent.act``, the human clamp in
+        ``GeometricSafetyProjector.project`` and the human branch of
+        :meth:`evaluate` -- depend on a presence reading that no source in
+        this repo produces. They were silently inert. S-11 established the
+        remedy for exactly this shape: a safety feature that reads as
+        available while being dormant must say so at construction.
+
+        Deliberately log-only. Failing closed here would mean assuming a
+        human at zero distance, which is a permanent emergency stop -- the
+        inverse of the ``lidar_unavailable_policy`` trade-off, and the
+        wrong one.
+
+        Logged from ``__init__`` rather than the factory because the
+        factory is only one of several construction paths; S-11's fix
+        lives in the driver for the same reason.
+        """
+        source = self._human_presence.source_name
+        if self._human_presence.can_detect:
+            _log.info("human_presence_source_bound", source=source)
+            return
+        _log.warning(
+            "human_presence_source_unavailable",
+            source=source,
+            inert_interlocks=(
+                "MouseDroidNavigationAgent.act law-1 stop; "
+                "GeometricSafetyProjector.project human clamp; "
+                "MouseDroidSafetyMonitor.evaluate human branch"
+            ),
+            unconsumable_budgets=(
+                "safety.projector.human_keepout_m; "
+                "safety.projector.human_proximity_speed_mps; "
+                "three_laws.human_safety_radius_m"
+            ),
+            remedy=(
+                "wire a HumanPresenceProtocol source through "
+                "factory.safety.build_human_presence_detector"
+            ),
+        )
 
     # -- SafetyMonitorProtocol ---------------------------------------------
 
@@ -366,8 +430,9 @@ class MouseDroidSafetyMonitor:
             is_emergency = True
 
         # -- Human detection (from observation if available) ---------------
-        human_detected = bool(getattr(observation, "human_detected", False))
-        human_dist_m = float(getattr(observation, "human_dist_m", float("inf")))
+        presence = self._human_presence.sample(observation)
+        human_detected = presence.detected
+        human_dist_m = presence.distance_m
 
         if human_detected and human_dist_m < self._cfg.min_forward_clearance_m:
             is_emergency = True

@@ -183,6 +183,24 @@ class LoopConfig(StrictBaseModel):
         gt=0,
         description="Max seconds per tick before triggering emergency stop",
     )
+    max_miss_pct: float = Field(
+        5.0,
+        ge=0.0,
+        le=100.0,
+        description=(
+            "Maximum percentage of ticks permitted to exceed the "
+            "1000/control_hz deadline before the hardware burst test fails. "
+            "Added 2026-09-19 (peer review D-16): "
+            "tests/hardware/test_e2e_sense_plan_act.py documented this key "
+            "and read it through a getattr fallback, but LoopConfig never "
+            "declared it. Because LoopConfig is a StrictBaseModel "
+            "(extra='forbid'), an operator who followed that documentation "
+            "and set `max_miss_pct` in YAML got a ValidationError at "
+            "settings load -- the rover failed to boot. Declaring the field "
+            "is the fix invariant 2 asks for; deleting the reference would "
+            "have left the threshold hardcoded in a test."
+        ),
+    )
     shutdown_grace_s: float = Field(
         2.0,
         gt=0,

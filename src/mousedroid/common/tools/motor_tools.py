@@ -133,7 +133,10 @@ def register_motor_tools(registry: ToolRegistry, deps: MotorToolDeps) -> None:
     registry.register(
         ToolSpec(
             deps.name_read_encoders,
-            "Read latest wheel encoder reading and odometry pose",
+            "Read latest wheel speeds, IMU attitude and battery voltage from the "
+            "chassis. NOTE: odometry_x_m, odometry_y_m and heading_rad are never "
+            "non-zero on any firmware that exists -- the WAVE ROVER is encoder-less "
+            "and has no odometry source. Do not treat them as a position estimate.",
             _read_encoders,
         )
     )

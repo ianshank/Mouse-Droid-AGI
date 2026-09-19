@@ -45,6 +45,7 @@ _EXPECTED_PUBLIC_SURFACE = [
     "_growth_distill_loop",
     "_growth_enabled",
     "_halt_actuators",
+    "_halt_on_connect",
     "_log_experience",
     "_mark_phase",
     "_maybe_export_memory",

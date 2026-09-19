@@ -239,10 +239,32 @@ class ESP32Config(StrictBaseModel):
             "rover is on rollers / tethered / monitored."
         ),
     )
+    stop_on_connect: bool = Field(
+        True,
+        description=(
+            "Issue a zero-velocity command immediately after connect(), before "
+            "the first tick. The firmware latches the last velocity it was "
+            "given, so a previous unclean stop (SIGKILL, power cut, dropped "
+            "USB) leaves the wheels driving across the whole bring-up window "
+            "-- src/mousedroid/orchestrator/CLAUDE.md states the consequence "
+            "outright: 'the rover can be moving throughout bring-up'. This is "
+            "the one chassis-failsafe item that needs no firmware change and "
+            "no working ESP32, so it defaults True. Set False only to "
+            "reproduce the pre-2026-09-19 connect sequence byte-for-byte."
+        ),
+    )
     emergency_stop_budget_ms: float = Field(
         50.0,
         gt=0,
-        description="Maximum acceptable latency for emergency_stop ack (ms)",
+        description=(
+            "Maximum acceptable wall time for the emergency_stop serial write "
+            "to return (ms). NOT a stopping time and NOT an acknowledgement: "
+            "stock General_Driver firmware sends no per-command ACK, and "
+            "nothing in the tree observes motion ceasing. Corrected 2026-09-19 "
+            "(peer review D-12) -- this field previously read 'latency for "
+            "emergency_stop ack', which described a round trip that does not "
+            "exist."
+        ),
     )
     mock_battery_v: float = Field(
         12.0,

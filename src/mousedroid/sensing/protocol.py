@@ -32,7 +32,20 @@ class ObservationProtocol(Protocol):
 
     @property
     def motor_state(self) -> NDArray[np.float32]:
-        """Motor state ``[vx, vy, omega, battery_v]``, shape ``(4,)``."""
+        """Motor state ``[left_wheel_mps, right_wheel_mps, heading_rad, battery_v]``.
+
+        Shape ``(4,)``. Corrected 2026-09-19 (peer review D-11): this was
+        documented as ``[vx, vy, omega, battery_v]`` here and in five other
+        places, but :meth:`~mousedroid.sensing.manager.SensorManager._safe_motor_read`
+        packs *per-wheel* speeds in slots 0/1 and an **absolute heading angle**
+        in slot 2, not a body-frame velocity pair and an angular rate.
+
+        Note the sim pretraining adapter
+        (:mod:`mousedroid.training.rover_obs_adapter`) genuinely packs
+        ``[vx, 0.0, omega, battery_v]`` -- body-frame linear velocity and an
+        angular *rate*. That is a real train/serve difference in slot 2, not a
+        documentation error on either side.
+        """
         ...
 
     @property

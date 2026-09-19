@@ -62,21 +62,65 @@ async def test_health_monitor_check_health(tmp_path):
 
 
 def test_safety_monitor_human_detection_emergency():
+    """Human-proximity emergency, fed through the supported seam (D-1).
+
+    This test used to set ``obs.human_detected = True`` on a ``MagicMock``
+    and pass. That proved nothing about reachability: a ``MagicMock``
+    auto-creates any attribute, so the old
+    ``getattr(observation, "human_detected", False)`` read the mock's
+    value — while **no production observation type had the field at all**.
+    The interlock was dead on the rover and this green test said otherwise.
+    It is the clearest illustration of why D-1 went unnoticed.
+
+    Presence now arrives through ``HumanPresenceProtocol``, so the test
+    injects a source. If someone later deletes the source and reverts to
+    reading the observation, this test cannot silently keep passing.
+    """
     from mousedroid.safety.monitor import MouseDroidSafetyMonitor
+    from mousedroid.sensing.human_presence import HumanPresence
+
+    class _HumanAtTenCentimetres:
+        source_name = "test_live"
+        can_detect = True
+
+        def sample(self, observation: object) -> HumanPresence:
+            del observation
+            return HumanPresence(detected=True, distance_m=0.1)
 
     cfg = SafetyConfig(min_forward_clearance_m=0.20)
-    mon = MouseDroidSafetyMonitor(cfg)
+    mon = MouseDroidSafetyMonitor(cfg, human_presence=_HumanAtTenCentimetres())
 
     obs = MagicMock()
-    obs.distance_m = 1.0  # clearance ok
+    obs.distance_m = 1.0  # clearance ok — the human is the only hazard
     obs.motor_state = np.array([0.0, 0.0, 0.0, 12.0], dtype=np.float32)
     obs.valid_mask = np.ones(4, dtype=np.float32)
-    obs.human_detected = True
-    obs.human_dist_m = 0.1  # closer than min_forward_clearance_m
 
     ctx = mon.evaluate(obs, loop_time_ms=10.0)
     assert ctx.is_emergency is True
     assert ctx.human_detected is True
+
+
+def test_safety_monitor_ignores_human_fields_on_the_observation():
+    """The D-1 regression: an observation attribute must no longer be read.
+
+    Pins that attaching ``human_detected`` to an observation has no effect,
+    so the untyped path cannot quietly come back and so nobody writes a
+    mock-only interlock test again.
+    """
+    from mousedroid.safety.monitor import MouseDroidSafetyMonitor
+
+    mon = MouseDroidSafetyMonitor(SafetyConfig(min_forward_clearance_m=0.20))
+
+    obs = MagicMock()
+    obs.distance_m = 1.0
+    obs.motor_state = np.array([0.0, 0.0, 0.0, 12.0], dtype=np.float32)
+    obs.valid_mask = np.ones(4, dtype=np.float32)
+    obs.human_detected = True
+    obs.human_dist_m = 0.01
+
+    ctx = mon.evaluate(obs, loop_time_ms=10.0)
+    assert ctx.human_detected is False
+    assert ctx.is_emergency is False
 
 
 # ---------------------------------------------------------------------------

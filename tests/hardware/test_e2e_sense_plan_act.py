@@ -14,7 +14,9 @@ Run on Jetson::
 
 Performance assertions are derived from config values — no hardcoded numbers.
 Timing budget: ``1000.0 / cfg.loop.control_hz`` ms per tick.
-Deadline miss threshold: < cfg.loop.max_miss_pct % of ticks (defaults to 5.0).
+Deadline miss threshold: < ``cfg.loop.max_miss_pct`` % of ticks (schema
+default 5.0). The legacy ``MOUSEDROID_E2E_MAX_MISS_PCT`` env var still
+overrides it when set, for anyone with it wired into a bench script.
 """
 
 from __future__ import annotations
@@ -23,11 +25,15 @@ import asyncio
 import os
 import statistics
 import time
+from typing import TYPE_CHECKING
 
 import pytest
 
 from mousedroid.validation.runtime import camera_unavailable_reason
 from tests._jetson_hardware import is_jetson_host, load_jetson_runtime_settings
+
+if TYPE_CHECKING:
+    from mousedroid.config.schema import Settings
 
 pytestmark = [
     pytest.mark.hardware,
@@ -39,7 +45,9 @@ JETSON_PROD_CONFIG = os.getenv("MOUSEDROID_JETSON_CONFIG", "config/jetson_produc
 # How many ticks to run in the burst-performance test
 _BURST_TICKS = int(os.getenv("MOUSEDROID_E2E_BURST_TICKS", "50"))
 # Default deadline-miss ceiling when not in config (5 %)
-_DEFAULT_MAX_MISS_PCT = float(os.getenv("MOUSEDROID_E2E_MAX_MISS_PCT", "5.0"))
+# Legacy escape hatch, read lazily so a test can set it via monkeypatch.
+# Superseded by ``LoopConfig.max_miss_pct`` / ``MOUSEDROID_LOOP__MAX_MISS_PCT``.
+_LEGACY_MISS_PCT_ENV = "MOUSEDROID_E2E_MAX_MISS_PCT"
 # Hard upper bound: no single tick may take longer than this multiplier x budget
 _HARD_DEADLINE_MULT = float(os.getenv("MOUSEDROID_E2E_HARD_DEADLINE_MULT", "5.0"))
 
@@ -59,9 +67,27 @@ def _deadline_budget_ms(cfg) -> float:
     return 1000.0 / cfg.loop.control_hz
 
 
-def _max_miss_pct(cfg) -> float:
-    """Return acceptable deadline-miss percentage — from config or fallback."""
-    return float(getattr(getattr(cfg, "loop", None), "max_miss_pct", _DEFAULT_MAX_MISS_PCT))
+def _max_miss_pct(cfg: Settings) -> float:
+    """Return the acceptable deadline-miss percentage.
+
+    Peer review D-16: this used to read ``cfg.loop.max_miss_pct`` through a
+    ``getattr`` chain with a literal fallback, and ``LoopConfig`` never
+    declared that field — so the fallback always won and the module
+    docstring described a knob that could not exist. Worse, ``LoopConfig``
+    is a ``StrictBaseModel`` (``extra="forbid"``), so an operator who
+    believed the docstring and set ``max_miss_pct`` in YAML got a
+    ``ValidationError`` at settings load and the rover failed to boot.
+
+    The field is now declared, so the config value is authoritative. The
+    legacy ``MOUSEDROID_E2E_MAX_MISS_PCT`` env var is still honoured ahead
+    of it so any bench script already exporting it keeps working; prefer
+    ``MOUSEDROID_LOOP__MAX_MISS_PCT``, which the schema resolves like every
+    other setting.
+    """
+    legacy_override = os.getenv(_LEGACY_MISS_PCT_ENV)
+    if legacy_override is not None:
+        return float(legacy_override)
+    return float(cfg.loop.max_miss_pct)
 
 
 async def _start_or_skip(orch, settings) -> None:
