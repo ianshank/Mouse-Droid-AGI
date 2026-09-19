@@ -204,8 +204,7 @@ def test_job_level_permission_overrides_are_the_allowlisted_ones() -> None:
             if "permissions" in job:
                 found[(name, job_name)] = job["permissions"]
     assert found == _ALLOWED_JOB_PERMISSIONS, (
-        "job-level permissions changed; every write scope must be justified. "
-        f"found {found!r}"
+        f"job-level permissions changed; every write scope must be justified. found {found!r}"
     )
 
 

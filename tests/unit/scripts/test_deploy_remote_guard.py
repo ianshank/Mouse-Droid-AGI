@@ -243,7 +243,8 @@ def test_preserve_archives_status_diff_and_the_untracked_payload(
 ) -> None:
     _dirty(rover_repo)
     archive = tmp_path / "wip.tar.gz"
-    assert _run_guard("preserve", str(rover_repo / "src"), "--archive", str(archive)).returncode == 0
+    result = _run_guard("preserve", str(rover_repo / "src"), "--archive", str(archive))
+    assert result.returncode == 0, result.stderr
 
     with tarfile.open(archive, "r:gz") as tar:
         names = set(tar.getnames())
@@ -276,7 +277,8 @@ def test_preserve_diff_ignores_whitespace(rover_repo: Path, tmp_path: Path) -> N
     assert plain_diff, "premise: the tree really does differ from HEAD"
 
     archive = tmp_path / "wip.tar.gz"
-    assert _run_guard("preserve", str(rover_repo / "src"), "--archive", str(archive)).returncode == 0
+    result = _run_guard("preserve", str(rover_repo / "src"), "--archive", str(archive))
+    assert result.returncode == 0, result.stderr
     with tarfile.open(archive, "r:gz") as tar:
         patch = tar.extractfile("./diff-ignore-whitespace.patch")
         assert patch is not None
@@ -292,9 +294,7 @@ def test_preserve_can_stream_the_archive_to_stdout(rover_repo: Path, tmp_path: P
     without it ever touching rover disk."""
     _dirty(rover_repo)
     streamed = tmp_path / "streamed.tar.gz"
-    result = _run_guard(
-        "preserve", str(rover_repo / "src"), "--archive", "-", stdout_to=streamed
-    )
+    result = _run_guard("preserve", str(rover_repo / "src"), "--archive", "-", stdout_to=streamed)
     assert result.returncode == 0, result.stderr
     with tarfile.open(streamed, "r:gz") as tar:
         assert "./status.txt" in tar.getnames()

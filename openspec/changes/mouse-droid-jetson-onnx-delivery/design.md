@@ -3,6 +3,31 @@
 Each section states the alternative considered and why it was rejected. Where rev A of the
 external plan chose differently, the rev-A choice is the rejected alternative.
 
+## Which of these sections were built
+
+The task 2.1 ceiling gate fired (`proposal.md` -> "The ceiling, computed"): the end-to-end
+ceiling for accelerating `observe_step` is **1.0016x-1.0039x**, so I/O binding, FP16 and the
+TensorRT engine cache are **not built**.
+
+| section | built | note |
+| --- | --- | --- |
+| D-1 measure first | **yes** | `observe_step_timing.py`, both PyTorch engines, `build_world_model(cfg, *, metrics=)`. |
+| D-2 thread metrics through the factory | **yes** | No global; the registry is built once, before the engine. |
+| D-3 correct the docs to `jetson_dual_stream.yaml` | **yes** | Phase 4 narrative sweep. |
+| D-4 widen `resolve_providers` | no | Provider options are Phase 6. `resolve_providers` is unchanged. |
+| D-5 source precision/workspace/cache dir from `cfg.jetson` | no | Nothing reads them on an ORT path yet. |
+| D-6 keep the bind-mount spine, Docker-tag rollback | **yes** | Phase 8. |
+| D-7 no `world_model:` key in a tracked overlay | **yes** | Pinned by `test_f050_backwards_compat.py`. |
+| D-8 extend `deployments/<platform>-image.json` | **yes** | Phase 8, in place. |
+| D-9 extend the PC-side push path | **yes** | Phase 8 dirty-target refusal + WIP preservation. |
+| D-10 strict health check as opt-in | **yes** | Phase 8; default behaviour unchanged. |
+| D-11 exclude `new_z` from parity gates | n/a | No parity gate lands — it needs a trained checkpoint. |
+| D-12 scope the in-place-mutation invariant | no | Nothing mutates in place, so the invariant stays as written. |
+
+The unbuilt sections are kept rather than deleted: each remains the correct decision *if* a
+measured `observe_step` share ever contradicts the derivation, and deleting them would lose the
+reasoning along with the conclusion.
+
 ## D-1. Measure before optimizing, and fix the metrics seam first
 
 **Decision.** Phase 1 wires `MetricsRegistry` into `build_world_model`, splits the

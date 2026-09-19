@@ -298,10 +298,7 @@ class _ReplayVlaMetricsMixin:
             out.append(
                 _render_labeled_counter(
                     self._name_model_artifact_sha256_mismatches,
-                    (
-                        "Model artifacts refused by the boot-path SHA-256 gate "
-                        "(label: artifact)"
-                    ),
+                    ("Model artifacts refused by the boot-path SHA-256 gate (label: artifact)"),
                     "artifact",
                     mismatch_snapshot,
                 )
