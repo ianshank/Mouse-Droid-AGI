@@ -632,7 +632,10 @@ def _write_metadata_sidecar(args: argparse.Namespace, cfg: ModelConfig) -> Path:
     _log.info(
         "world_model_export_metadata_written",
         path=str(sidecar_path),
-        artifact_sha256=metadata["artifact"],
+        # The digest itself, not the whole {"filename", "sha256"} mapping: a
+        # consumer filtering on this field name must get the value it promises.
+        artifact_sha256=metadata["artifact"]["sha256"],
+        artifact_filename=metadata["artifact"]["filename"],
         checkpoint_present=checkpoint is not None,
     )
     return sidecar_path

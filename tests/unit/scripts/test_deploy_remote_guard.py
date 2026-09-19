@@ -491,3 +491,117 @@ def test_deploy_on_a_clean_rover_syncs_without_creating_an_archive(
     archives = tmp_path / "archives"
     assert not archives.exists() or not list(archives.iterdir())
     assert _git(rover_repo, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+
+
+# ---------------------------------------------------------------------------
+# Remote-path injection guard
+# ---------------------------------------------------------------------------
+# REMOTE_SRC and REMOTE_CONFIG became environment-overridable in this change so
+# the WIP guard could be driven against a throwaway checkout instead of only on
+# a rover. Before that they were literals. They are also interpolated into
+# remote command STRINGS that run under sudo — `remote_sudo bash -c "mkdir -p
+# ${REMOTE_SRC_Q} && chown ..."` and `remote_cmd "test -x ${REMOTE_SRC_Q}/..."`
+# — so the override turned a safe interpolation into an injection point: a value
+# like `/opt/mousedroid; rm -rf /` would run as root on the rover.
+#
+# The script validates both at startup, before any ssh, and quotes them with
+# `printf %q` at every remote boundary. These tests drive the real script, so
+# they fail if either defence is removed.
+
+_INJECTION_PAYLOADS = [
+    "/opt/mousedroid/src; touch /tmp/mousedroid-injection-canary",
+    "/opt/x$(touch /tmp/mousedroid-injection-canary)",
+    "/opt/x`touch /tmp/mousedroid-injection-canary`",
+    "/opt/x|touch /tmp/mousedroid-injection-canary",
+    "/opt/x&touch /tmp/mousedroid-injection-canary",
+    "/opt/x>/tmp/mousedroid-injection-canary",
+    '/opt/x"quoted',
+    "/opt/x'quoted",
+    "/opt/with space",
+]
+
+# NOT including "": `REMOTE_SRC="${MOUSEDROID_REMOTE_SRC:-/opt/...}"` uses `:-`,
+# which substitutes the default when the variable is empty OR unset — so an empty
+# override correctly means "use the default" and is not reachable as a bad value.
+# The validator's own `-n` check stays as defence for a future refactor to `:=`
+# or a direct assignment.
+_NON_ABSOLUTE = ["relative/path", "opt/mousedroid", "./relative"]
+_TRAVERSING = ["/opt/../etc", "/opt/mousedroid/.."]
+
+
+def _deploy_help(remote_src: str) -> subprocess.CompletedProcess[str]:
+    """Run ``deploy_remote.sh --help`` with ``MOUSEDROID_REMOTE_SRC`` set.
+
+    ``--help`` is enough: the validator runs at script start, before any ssh, so
+    a rejected path never reaches the network. That is the property under test.
+    """
+    env = dict(os.environ, MOUSEDROID_REMOTE_SRC=remote_src)
+    return subprocess.run(
+        ["bash", str(_DEPLOY), "--help"],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+
+@pytest.mark.parametrize("payload", _INJECTION_PAYLOADS)
+def test_a_shell_metacharacter_in_the_remote_path_is_refused(payload: str) -> None:
+    result = _deploy_help(payload)
+    assert result.returncode != 0, f"accepted an injectable path: {payload!r}"
+    assert "unsafe for a remote command" in result.stderr, result.stderr
+
+
+@pytest.mark.parametrize("payload", _NON_ABSOLUTE)
+def test_a_non_absolute_remote_path_is_refused(payload: str) -> None:
+    result = _deploy_help(payload)
+    assert result.returncode != 0, f"accepted a non-absolute path: {payload!r}"
+    assert "absolute path" in result.stderr, result.stderr
+
+
+@pytest.mark.parametrize("payload", _TRAVERSING)
+def test_a_traversing_remote_path_is_refused(payload: str) -> None:
+    result = _deploy_help(payload)
+    assert result.returncode != 0, f"accepted a traversing path: {payload!r}"
+    assert "'..' segment" in result.stderr, result.stderr
+
+
+def test_a_plain_absolute_path_is_still_accepted() -> None:
+    """The guard must not break the legitimate override the tests rely on."""
+    result = _deploy_help("/opt/mousedroid/src")
+    assert result.returncode == 0, result.stderr
+
+
+def test_no_payload_ever_executed() -> None:
+    """Belt and braces: the canary the payloads try to create must not exist."""
+    canary = Path("/tmp/mousedroid-injection-canary")
+    assert not canary.exists(), "a payload executed — the remote-path validator did not hold"
+
+
+def test_the_config_dir_override_is_validated_too() -> None:
+    """``REMOTE_CONFIG`` lands in `remote_sudo mkdir -p` the same way."""
+    env = dict(os.environ, MOUSEDROID_CONFIG_DIR="/etc/mousedroid; touch /tmp/x")
+    result = subprocess.run(
+        ["bash", str(_DEPLOY), "--help"],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "MOUSEDROID_CONFIG_DIR" in result.stderr, result.stderr
+
+
+def test_the_remote_boundaries_use_the_quoted_forms() -> None:
+    """Validation plus quoting: neither alone is the whole defence."""
+    source = _DEPLOY.read_text(encoding="utf-8")
+    assert 'REMOTE_SRC_Q="$(printf ' in source
+    assert 'REMOTE_CONFIG_Q="$(printf ' in source
+    offenders = [
+        line.strip()
+        for line in source.splitlines()
+        if ('remote_sudo bash -c "' in line or 'remote_cmd "' in line) and "${REMOTE_SRC}" in line
+    ]
+    assert offenders == [], (
+        f"a remote command string interpolates the RAW path; use REMOTE_SRC_Q: {offenders}"
+    )

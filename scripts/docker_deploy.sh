@@ -109,7 +109,10 @@ error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 #   provider — is the ORT execution provider ORT would actually select the
 #              configured primary? The chain is DEFAULT_ORT_PROVIDERS
 #              (common/onnx_session.py, TensorRT -> CUDA -> CPU) and the
-#              selection is that module's own `resolve_providers`, so the probe
+#              selection is that module's own `resolve_providers`, and the
+#              ACTIVE provider is read from a constructed InferenceSession
+#              (session.get_providers()), not from pre-session availability,
+#              so the probe
 #              cannot drift from what the runtime does. A silent downgrade to
 #              CUDA or CPU is exactly the failure this is here to catch.
 #   digest   — does the ONNX artifact on the rover hash to the digest the
@@ -155,20 +158,53 @@ if engine != "onnx_trt":
 
 problems: list[str] = []
 
+wm = cfg.world_model
+artifact = Path(wm.onnx_path) if wm.onnx_path else Path(wm.onnx_cache_dir) / wm.onnx_filename
+
+# The provider the RUNNING graph is on, not the one ORT says is available.
+#
+# get_available_providers() is a pre-session prediction: ORT can reject or
+# reorder a provider while CONSTRUCTING an InferenceSession -- missing TensorRT
+# libraries, an incompatible engine cache, insufficient workspace -- and fall
+# back to CUDA or CPU while the provider is still listed as available. A
+# promotion gate built on the prediction can therefore pass while the rover
+# infers on CPU, which is worse than having no gate at all. So construct the
+# session the engine would construct and read session.get_providers().
+#
+# Constructing it here is not extra work: engine=onnx_trt builds this same
+# session at warmup anyway, and this probe only runs under --strict-health.
 expected_provider = DEFAULT_ORT_PROVIDERS[0]
 try:
     import onnxruntime as ort
 except ImportError:
     problems.append("onnxruntime is not importable but engine=onnx_trt")
 else:
-    active = resolve_providers(DEFAULT_ORT_PROVIDERS, tuple(ort.get_available_providers()))
-    observed_provider = active[0] if active else ""
-    print(f"provider expected={expected_provider} observed={observed_provider or 'none'}")
-    if observed_provider != expected_provider:
+    requested = resolve_providers(DEFAULT_ORT_PROVIDERS, tuple(ort.get_available_providers()))
+    print(f"provider requested={','.join(requested) or 'none'}")
+    if not artifact.is_file():
         problems.append(
-            f"ORT provider downgrade: expected {expected_provider}, "
-            f"ORT would select {observed_provider or 'none'}"
+            f"cannot prove the active provider: artifact missing at {artifact}"
         )
+    else:
+        try:
+            session = ort.InferenceSession(str(artifact), providers=list(requested))
+        except Exception as exc:  # noqa: BLE001 - any ORT failure is a gate failure
+            problems.append(
+                f"InferenceSession construction failed ({type(exc).__name__}): {exc}"
+            )
+        else:
+            active = tuple(session.get_providers())
+            observed_provider = active[0] if active else ""
+            print(
+                f"provider expected={expected_provider} "
+                f"active={','.join(active) or 'none'} (from session.get_providers())"
+            )
+            if observed_provider != expected_provider:
+                problems.append(
+                    f"ORT provider downgrade: expected {expected_provider}, "
+                    f"the constructed session is running on "
+                    f"{observed_provider or 'none'}"
+                )
 
 try:
     record = json.loads(record_path.read_text(encoding="utf-8"))
@@ -184,10 +220,6 @@ if record is not None:
             "cannot prove the artifact under engine=onnx_trt"
         )
     else:
-        wm = cfg.world_model
-        artifact = (
-            Path(wm.onnx_path) if wm.onnx_path else Path(wm.onnx_cache_dir) / wm.onnx_filename
-        )
         print(f"digest artifact={artifact}")
         if not verify_sha256(artifact, str(expected_digest), log_event_prefix="promotion_model"):
             problems.append(f"model digest mismatch or artifact missing: {artifact}")

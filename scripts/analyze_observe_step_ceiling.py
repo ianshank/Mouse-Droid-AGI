@@ -729,10 +729,19 @@ def resolve_config(config_path: Path) -> ResolvedConfig:
     """
     from mousedroid.config.loader import load_settings
 
-    overlays = (config_path,) if config_path.exists() else ()
-    cfg = load_settings(*overlays)
-    if not overlays:
-        _log.warning("config_overlay_missing_using_defaults", path=str(config_path))
+    # Fail closed. This is a DECISION-GATE calculation: silently falling back to
+    # config/default.yaml on a typo'd or stale --config would compute a
+    # valid-looking ceiling for the wrong MCTS budget, and record the path that
+    # was never read in resolved_config.config_path. A warning is not enough
+    # when the output is used to decide whether to build something.
+    if not config_path.exists():
+        msg = (
+            f"config overlay not found: {config_path} -- refusing to fall back to "
+            "defaults, because the ceiling depends on the MCTS budget this overlay "
+            "sets (n_simulations_base, rollout_depth, n_action_candidates)"
+        )
+        raise CeilingInputError(msg)
+    cfg = load_settings(config_path)
     return ResolvedConfig(
         config_path=str(config_path),
         n_simulations_base=cfg.mcts.n_simulations_base,

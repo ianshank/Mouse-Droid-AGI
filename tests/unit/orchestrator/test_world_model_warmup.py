@@ -31,7 +31,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -41,6 +41,7 @@ import torch
 from mousedroid.config.schema import ModelConfig, Settings
 from mousedroid.orchestrator.orchestrator import MouseDroidOrchestrator
 from mousedroid.safety.context import SafetyContext
+from mousedroid.world_model.composite import CompositeWorldModel
 from mousedroid.world_model.protocol import WarmableProtocol
 
 
@@ -284,3 +285,83 @@ class TestWarmupFailure:
         with pytest.raises(RuntimeError):
             await orch.start()
         assert orch._running is False
+
+
+class _WarmableObserveEngine(_WarmableStubWorldModel):
+    """Stands in for ``DualStreamRSSMOnnx`` inside a composite."""
+
+
+@pytest.mark.asyncio
+class TestTheCompositeIsWarmedToo:
+    """The bug the stub tests above could not see.
+
+    ``build_world_model`` returns a :class:`CompositeWorldModel` for
+    ``engine: onnx_trt``, and the ``Warmable`` object is the *observe engine*
+    inside it — not the composite. So ``isinstance(model, WarmableProtocol)``
+    was ``False`` for the only deployment that needs warming, the lazy
+    TensorRT build happened on the first tick anyway, and the tick-timeout
+    e-stop this whole feature exists to prevent was still reachable.
+
+    Every test above passed while that was true, because each one handed the
+    orchestrator an engine that implements ``warmup()`` *directly*. They
+    exercised the seam as written rather than the object the factory returns —
+    which is why this class drives the composite explicitly.
+    """
+
+    @staticmethod
+    def _composite(observe: object) -> CompositeWorldModel:
+        return CompositeWorldModel(
+            observe_engine=cast("Any", observe),
+            imagine_engine=cast("Any", _StubWorldModel()),
+        )
+
+    async def test_the_composite_satisfies_the_protocol(self) -> None:
+        """Without this, the orchestrator's capability check skips it."""
+        assert isinstance(self._composite(_WarmableObserveEngine()), WarmableProtocol)
+
+    async def test_start_warms_the_engine_inside_the_composite(self) -> None:
+        observe = _WarmableObserveEngine(delay_s=0.01)
+        await _build_orch(_settings(), self._composite(observe)).start()
+        assert observe.warmup_calls == 1
+        assert observe.warm, "the ONNX engine is still cold after start()"
+
+    async def test_the_composite_warmup_runs_on_a_worker_thread(self) -> None:
+        observe = _WarmableObserveEngine(delay_s=0.01)
+        await _build_orch(_settings(), self._composite(observe)).start()
+        assert observe.warmup_thread is not None
+        assert observe.warmup_thread != threading.get_ident()
+
+    async def test_a_slow_composite_warmup_is_paid_at_boot_not_on_the_tick(self) -> None:
+        """The e-stop scenario, against the object production actually builds."""
+        tick_timeout_s = 0.1
+        observe = _WarmableObserveEngine(delay_s=tick_timeout_s * 3)
+        orch = _build_orch(_settings(tick_timeout_s=tick_timeout_s), self._composite(observe))
+
+        await orch.start()
+        await asyncio.wait_for(orch.tick(), timeout=tick_timeout_s)
+
+        assert observe.observed_while_cold == 0, (
+            "the composite served a tick against a cold ONNX engine — this is "
+            "exactly the lazy TensorRT build that e-stops the rover"
+        )
+
+    async def test_a_composite_with_no_warmable_delegate_is_a_no_op(self) -> None:
+        orch = _build_orch(_settings(), self._composite(_StubWorldModel()))
+        await orch.start()
+        assert orch._running is True
+
+    async def test_a_warmable_imagine_engine_is_warmed_as_well(self) -> None:
+        """The composite is a general two-engine seam, not an ONNX-only one."""
+        imagine = _WarmableObserveEngine()
+        composite = CompositeWorldModel(
+            observe_engine=cast("Any", _StubWorldModel()),
+            imagine_engine=cast("Any", imagine),
+        )
+        await _build_orch(_settings(), composite).start()
+        assert imagine.warmup_calls == 1
+
+    async def test_a_failing_delegate_propagates_out_of_start(self) -> None:
+        observe = _WarmableObserveEngine(fail=True)
+        orch = _build_orch(_settings(), self._composite(observe))
+        with pytest.raises(RuntimeError, match="engine build failed"):
+            await orch.start()

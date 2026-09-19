@@ -32,7 +32,11 @@ from torch import Tensor
 
 from mousedroid.logging.setup import get_logger
 from mousedroid.sensing.protocol import ObservationProtocol
-from mousedroid.world_model.protocol import SafetyTraceProtocol, WorldModelProtocol
+from mousedroid.world_model.protocol import (
+    SafetyTraceProtocol,
+    WarmableProtocol,
+    WorldModelProtocol,
+)
 
 if TYPE_CHECKING:
     pass  # No type-checking-only imports needed yet.
@@ -104,6 +108,38 @@ class CompositeWorldModel:
     def imagine_engine(self) -> WorldModelProtocol:
         """The world model serving ``imagine_step`` (read-only)."""
         return self._imagine_engine
+
+    def warmup(self) -> None:
+        """Warm whichever delegate has a runtime session to build.
+
+        Without this the composite silently defeats the orchestrator's
+        ``start()``-time warmup. ``build_world_model`` returns a
+        ``CompositeWorldModel`` for ``engine: onnx_trt``, and the
+        ``Warmable`` object is the *observe engine* inside it, not the
+        composite — so ``isinstance(model, WarmableProtocol)`` in
+        ``orchestrator/_lifecycle_mixin.py`` was ``False`` for the one
+        deployment that needs warming, the lazy TensorRT build happened on
+        the first tick anyway, and that blows ``tick_timeout_s`` into
+        ``emergency_stop()``.
+
+        Both delegates are offered the call because which one holds a session
+        is not this class's business to assume: today the ONNX engine serves
+        ``observe_step`` and PyTorch serves ``imagine_step``, but the
+        composite is a general two-engine seam. Each engine's ``warmup`` is
+        required to be idempotent (see :class:`WarmableProtocol`), so warming
+        a shared engine twice is harmless.
+        """
+        for role, engine in (
+            ("observe", self._observe_engine),
+            ("imagine", self._imagine_engine),
+        ):
+            if isinstance(engine, WarmableProtocol):
+                _log.info(
+                    "composite_world_model_warming_delegate",
+                    role=role,
+                    engine=type(engine).__name__,
+                )
+                engine.warmup()
 
     def observe_step(
         self,

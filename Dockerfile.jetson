@@ -91,7 +91,11 @@ RUN pip install --no-cache-dir "ncps>=0.0.7" 2>&1 \
 # `engine: torch` path does not need ONNX Runtime at all, and the task-2.1
 # ceiling gate closed against enabling `onnx_trt`, so a missing GPU wheel must
 # not fail the image build. The final probe prints the resolved provider list so
-# the build log carries the evidence either way. The accelerated-provider names
+# the build log carries the evidence either way -- but only as of THIS stage:
+# Stage 5's `pip install piper-tts` runs 70-odd lines later and can pull in the
+# CPU `onnxruntime` wheel over the top, so the authoritative reading is the
+# ORT_FINAL_PROVIDERS probe at the end of this file, not this one.
+# The accelerated-provider names
 # come from ``common/onnx_session.DEFAULT_ORT_PROVIDERS`` rather than being spelt
 # again here, so the probe cannot drift from the chain the runtime requests.
 RUN python -c "import onnxruntime as ort; \
@@ -104,7 +108,7 @@ RUN python -c "import onnxruntime as ort; \
     || pip install --no-cache-dir -e ".[onnx_world_model]" 2>&1 \
     || echo "WARNING: onnx_world_model extra install failed (engine: onnx_trt unavailable; engine: torch unaffected)"
 RUN python -c "import onnxruntime as ort; \
-        print('ORT_RESOLVED_PROVIDERS=' + ','.join(ort.get_available_providers()))" 2>&1 \
+        print('ORT_PROVIDERS_AFTER_EXTRA=' + ','.join(ort.get_available_providers()))" 2>&1 \
     || echo "WARNING: onnxruntime not importable (engine: onnx_trt unavailable; engine: torch unaffected)"
 RUN pip install --no-cache-dir Jetson.GPIO>=2.1 2>&1 \
     || echo "WARNING: Jetson.GPIO install failed (expected on non-Jetson hosts)"
@@ -203,6 +207,29 @@ RUN pip install --no-cache-dir \
     "google-cloud-monitoring>=2.16" \
     "google-auth>=2.20" \
     || echo "WARNING: GCP SDK install failed (cloud features disabled)"
+
+# ---------------------------------------------------------------------------
+# Final ONNX Runtime provider reading (openspec task 2.5)
+# ---------------------------------------------------------------------------
+# Deliberately the LAST ORT-touching step in the file. The Stage 2 probe decides
+# whether to install the [onnx_world_model] extra, but it reads the image as it
+# was *then* -- and Stage 5's `pip install piper-tts` can subsequently pull the
+# CPU `onnxruntime` wheel over an accelerated build. Without this, the build log
+# could print a GPU-capable provider list while the shipped image imports CPU
+# ORT: the same silent downgrade the whole stage exists to prevent, just moved
+# later in the build.
+#
+# Non-fatal for the same reason as the install itself -- `engine: torch` is the
+# default and needs no ORT at all -- but it is loud, because a silent downgrade
+# is the failure mode. Compare this line against ORT_BASE_IMAGE_PROVIDERS in the
+# build log to see whether anything took acceleration away.
+RUN python -c "import onnxruntime as ort; \
+        from mousedroid.common.onnx_session import DEFAULT_ORT_PROVIDERS as D; \
+        ps = ort.get_available_providers(); \
+        print('ORT_FINAL_PROVIDERS=' + ','.join(ps)); \
+        accel = [p for p in D if p != 'CPUExecutionProvider']; \
+        print('ORT_FINAL_ACCELERATED=' + str(any(p in ps for p in accel)))" 2>&1 \
+    || echo "WARNING: onnxruntime not importable in the final image (engine: onnx_trt unavailable; engine: torch unaffected)"
 
 # ---------------------------------------------------------------------------
 # Runtime configuration

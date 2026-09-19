@@ -142,9 +142,53 @@ class WorldModelConfig(StrictBaseModel):
             "opset, graph input/output names, shapes, dtypes, tool "
             "versions). Written by "
             "scripts/export_dual_stream_rssm_onnx.py; read by operators and "
-            "promotion records to answer 'which checkpoint is this graph?'."
+            "promotion records to answer 'which checkpoint is this graph?'. "
+            "Must be a bare filename distinct from onnx_filename -- the "
+            "sidecar is written beside the artifact, so a path or a colliding "
+            "name would write JSON over the graph itself."
         ),
     )
+
+    @model_validator(mode="after")
+    def _validate_metadata_sidecar_filename(self) -> Self:
+        """Keep the sidecar from overwriting the artifact it describes.
+
+        ``_write_metadata_sidecar`` resolves this against the exported
+        artifact's parent directory. Left to ``min_length=1`` alone, an operator
+        could set it to ``observe_step.onnx`` -- or to ``../something``, or an
+        absolute path -- and the export would write JSON over the freshly
+        exported graph, producing an artifact that passes its own digest check
+        and then fails to load at runtime.
+
+        Validated here rather than in the export script because the schema is
+        where the constraint belongs: every reader of the field gets the
+        guarantee, not just the one caller that happens to check.
+
+        Returns:
+            ``self``, unchanged, when the filename is safe.
+
+        Raises:
+            ValueError: If the filename is not a bare name, or collides with
+                ``onnx_filename``.
+        """
+        name = self.onnx_metadata_filename
+        if "/" in name or "\\" in name:
+            msg = (
+                "onnx_metadata_filename must be a bare filename with no path "
+                f"separator (it is resolved beside the artifact), got: {name!r}"
+            )
+            raise ValueError(msg)
+        if name in {".", ".."} or name.startswith("."):
+            msg = f"onnx_metadata_filename must not be a dot-path, got: {name!r}"
+            raise ValueError(msg)
+        if name == self.onnx_filename:
+            msg = (
+                "onnx_metadata_filename must differ from onnx_filename "
+                f"({self.onnx_filename!r}); writing the sidecar would overwrite "
+                "the exported graph"
+            )
+            raise ValueError(msg)
+        return self
 
 
 class WorldModelMemoryConfig(StrictBaseModel):

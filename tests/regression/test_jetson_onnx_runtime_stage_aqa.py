@@ -96,9 +96,62 @@ class TestTheInstallIsProbeGuarded:
                 "DEFAULT_ORT_PROVIDERS instead"
             )
 
-    def test_the_resolved_providers_are_printed(self, dockerfile: str) -> None:
+    def test_the_providers_are_printed_at_the_decision_point(self, dockerfile: str) -> None:
         """Whatever the outcome, the build log must record it."""
-        assert "ORT_RESOLVED_PROVIDERS" in dockerfile
+        assert "ORT_BASE_IMAGE_PROVIDERS" in dockerfile
+        assert "ORT_PROVIDERS_AFTER_EXTRA" in dockerfile
+
+
+class TestTheFinalReadingComesLast:
+    """The probe that decides the install is NOT the authoritative one.
+
+    Stage 2 reads the image as it is at that moment, but Stage 5's
+    `pip install piper-tts` runs ~80 lines later and can pull the CPU
+    `onnxruntime` wheel over an accelerated build. Without a probe after every
+    ORT-affecting install, the build log can print a GPU-capable provider list
+    while the shipped image imports CPU ORT — the same silent downgrade this
+    stage exists to prevent, just moved later in the build.
+
+    The earlier version of this file asserted only that a provider list was
+    printed *somewhere*, which is why it passed while that hole was open.
+    """
+
+    # The executable marker, not the bare word: "ORT_FINAL_PROVIDERS" also
+    # appears in a comment ~130 lines earlier explaining why the late probe
+    # exists, and matching that comment is what made these assertions read the
+    # wrong file position on the first attempt.
+    _PROBE = "print('ORT_FINAL_PROVIDERS="
+
+    def test_a_final_probe_exists(self, dockerfile: str) -> None:
+        assert self._PROBE in dockerfile
+
+    def test_the_final_probe_runs_after_the_piper_tts_install(self, dockerfile: str) -> None:
+        piper_at = dockerfile.index('pip install --no-cache-dir "piper-tts"')
+        final_at = dockerfile.index(self._PROBE)
+        assert piper_at < final_at, (
+            "piper-tts can install the CPU onnxruntime wheel, so a provider "
+            "reading taken before it is not the final image's"
+        )
+
+    def test_the_final_probe_is_the_last_ort_import_in_the_file(self, dockerfile: str) -> None:
+        """Anything importing ORT after it would invalidate the reading again."""
+        imports = [
+            index
+            for index, line in enumerate(dockerfile.splitlines())
+            if "import onnxruntime" in line
+        ]
+        assert imports, "premise: the Dockerfile probes onnxruntime at all"
+        final_line = next(
+            index for index, line in enumerate(dockerfile.splitlines()) if self._PROBE in line
+        )
+        assert max(imports) <= final_line, (
+            "an onnxruntime import appears after the final provider probe; "
+            "move the probe below it or the reading is stale again"
+        )
+
+    def test_the_final_probe_states_whether_acceleration_survived(self, dockerfile: str) -> None:
+        """A raw provider list makes the operator do the comparison."""
+        assert "ORT_FINAL_ACCELERATED" in dockerfile
 
 
 class TestTheStageIsNonFatal:

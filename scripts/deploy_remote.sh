@@ -72,6 +72,43 @@ die() {
     exit 1
 }
 
+# Refuse a remote path that could break out of the command string it lands in.
+#
+# REMOTE_SRC and REMOTE_CONFIG became environment-overridable so the WIP guard
+# could be exercised against a throwaway checkout instead of only on a rover.
+# They are also interpolated into remote command STRINGS that run under sudo
+# (`remote_sudo bash -c "mkdir -p ..."`, `remote_cmd "test -x .../..."`), so an
+# override like `/opt/mousedroid; rm -rf /` would execute on the rover as root.
+# Before this override existed both were literals and the interpolation was
+# safe; it is the override that made them untrusted input.
+#
+# Two defences, because either alone is thin: this validator rejects anything
+# that is not a plain absolute path, and every remote-command boundary below
+# quotes with `printf %q` (the idiom `remote_guard` already uses for its env
+# values). Fails closed — an unusable path stops the deploy rather than
+# silently deploying somewhere else.
+require_safe_remote_path() {
+    local name="$1" value="$2"
+    [[ -n "${value}" ]] || die "${name} must not be empty"
+    [[ "${value}" == /* ]] || die "${name} must be an absolute path, got: ${value}"
+    case "${value}" in
+        *[\;\&\|\$\`\(\)\<\>\!$'\n'$'\r']*|*'"'*|*"'"*|*'\\'*|*' '*)
+            die "${name} contains characters unsafe for a remote command: ${value}"
+            ;;
+    esac
+    case "${value}" in
+        */../*|*/..) die "${name} must not contain a '..' segment: ${value}" ;;
+    esac
+}
+
+require_safe_remote_path "MOUSEDROID_REMOTE_SRC" "${REMOTE_SRC}"
+require_safe_remote_path "MOUSEDROID_CONFIG_DIR" "${REMOTE_CONFIG}"
+
+# Pre-quoted forms for interpolation into remote command strings. Use these,
+# not the raw variables, anywhere the value crosses into a shell on the rover.
+REMOTE_SRC_Q="$(printf '%q' "${REMOTE_SRC}")"
+REMOTE_CONFIG_Q="$(printf '%q' "${REMOTE_CONFIG}")"
+
 remote_cmd() {
     ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
         "${REMOTE_USER}@${HOST}" "$@"
@@ -276,7 +313,7 @@ rsync_code() {
     preserve_remote_wip
 
     log_step "Ensuring remote directory exists"
-    remote_sudo bash -c "mkdir -p ${REMOTE_SRC} && chown -R ${REMOTE_USER}:${REMOTE_USER} ${REMOTE_SRC}"
+    remote_sudo bash -c "mkdir -p ${REMOTE_SRC_Q} && chown -R ${REMOTE_USER}:${REMOTE_USER} ${REMOTE_SRC_Q}"
 
     log_step "Rsyncing ${PROJECT_DIR} -> ${REMOTE_USER}@${HOST}:${REMOTE_SRC}/"
     rsync -avz --delete \
@@ -323,7 +360,7 @@ deploy_config() {
 
 run_system_setup() {
     log_section "Running Jetson system setup"
-    if remote_cmd "test -x ${REMOTE_SRC}/scripts/jetson_system_setup.sh"; then
+    if remote_cmd "test -x ${REMOTE_SRC_Q}/scripts/jetson_system_setup.sh"; then
         remote_sudo bash "${REMOTE_SRC}/scripts/jetson_system_setup.sh"
     else
         log_step "SKIP: jetson_system_setup.sh not found on remote"
@@ -332,8 +369,8 @@ run_system_setup() {
 
 run_hardware_setup() {
     log_section "Running Jetson hardware setup"
-    if remote_cmd "test -x ${REMOTE_SRC}/scripts/jetson_hardware_setup.sh" 2>/dev/null || \
-       remote_cmd "test -f ${REMOTE_SRC}/scripts/jetson_hardware_setup.sh" 2>/dev/null; then
+    if remote_cmd "test -x ${REMOTE_SRC_Q}/scripts/jetson_hardware_setup.sh" 2>/dev/null || \
+       remote_cmd "test -f ${REMOTE_SRC_Q}/scripts/jetson_hardware_setup.sh" 2>/dev/null; then
         remote_sudo bash "${REMOTE_SRC}/scripts/jetson_hardware_setup.sh"
     else
         log_step "SKIP: jetson_hardware_setup.sh not found on remote"
