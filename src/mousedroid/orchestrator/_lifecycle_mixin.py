@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from typing import Any
 
 from mousedroid.common.async_utils import cancel_and_drain, spawn_tracked
 from mousedroid.common.signals import install_shutdown_handlers
 from mousedroid.logging.setup import get_logger
 from mousedroid.orchestrator._state import _OrchestratorState
+from mousedroid.world_model.protocol import WarmableProtocol
 
 _log = get_logger(__name__)
 
@@ -80,6 +82,8 @@ class _LifecycleMixin(_OrchestratorState):
         # engine is started above, BEFORE the 30 Hz loop begins). This is
         # the only greeting touch-point; the hot loop never sees it.
         await self._maybe_fire_startup_greeting()
+        # Task 2.4: the last thing before the 30 Hz loop is allowed to run.
+        await self._warm_world_model()
         # S-1: honour a shutdown that arrived DURING bring-up. A plain
         # ``self._running = True`` here would overwrite the flag
         # ``request_shutdown`` just cleared, so the signal would be swallowed
@@ -89,6 +93,56 @@ class _LifecycleMixin(_OrchestratorState):
         if self._shutdown_requested:
             _log.warning("orchestrator_started_into_shutdown")
         _log.info("orchestrator_started", running=self._running)
+
+    async def _warm_world_model(self) -> None:
+        """Build the world-model engine's runtime session off the 30 Hz loop.
+
+        Only engines implementing
+        :class:`~mousedroid.world_model.protocol.WarmableProtocol` have anything
+        to build; the PyTorch engines are not ``Warmable`` and this is a no-op
+        for them, so the default ``engine: torch`` path is unchanged.
+
+        Why it must happen here and not lazily: ``observe_step`` on the ONNX
+        engine warms on first call, ``_update_world_model`` is synchronous, and
+        ``run()`` wraps each tick in ``asyncio.wait_for(..., tick_timeout_s)``
+        (default 1.0 s) whose timeout path calls ``emergency_stop()``.
+        ``wait_for`` cannot preempt a synchronous call, so a cold TensorRT
+        engine build — tens of seconds — would overrun the first tick and
+        e-stop the rover instead of merely being slow. Boot is the right place
+        to be slow.
+
+        Runs in a worker thread via :func:`asyncio.to_thread`, so a long build
+        does not block the event loop and the shutdown signal handlers stay
+        responsive throughout.
+
+        Failure propagates. A warmup that cannot build its session would
+        otherwise be retried lazily on the first tick, inside the very timeout
+        this method exists to protect — so refusing to start is strictly safer
+        than starting into a guaranteed e-stop.
+
+        Raises:
+            Exception: Whatever the engine's ``warmup`` raises, after logging.
+        """
+        model = self._world_model
+        if not isinstance(model, WarmableProtocol):
+            return
+        _log.info("world_model_warmup_starting", engine=type(model).__name__)
+        started = time.perf_counter()
+        try:
+            await asyncio.to_thread(model.warmup)
+        except Exception:
+            _log.error(
+                "world_model_warmup_failed",
+                engine=type(model).__name__,
+                seconds=time.perf_counter() - started,
+                exc_info=True,
+            )
+            raise
+        _log.info(
+            "world_model_warmup_complete",
+            engine=type(model).__name__,
+            seconds=time.perf_counter() - started,
+        )
 
     async def _maybe_fire_startup_greeting(self) -> None:
         """Fire the startup greeting once iff configured + wired.

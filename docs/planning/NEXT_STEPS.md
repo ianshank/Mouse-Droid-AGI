@@ -341,7 +341,7 @@ Phase 5 = the deferred real-physics simulator.)
   - Factory dispatch: `cfc_hidden_dim > 0` → DualStreamRSSM, else classic RSSM
   - Dual-stream training script (712 LOC) with dual optimizers and CfC loss warmup
   - 57 new tests; 5-epoch validation training converging on RTX 5060 Ti
-  - HuggingFace upload: `ianshank/mousedroid-dual-stream-rssm` (experimental)
+  - HuggingFace repo `ianshank/mousedroid-dual-stream-rssm` reserved — **REFUTED as an upload**: the repo holds only `.gitattributes` and `README.md`; no weights and no `observe_step.onnx` were ever pushed, so nothing can be downloaded from it
 - ✅ **FHL-LD19 LiDAR added as 5th sensor modality** (PR #31): `hardware/lidar/ld19_driver.py`, `ld19_protocol.py`, `feature_extractor.py`, `resilient_lidar.py`; factory-wired into sensor fusion pipeline
 - ✅ **Wonrabai USB Sound Card integrated** (PR #32): `hardware/audio/usb_microphone.py` implementing `AudioProtocol`; replaces placeholder USB mic branch
 - ✅ **Python 3.12 added to CI matrix**: All three lint, typecheck, and test stages run on 3.10, 3.11, and 3.12 in parallel

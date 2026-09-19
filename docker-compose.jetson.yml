@@ -92,6 +92,42 @@ services:
       - /sys/devices/platform:/sys/devices/platform:ro
       # Promtail positions (persistent across restarts)
       - promtail_positions:/var/lib/promtail
+      # TensorRT engine + timing cache (persistent across --force-recreate).
+      #
+      # The container path is NOT a literal: it is the very same variable
+      # pydantic-settings reads for ``cfg.jetson.tensorrt_cache_dir``
+      # (env_prefix MOUSEDROID_ + env_nested_delimiter __, see
+      # config/schema/root.py), so compose and the schema cannot drift. The
+      # ``:-`` default restates the schema default
+      # (config/schema/hardware.py::JetsonConfig.tensorrt_cache_dir) only so
+      # that an un-provisioned host still starts; set the key ONCE in
+      # /etc/mousedroid/docker.env to move the cache, and both the mount and
+      # the Python config follow. That works because the docker.env keys reach
+      # the *compose process* environment on both start paths —
+      # mousedroid-docker.service's ``EnvironmentFile=-/etc/mousedroid/docker.env``
+      # and docker_deploy.sh's ``set -a; . docker.env; set +a`` — whereas the
+      # ``env_file:`` directive above only injects into the container and is
+      # invisible to compose interpolation.
+      #
+      # This is a nested mount UNDER the /opt/mousedroid bind mount above
+      # (docker sorts mount destinations by depth, so the volume wins for this
+      # subpath). That is deliberate and load-bearing twice over: the engine
+      # plan survives container recreation, AND the cache never appears in
+      # ``git status`` inside the rover checkout — which is what keeps
+      # scripts/rover_wip_guard.sh's dirty-target refusal from firing on
+      # machine-generated build output.
+      #
+      # NO WEIGHTS MOUNT, for the record: weights persist transitively, via
+      # ``WORKDIR /opt/mousedroid`` (Dockerfile.jetson) plus the *relative*
+      # ``world_model.onnx_cache_dir`` default ("weights/dual_stream_rssm",
+      # config/schema/world_model.py) resolving to
+      # /opt/mousedroid/weights/dual_stream_rssm — i.e. inside the bind mount
+      # already declared above. Adding a weights volume would shadow that
+      # directory and silently orphan anything already downloaded there.
+      # HF_HOME is likewise unset and so not persisted; it is out of scope
+      # here because the ONNX artifact lands in onnx_cache_dir, not the hub
+      # cache, once the factory has resolved it.
+      - mousedroid_tensorrt_cache:${MOUSEDROID_JETSON__TENSORRT_CACHE_DIR:-/opt/mousedroid/tensorrt_cache}
       # GCP service account credentials (optional — mount if using file-based auth)
       - ${GCP_CREDENTIALS_FILE:-/dev/null}:/etc/gcp/credentials.json:ro
 
@@ -142,6 +178,53 @@ services:
     network_mode: host
 
     # --- Resource limits ---
+    #
+    # RESOURCE BUDGET DECISION (F-051 task 8.0) — recorded, deliberate, and
+    # deliberately NOT a change in this round.
+    #
+    # State: a 6 GiB memory cap on ~7.4 GiB usable RAM, with no
+    # ``memswap_limit``, no ``shm_size`` and no ``pids_limit``. Unbounded swap
+    # is the one that actually bites: a container at its memory cap with swap
+    # available thrashes instead of being OOM-killed and restarted cleanly, and
+    # every swapped page fault taken inside the synchronous
+    # ``_update_world_model`` call counts against ``loop.tick_timeout_s`` (1.0 s,
+    # config/schema/misc.py). A thrashing rover misses ticks silently; a killed
+    # one comes back under ``restart: unless-stopped`` and its heartbeat gap is
+    # visible to the HEALTHCHECK. Restarting cleanly is the better failure mode.
+    #
+    # DECISION: leave all three unset here, and bound swap in the SAME change
+    # that first enables on-device TensorRT engine builds — not before.
+    # Rationale:
+    #   1. Nothing in this change builds an engine on the rover. The task-2.1
+    #      decision gate closed against I/O binding / FP16 / an engine cache
+    #      (computed end-to-end ceiling 1.0016x-1.0039x), and
+    #      ``world_model.engine`` stays "torch". The volume above and the
+    #      provider probe in docker_deploy.sh are infrastructure that is
+    #      correct IF ever enabled; the memory profile that would justify
+    #      re-cutting the swap budget does not exist yet, and a number chosen
+    #      without it would be invented, not measured.
+    #   2. ``memswap_limit`` is a hard failure mode if mis-set: the daemon
+    #      rejects a MemorySwap that is not strictly greater than Memory, and a
+    #      rejected HostConfig does not degrade — the container refuses to
+    #      start. That is not a change to land untested on a rover that is
+    #      currently bench-blocked behind F-008.
+    #   3. The operator-side guards that exist today already cover the failure
+    #      this would pre-empt: the campaign plan's B0 step requires >=8 GiB
+    #      free (``df -h /`` + ``docker system df -v``, reclaim with
+    #      scripts/jetson_disk_cleanup.sh) and NVMe swap recorded via
+    #      ``swapon --show`` + ``zramctl`` before any build
+    #      (docs/superpowers/plans/2026-07-25-jetson-deploy-and-validation-campaign.md).
+    #
+    # WHEN IT FLIPS, set all three together and in this order:
+    #   memswap_limit: equal to the memory limit  (=> zero swap for this cgroup,
+    #                  so the cap is enforced by the OOM killer, not by paging)
+    #   shm_size:      sized from the DataLoader/IPC footprint an engine build
+    #                  actually shows (64 MiB default is a real ceiling for
+    #                  torch shared-memory tensors)
+    #   pids_limit:    a measured ceiling, not a round number — the tick loop
+    #                  plus telemetry plus ORT's provider threads
+    # and re-run the promotion with ``scripts/docker_deploy.sh --strict-health``
+    # so a start failure is fatal rather than a warn.
     deploy:
       resources:
         limits:
@@ -166,4 +249,10 @@ volumes:
   mousedroid_experience:
     driver: local
   promtail_positions:
+    driver: local
+  # TensorRT engine/timing cache — see the mount comment in the service above
+  # for why the container-side path comes from
+  # MOUSEDROID_JETSON__TENSORRT_CACHE_DIR (= cfg.jetson.tensorrt_cache_dir)
+  # rather than being written out here.
+  mousedroid_tensorrt_cache:
     driver: local

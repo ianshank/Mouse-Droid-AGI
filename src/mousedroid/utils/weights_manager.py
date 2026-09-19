@@ -82,6 +82,7 @@ def download_weights_from_huggingface(
     local_dir: Path | str | None = None,
     max_retries: int = 3,
     backoff_base: float = 2.0,
+    revision: str | None = None,
 ) -> bool:
     """Download model weights from HuggingFace Hub with retry logic.
 
@@ -104,6 +105,12 @@ def download_weights_from_huggingface(
             of the HF cache layout.
         max_retries: Maximum retry attempts per file.
         backoff_base: Exponential backoff base (wait = backoff_base ^ attempt).
+        revision: Hugging Face Hub revision (branch, tag, or commit SHA) to
+            pin. ``None`` (the default) leaves ``hf_hub_download``'s own
+            default in force, so every pre-existing call site keeps its exact
+            behaviour. Callers on a boot path SHOULD pass a schema-configured
+            revision: an unpinned fetch lets an upstream push change the
+            deployed weights between two boots of the same config.
 
     Returns:
         True if all files downloaded successfully, False otherwise.
@@ -146,6 +153,7 @@ def download_weights_from_huggingface(
             local_dir=local_dir,
             max_retries=max_retries,
             backoff_base=backoff_base,
+            revision=revision,
         )
         if not success:
             all_success = False
@@ -162,6 +170,7 @@ def download_weights_from_huggingface(
             repo_id=repo_id,
             file_count=len(filenames),
             cache_dir=str(cache_dir),
+            revision=revision,
         )
     return all_success
 
@@ -175,6 +184,7 @@ def _download_file_with_retry(
     local_dir: Path | str | None = None,
     max_retries: int = 3,
     backoff_base: float = 2.0,
+    revision: str | None = None,
 ) -> bool:
     """Download a single file from HuggingFace with exponential backoff retry.
 
@@ -187,6 +197,8 @@ def _download_file_with_retry(
             the HF cache layout.
         max_retries: Maximum retry attempts.
         backoff_base: Exponential backoff base.
+        revision: Hugging Face Hub revision to pin, or ``None`` to leave
+            ``hf_hub_download``'s default in force.
 
     Returns:
         True if download succeeded, False otherwise.
@@ -198,6 +210,8 @@ def _download_file_with_retry(
     }
     if subfolder:
         hf_kwargs["subfolder"] = subfolder
+    if revision is not None:
+        hf_kwargs["revision"] = revision
     if local_dir is not None:
         hf_kwargs["local_dir"] = str(local_dir)
     else:
@@ -351,6 +365,101 @@ def verify_sha256(
     return True
 
 
+#: Manifest key used for a bare digest line that names no file. The OTA
+#: weight-update convention (``CloudWeightUpdateConfig.sha256_manifest_filename``)
+#: is a single-line file holding only the digest, so a bare line has no filename
+#: to key on; callers fall back to this key when a per-filename entry is absent.
+UNNAMED_MANIFEST_ENTRY: str = ""
+
+
+def parse_sha256_manifest(
+    manifest_path: Path | str,
+    *,
+    log_event_prefix: str = "weights",
+) -> dict[str, str]:
+    """Parse a ``sha256sum``-style manifest into ``{filename: digest}``.
+
+    Accepts both conventions already present in the tree:
+
+    * ``sha256sum`` output — ``<digest>  <filename>`` (one line per file, the
+      only form that can cover a multi-file artifact set such as the four BDI
+      ``.npz`` files). A leading ``*`` on the filename (``sha256sum
+      --binary``) is stripped.
+    * A single bare digest with no filename — the OTA weight-update
+      convention (``cloud/weight_update_poller.py``). Such a line is keyed
+      under :data:`UNNAMED_MANIFEST_ENTRY` so a single-artifact caller can
+      fall back to it.
+
+    Fails soft, never raises: a missing, unreadable, empty or malformed
+    manifest yields an empty (or partial) mapping and a structured warning.
+    The *caller* decides whether an absent digest is fatal, because that is a
+    policy question — see
+    :func:`mousedroid.utils.artifact_integrity.enforce_artifact_digests`.
+    Digest syntax itself is validated downstream by :func:`verify_sha256`.
+
+    Args:
+        manifest_path: Local path of the fetched manifest.
+        log_event_prefix: Structured-log event-name prefix, so an operator can
+            correlate the failure with the subsystem that asked.
+
+    Returns:
+        Mapping of filename (or :data:`UNNAMED_MANIFEST_ENTRY`) to the
+        lowercase digest token. Empty when nothing could be parsed.
+    """
+    read_failed_event = log_event_prefix + "_manifest_read_failed"
+    empty_event = log_event_prefix + "_manifest_empty"
+
+    path = Path(manifest_path)
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        _log.warning(
+            read_failed_event,
+            manifest_path=str(path),
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+        return {}
+
+    entries: dict[str, str] = {}
+    for line in text.splitlines():
+        tokens = line.split()
+        if not tokens:
+            continue
+        digest = tokens[0].strip().lower()
+        if len(tokens) == 1:
+            entries.setdefault(UNNAMED_MANIFEST_ENTRY, digest)
+            continue
+        name = tokens[1].lstrip("*")
+        entries.setdefault(Path(name).name, digest)
+
+    if not entries:
+        _log.warning(empty_event, manifest_path=str(path))
+    return entries
+
+
+def expected_digest_for(entries: dict[str, str], filename: str) -> str | None:
+    """Look up ``filename``'s expected digest in a parsed manifest.
+
+    Resolution order: the exact basename entry first, then the bare
+    :data:`UNNAMED_MANIFEST_ENTRY` line. The bare fallback is only meaningful
+    for a single-artifact manifest — a multi-file manifest names every file,
+    so the basename lookup hits and the fallback is never consulted.
+
+    Args:
+        entries: Mapping returned by :func:`parse_sha256_manifest`.
+        filename: Artifact filename (any path is reduced to its basename).
+
+    Returns:
+        The expected hex digest, or ``None`` when the manifest covers neither
+        this filename nor a bare single-artifact digest.
+    """
+    named = entries.get(Path(filename).name)
+    if named is not None:
+        return named
+    return entries.get(UNNAMED_MANIFEST_ENTRY)
+
+
 def weights_exist_locally(weights_dir: Path | str, filenames: list[str]) -> bool:
     """Check if all weight files exist locally.
 
@@ -372,6 +481,7 @@ async def download_weights_async(
     *,
     max_retries: int = 3,
     backoff_base: float = 2.0,
+    revision: str | None = None,
 ) -> bool:
     """Async wrapper for download_weights_from_huggingface.
 
@@ -384,6 +494,8 @@ async def download_weights_async(
         cache_dir: Local directory to cache downloaded files.
         max_retries: Maximum retry attempts per file.
         backoff_base: Exponential backoff base.
+        revision: Hugging Face Hub revision to pin, or ``None`` to leave
+            ``hf_hub_download``'s default in force.
 
     Returns:
         True if all files downloaded successfully, False otherwise.
@@ -395,4 +507,5 @@ async def download_weights_async(
         cache_dir,
         max_retries=max_retries,
         backoff_base=backoff_base,
+        revision=revision,
     )

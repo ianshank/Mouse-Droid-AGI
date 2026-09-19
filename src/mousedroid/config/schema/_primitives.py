@@ -69,6 +69,24 @@ ReplayOutcomeLiteral = Literal["ok", "schema_mismatch"]
 record was skipped because its ``SCHEMA_VERSION`` differed from the
 runtime constant in :mod:`mousedroid.experience.record`."""
 
+ModelArtifactLiteral = Literal["world_model_onnx", "bdi_weights"]
+"""Downloaded model artifact whose SHA-256 is gated before it is loaded.
+
+Drives the ``mousedroid_model_artifact_sha256_mismatches_total{artifact}``
+counter labels. ``"world_model_onnx"`` is the exported ``observe_step`` graph
+resolved by :func:`mousedroid.factory.world_model.build_world_model`;
+``"bdi_weights"`` is the four-file BDI ``.npz`` set resolved by
+:func:`mousedroid.factory.cognitive.build_cognitive_core`.
+
+Deliberately a closed two-value set rather than the artifact's ``repo_id``:
+the repo is operator-configurable, so labelling by it would let a YAML edit
+open a new Prometheus time series. The subsystem that refused the artifact is
+what an operator pages on; the repo and revision travel in the structured log
+event beside the increment.
+:data:`mousedroid.telemetry.metrics.primitives._MODEL_ARTIFACT_KINDS` mirrors
+this set as a runtime drop-guard, and a regression test asserts the two never
+diverge."""
+
 TickPhaseLiteral = Literal[
     "sense",
     "safety",

@@ -360,8 +360,9 @@ class TestRuntimeIdentity:
     Before this, ``_model_fingerprint`` hashed only model structure, shapes
     and precision, so an engine built under one TensorRT/CUDA/driver combo
     matched the cache key of one built under another. ``compile_model``
-    treats a match as a hit, and ``docker-compose.jetson.yml`` bind-mounts the
-    cache from the host, so an engine outlives the image that produced it.
+    treats a match as a hit, and ``docker-compose.jetson.yml`` mounts the cache
+    from outside the image (the named volume ``mousedroid_tensorrt_cache``
+    since F-051), so an engine outlives the image that produced it.
     """
 
     def test_identity_is_non_empty_and_stable(self) -> None:
@@ -542,8 +543,8 @@ class TestCachePrivacy:
 class TestCacheChmodFailure:
     """A cache directory this process cannot chmod must degrade loudly.
 
-    The likely case for the bind-mounted default: the host created
-    ``/opt/mousedroid`` as root and the container runs unprivileged. The
+    The likely case for the externally-mounted default: Docker created the
+    named volume root-owned and the container runs unprivileged. The
     failure is otherwise invisible and self-perpetuating -- an unprivate
     directory makes every ``compile_model`` a cache miss, so the rover
     recompiles on every run with nothing saying why.

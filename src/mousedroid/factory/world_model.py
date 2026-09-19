@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     )
     from mousedroid.hardware.camera.feature_extractor import FeatureExtractorProtocol
     from mousedroid.sim.protocols import RoverEnvProtocol
+    from mousedroid.telemetry.metrics.registry import MetricsRegistry
     from mousedroid.world_model.protocol import LatentContextProtocol, WorldModelProtocol
     from mousedroid.world_model.rssm import RSSM
 
@@ -52,7 +53,11 @@ def _rssm_lidar_update(cfg: Settings) -> dict[str, object]:
     }
 
 
-def build_world_model(cfg: Settings) -> WorldModelProtocol:
+def build_world_model(
+    cfg: Settings,
+    *,
+    metrics: MetricsRegistry | None = None,
+) -> WorldModelProtocol:
     """Build world model for configured platform.
 
     Dispatch order:
@@ -74,13 +79,22 @@ def build_world_model(cfg: Settings) -> WorldModelProtocol:
 
     Args:
         cfg: Root settings.
+        metrics: Optional metrics registry. When supplied, the constructed
+            engine reports ``observe_step`` latency into
+            ``mousedroid_world_model_observe_step_seconds``. Keyword-only and
+            defaulted to ``None`` so every pre-existing
+            ``build_world_model(cfg)`` call site keeps working unchanged; a
+            ``None`` registry disables timing with no hot-path cost. Callers
+            that own a registry (the orchestrator factory) should pass it —
+            without it that histogram has no writer and the
+            ``WorldModelObserveStepLatencyHigh`` alert cannot fire.
 
     Returns:
         World model conforming to ``WorldModelProtocol``.
     """
     engine = cfg.world_model.engine
     if engine == "onnx_trt":
-        return _build_onnx_world_model(cfg)
+        return _build_onnx_world_model(cfg, metrics=metrics)
     if engine != "torch":
         # Pydantic Literal["torch", "onnx_trt"] should catch this earlier,
         # but defend in depth so dynamic instantiation doesn't drift past
@@ -104,11 +118,11 @@ def build_world_model(cfg: Settings) -> WorldModelProtocol:
                 gru_dim=cfg.model.hidden_dim,
                 cfc_dim=cfg.model.cfc_hidden_dim,
             )
-            return DualStreamRSSM(cfg.model)
+            return DualStreamRSSM(cfg.model, metrics=metrics)
 
     from mousedroid.world_model.rssm import RSSM
 
-    return RSSM(cfg.model)
+    return RSSM(cfg.model, metrics=metrics)
 
 
 def build_latent_context(cfg: Settings) -> LatentContextProtocol | None:
@@ -236,7 +250,11 @@ def build_vision_feature_extractor(cfg: Settings) -> FeatureExtractorProtocol:
     return MeanPoolExtractor(cfg.camera.feature_dim, l2_normalize=cfg.camera.l2_normalize)
 
 
-def _build_onnx_world_model(cfg: Settings) -> WorldModelProtocol:
+def _build_onnx_world_model(
+    cfg: Settings,
+    *,
+    metrics: MetricsRegistry | None = None,
+) -> WorldModelProtocol:
     """Construct the ONNX runtime world model.
 
     Resolves ``cfg.world_model.onnx_path`` (filesystem-first, HF Hub
@@ -256,19 +274,27 @@ def _build_onnx_world_model(cfg: Settings) -> WorldModelProtocol:
     from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM
     from mousedroid.world_model.dual_stream_rssm_onnx import DualStreamRSSMOnnx
 
-    model_path = _resolve_world_model_onnx_path(cfg)
+    model_path = _resolve_world_model_onnx_path(cfg, metrics=metrics)
 
     # observe_step path: ONNX-accelerated (the hot 30Hz tick benefit).
     observe_engine = DualStreamRSSMOnnx(
         model_path=model_path,
         cfg=cfg.model,
         warmup_iterations=cfg.world_model.onnx_warmup_iterations,
+        metrics=metrics,
     )
-    # imagine_step + get_safety_trace path: PyTorch DualStreamRSSM. The
-    # ONNX export (B2 Story 1) is scoped to observe_step only, so MCTS
-    # rollouts and the safety monitor's CfC inspection need the PyTorch
-    # graph. Both engines share the same ModelConfig so dimensions stay
-    # consistent across the composition boundary.
+    # imagine_step path: PyTorch DualStreamRSSM. The ONNX export (B2
+    # Story 1) is scoped to observe_step only, so MCTS rollouts on the
+    # fallback planner path need the PyTorch graph. The composite also
+    # forwards get_safety_trace here, but that method has no production
+    # caller today -- mousedroid.safety.monitor never calls it, so it is
+    # not a reason this engine is retained. Both engines share the same
+    # ModelConfig so dimensions stay consistent across the composition
+    # boundary.
+    # No ``metrics=`` here on purpose: this engine serves ``imagine_step``
+    # (MCTS rollouts, ~500-650 calls per plan) and ``get_safety_trace``. Timing
+    # it into the observe-step histogram would swamp the per-tick signal the
+    # deadline alert reads with rollout samples.
     imagine_engine = DualStreamRSSM(cfg.model)
     imagine_engine.train(False)
 
@@ -287,8 +313,121 @@ def _build_onnx_world_model(cfg: Settings) -> WorldModelProtocol:
     )
 
 
-def _resolve_world_model_onnx_path(cfg: Settings) -> Path:
-    """Resolve the .onnx artifact path for the ONNX runtime engine.
+def _gate_world_model_onnx_artifact(
+    cfg: Settings,
+    model_path: Path,
+    manifest_path: Path,
+    *,
+    metrics: MetricsRegistry | None,
+) -> None:
+    """Apply the artifact contract + SHA-256 gate to a resolved ``.onnx``.
+
+    Two independent checks, in the order that fails cheapest first:
+
+    1. Suffix contract — the resolved file must be an ``.onnx``. A digest can
+       be perfectly valid for a ``.pt`` checkpoint, so this is not redundant
+       with the digest check; the runtime spec requires both.
+    2. SHA-256 against the manifest. A resolvable digest is always enforced;
+       an unresolvable one is governed by
+       ``cfg.world_model.onnx_require_sha256_manifest`` (default ``False``,
+       so today's behaviour — load with a warning — is preserved).
+
+    Args:
+        cfg: Root settings.
+        model_path: Resolved local artifact.
+        manifest_path: Local SHA-256 manifest for that artifact. Need not
+            exist; absence is a policy decision, not an error here.
+        metrics: Optional registry for the mismatch counter.
+
+    Raises:
+        ArtifactContractError: Resolved file is not an ``.onnx``.
+        ArtifactIntegrityError: Digest mismatch, or no digest under a strict
+            policy.
+    """
+    from mousedroid.utils.artifact_integrity import (
+        enforce_artifact_digests,
+        require_artifact_suffix,
+    )
+    from mousedroid.world_model.onnx_io import OBSERVE_STEP_ARTIFACT_SUFFIX
+
+    wm = cfg.world_model
+    require_artifact_suffix(
+        model_path,
+        OBSERVE_STEP_ARTIFACT_SUFFIX,
+        repo_id=wm.onnx_repo_id,
+    )
+    enforce_artifact_digests(
+        [model_path],
+        manifest_path=manifest_path,
+        artifact="world_model_onnx",
+        repo_id=wm.onnx_repo_id,
+        revision=wm.onnx_revision,
+        require_manifest=wm.onnx_require_sha256_manifest,
+        metrics=metrics,
+    )
+
+
+def _resolve_explicit_onnx_path(
+    cfg: Settings,
+    explicit: Path,
+    *,
+    metrics: MetricsRegistry | None,
+) -> Path:
+    """Gate an operator-supplied ``onnx_path`` without reaching the network.
+
+    A missing file is deliberately NOT an error here: the pre-existing
+    contract is that the runtime's ``warmup()`` surfaces the clear
+    ``FileNotFoundError`` (pinned by
+    ``tests/unit/factory/test_factory_world_model_engine.py``), and the
+    composite's PyTorch imagine engine stays usable meanwhile. We gate the
+    bytes we actually have.
+
+    The manifest is looked for beside the artifact, by the same configured
+    filename used for the Hub fetch, so an operator who exports locally can
+    drop a ``sha256.txt`` next to the graph and get the same enforcement.
+    """
+    if not explicit.is_file():
+        return explicit
+    manifest_path = explicit.parent / cfg.world_model.onnx_sha256_manifest_filename
+    _gate_world_model_onnx_artifact(cfg, explicit, manifest_path, metrics=metrics)
+    return explicit
+
+
+def _fetch_world_model_onnx_manifest(cfg: Settings, cache_dir: Path) -> None:
+    """Best-effort fetch of the SHA-256 manifest beside the artifact.
+
+    Deliberately non-fatal: a repo that has not published a manifest yet must
+    not become unbootable the moment digest verification lands. The absent
+    manifest is then handled by the *policy* in ``enforce_artifact_digests``,
+    which is where an operator can turn it into a hard failure. Fetching the
+    manifest into the cache directory also means later boots verify from the
+    local copy with no network call at all.
+    """
+    from mousedroid.utils.weights_manager import download_weights_from_huggingface
+
+    wm = cfg.world_model
+    fetched = download_weights_from_huggingface(
+        repo_id=wm.onnx_repo_id,
+        filenames=[wm.onnx_sha256_manifest_filename],
+        cache_dir=cache_dir,
+        local_dir=cache_dir,
+        revision=wm.onnx_revision,
+    )
+    _log.info(
+        "world_model_onnx_manifest_fetch",
+        repo_id=wm.onnx_repo_id,
+        revision=wm.onnx_revision,
+        filename=wm.onnx_sha256_manifest_filename,
+        fetched=fetched,
+    )
+
+
+def _resolve_world_model_onnx_path(
+    cfg: Settings,
+    *,
+    metrics: MetricsRegistry | None = None,
+) -> Path:
+    """Resolve + integrity-gate the .onnx artifact for the ONNX runtime engine.
 
     Resolution order:
 
@@ -297,14 +436,40 @@ def _resolve_world_model_onnx_path(cfg: Settings) -> Path:
        ``FileNotFoundError`` so operators get a clear error from the
        runtime, not a confusing ``hf_hub_download`` traceback.
     2. HF Hub download via
-       ``cfg.world_model.onnx_repo_id``/``cfg.world_model.onnx_filename``.
-       Mirrors the [vla] pattern at ``_build_distilled_onnx_vla``.
-       Cached under ``weights/dual_stream_rssm/`` so the same file is
-       reused across runs without re-downloading.
+       ``cfg.world_model.onnx_repo_id``/``cfg.world_model.onnx_filename``,
+       pinned to ``cfg.world_model.onnx_revision``. Mirrors the [vla] pattern
+       at ``_build_distilled_onnx_vla``. Cached under
+       ``weights/dual_stream_rssm/`` so the same file is reused across runs
+       without re-downloading.
+
+    Every branch that ends in a usable local file — explicit path, cache hit,
+    and fresh download alike — passes through
+    :func:`_gate_world_model_onnx_artifact` before the path is returned. The
+    pre-gate version of this function checked only ``model_path.is_file()``,
+    which ADR-008's "Negative" section already named as "wrong weights =
+    wrong inference, silently".
+
+    Args:
+        cfg: Root settings.
+        metrics: Optional registry so a refused artifact increments
+            ``mousedroid_model_artifact_sha256_mismatches_total``. ``None``
+            disables only the counter, never the refusal.
+
+    Returns:
+        Local path of the integrity-gated artifact.
+
+    Raises:
+        ArtifactMissingError: The configured filename could not be fetched.
+        ArtifactContractError: The resolved file is not an ``.onnx``.
+        ArtifactIntegrityError: Digest mismatch, or an unverifiable artifact
+            under a strict policy.
     """
-    explicit = cfg.world_model.onnx_path
+    from mousedroid.utils.artifact_integrity import ArtifactMissingError
+
+    wm = cfg.world_model
+    explicit = wm.onnx_path
     if explicit is not None:
-        return Path(explicit)
+        return _resolve_explicit_onnx_path(cfg, Path(explicit), metrics=metrics)
 
     # HF Hub auto-download fallback. Reuses the same
     # ``download_weights_from_huggingface`` helper the VLA path uses, so
@@ -317,46 +482,55 @@ def _resolve_world_model_onnx_path(cfg: Settings) -> Path:
     # (default ``weights/dual_stream_rssm``). Mirrors the VLA pattern at
     # ``_build_distilled_onnx_vla`` so Jetson deployments can repoint both
     # caches under ``/opt/mousedroid/weights/...`` in one place.
-    cache_dir = Path(cfg.world_model.onnx_cache_dir)
+    cache_dir = Path(wm.onnx_cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
-    model_path = cache_dir / cfg.world_model.onnx_filename
+    model_path = cache_dir / wm.onnx_filename
+    manifest_path = cache_dir / wm.onnx_sha256_manifest_filename
 
     if model_path.is_file():
         _log.info(
             "world_model_onnx_cache_hit",
             cache_path=str(model_path),
-            repo_id=cfg.world_model.onnx_repo_id,
+            repo_id=wm.onnx_repo_id,
+            revision=wm.onnx_revision,
         )
+        # Local manifest only — a cached artifact must stay bootable offline.
+        _gate_world_model_onnx_artifact(cfg, model_path, manifest_path, metrics=metrics)
         return model_path
 
     _log.info(
         "world_model_onnx_download_start",
-        repo_id=cfg.world_model.onnx_repo_id,
-        filename=cfg.world_model.onnx_filename,
+        repo_id=wm.onnx_repo_id,
+        filename=wm.onnx_filename,
         cache_dir=str(cache_dir),
+        revision=wm.onnx_revision,
     )
     success = download_weights_from_huggingface(
-        repo_id=cfg.world_model.onnx_repo_id,
-        filenames=[cfg.world_model.onnx_filename],
+        repo_id=wm.onnx_repo_id,
+        filenames=[wm.onnx_filename],
         cache_dir=cache_dir,
         # Force flat layout so model_path.is_file() check succeeds.
         # Without local_dir, hf_hub_download uses its blob/snapshot
         # cache layout and the file would not be at the expected path.
         local_dir=cache_dir,
+        revision=wm.onnx_revision,
     )
     if not success or not model_path.is_file():
         msg = (
             f"failed to download world-model ONNX artifact "
-            f"({cfg.world_model.onnx_repo_id}/{cfg.world_model.onnx_filename}) "
-            f"into {cache_dir}. Set world_model.onnx_path to a local path "
-            f"or run scripts/export_dual_stream_rssm_onnx.py --push-to-hf "
-            f"to publish a fresh artifact first."
+            f"({wm.onnx_repo_id}/{wm.onnx_filename} at revision "
+            f"{wm.onnx_revision}) into {cache_dir}. Set world_model.onnx_path "
+            f"to a local path or run scripts/export_dual_stream_rssm_onnx.py "
+            f"--push-to-hf to publish a fresh artifact first."
         )
-        raise FileNotFoundError(msg)
+        raise ArtifactMissingError(msg)
+    _fetch_world_model_onnx_manifest(cfg, cache_dir)
+    _gate_world_model_onnx_artifact(cfg, model_path, manifest_path, metrics=metrics)
     _log.info(
         "world_model_onnx_downloaded",
         path=str(model_path),
-        repo_id=cfg.world_model.onnx_repo_id,
+        repo_id=wm.onnx_repo_id,
+        revision=wm.onnx_revision,
     )
     return model_path
 

@@ -37,6 +37,12 @@ Jetson smoke docs of overlapping scope, kept for now — see the note below.)
 - [runbooks/jetson-full-validation.md](runbooks/jetson-full-validation.md) — the full validation pipeline.
 - [runbooks/jetson-rover-smoke.md](runbooks/jetson-rover-smoke.md) — USB-C rover smoke test.
 - [runbooks/jetson-claude-pilot-deploy.md](runbooks/jetson-claude-pilot-deploy.md) — cloud/local LLM pilot deploy.
+- [runbooks/pc-to-jetson-promotion.md](runbooks/pc-to-jetson-promotion.md) — promotion + offline rollback
+  (rover-WIP preservation, `--strict-health` gate). Deliberately narrow: it defers to `deployment.md`,
+  `jetson-full-bringup.md` and `jetson-claude-pilot-deploy.md` rather than becoming a fourth deploy path,
+  and names that overlap in its own first section.
+- [runbooks/jetson-onnx-benchmark.md](runbooks/jetson-onnx-benchmark.md) — `observe_step` benchmarking
+  on the rover (and the closed decision gate against the ONNX fast path).
 - [runbooks/jetson-on-device-learning.md](runbooks/jetson-on-device-learning.md) — on-device incremental learning.
 - [runbooks/jetson-alayaworld-spike.md](runbooks/jetson-alayaworld-spike.md) — AlayaWorld distillation spike.
 - [runbooks/claude-workforce-hooks.md](runbooks/claude-workforce-hooks.md) — edit-time governance hooks

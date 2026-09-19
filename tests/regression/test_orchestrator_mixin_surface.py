@@ -79,6 +79,9 @@ _EXPECTED_PUBLIC_SURFACE = [
     "_voice_event",
     "_voice_lifecycle",
     "_voice_observe",
+    # openspec task 2.4: off-loop engine warmup at the start() boundary, so a
+    # cold TensorRT build cannot overrun tick_timeout_s and e-stop the rover.
+    "_warm_world_model",
     "dispatch_tool",
     "health_check",
     "process_mission",

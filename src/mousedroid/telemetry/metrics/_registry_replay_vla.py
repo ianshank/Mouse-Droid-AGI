@@ -10,8 +10,12 @@ in the calling subsystems treat ``metrics is None`` as a no-op) — so this
 mixin, unlike most others, never needs to read ``self._cfg``.
 
 Label values use ``Literal`` aliases from :mod:`mousedroid.config.schema`
-(``ReplayOutcomeLiteral``, ``VLAActiveBackendLiteral``) so a backend rename in
-one place propagates to every caller via mypy.
+(``ReplayOutcomeLiteral``, ``VLAActiveBackendLiteral``, ``ModelArtifactLiteral``)
+so a backend rename in one place propagates to every caller via mypy.
+
+The world-model families here are the artifact's whole lifecycle: the
+``observe_step`` latency histogram for a graph that loaded, and the
+boot-path SHA-256 mismatch counter for one that was refused.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from mousedroid.telemetry.metrics.primitives import (
+    _MODEL_ARTIFACT_KINDS,
     _classify_dropped_observation,
     _Counter,
     _Histogram,
@@ -36,10 +41,11 @@ if TYPE_CHECKING:
         ReplayOutcomeLiteral,
         VLAActiveBackendLiteral,
     )
+    from mousedroid.config.schema._primitives import ModelArtifactLiteral
 
 
 class _ReplayVlaMetricsMixin:
-    """Replay / VLA / VLM / world-model observe_step metric family."""
+    """Replay / VLA / VLM / world-model observe-step + artifact-integrity family."""
 
     def _init_replay_vla_metrics(self, cfg: MetricsConfig) -> None:
         """Initialise PR-A2 replay / VLA / VLM / world-model metrics.
@@ -71,6 +77,10 @@ class _ReplayVlaMetricsMixin:
         self._world_model_observe_step_seconds = _Histogram(
             _prepare_bucket_boundaries(cfg.world_model_observe_step_seconds_buckets)
         )
+        # Artifact-integrity refusals at the model-download seam. Pure-add and
+        # rendered only once a refusal has happened, so a healthy rover's
+        # exposition output is byte-identical to before.
+        self._model_artifact_sha256_mismatches = _LabeledCounter()
 
         # PR-A2 — replay / VLA / VLM metric names
         self._name_replay_records = f"{ns}_replay_records"
@@ -80,6 +90,8 @@ class _ReplayVlaMetricsMixin:
         self._name_vlm_progress_cache_misses = f"{ns}_vlm_progress_cache_misses"
         # Tier B2 — world-model observe_step latency histogram
         self._name_world_model_observe_step_seconds = f"{ns}_world_model_observe_step_seconds"
+        # Artifact-integrity refusals (render helper suffixes ``_total``).
+        self._name_model_artifact_sha256_mismatches = f"{ns}_model_artifact_sha256_mismatches"
 
     def inc_replay_record(
         self,
@@ -168,6 +180,40 @@ class _ReplayVlaMetricsMixin:
             return
         self._world_model_observe_step_seconds.observe(value)
 
+    def inc_model_artifact_sha256_mismatch(
+        self,
+        artifact: ModelArtifactLiteral,
+        amount: int = 1,
+    ) -> None:
+        """Increment the model-artifact SHA-256 mismatch counter (label: artifact).
+
+        SAFETY-CRITICAL, and the direct sibling of
+        ``inc_cloud_weight_update_sha256_mismatch``: every increment
+        corresponds to a refused artifact at a *boot-path* download seam
+        (the world-model ``.onnx`` or the BDI weight set), where the
+        consequence ADR-008 records is "wrong weights = wrong inference,
+        silently". Operator alert rules should page on any non-zero rate.
+
+        Args:
+            artifact: Which artifact failed verification —
+                ``"world_model_onnx"`` or ``"bdi_weights"``. Typed as
+                :data:`mousedroid.config.schema._primitives.ModelArtifactLiteral`
+                so mypy rejects a mistyped kind at the call site; values
+                outside the mirrored runtime set are dropped with a DEBUG log
+                so a free-text string can never open a new time series.
+            amount: Increment magnitude (default 1); ``<= 0`` is a no-op so
+                Prometheus counter monotonicity holds.
+        """
+        if amount <= 0:
+            return
+        if artifact not in _MODEL_ARTIFACT_KINDS:
+            _log.debug(
+                "model_artifact_sha256_mismatch_dropped_invalid_artifact",
+                artifact=artifact,
+            )
+            return
+        self._model_artifact_sha256_mismatches.inc(artifact, amount)
+
     def inc_vla_timeout(
         self,
         mode: VLAActiveBackendLiteral,
@@ -249,6 +295,16 @@ class _ReplayVlaMetricsMixin:
                     wm_buckets,
                     wm_sum,
                     wm_count,
+                )
+            )
+        mismatch_snapshot = self._model_artifact_sha256_mismatches.snapshot()
+        if mismatch_snapshot:
+            out.append(
+                _render_labeled_counter(
+                    self._name_model_artifact_sha256_mismatches,
+                    ("Model artifacts refused by the boot-path SHA-256 gate (label: artifact)"),
+                    "artifact",
+                    mismatch_snapshot,
                 )
             )
         vla_timeout_snapshot = self._vla_timeouts.snapshot()

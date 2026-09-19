@@ -7,7 +7,8 @@ concealed the other (peer review D-7 and D-25).
 architecture string, input shapes, precision, parameter count. Nothing about
 the runtime that produced the engine. ``compile_model`` treats a matching
 ``engine_<fingerprint>.pth`` as a cache hit, and ``docker-compose.jetson.yml``
-bind-mounts the cache directory from the host, so an engine built under one
+mounts the cache directory from outside the image (the named volume
+``mousedroid_tensorrt_cache`` since F-051), so an engine built under one
 TensorRT survives a base-image bump, a JetPack upgrade or a GPU swap and is
 loaded as current.
 

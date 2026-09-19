@@ -15,6 +15,7 @@ Follows the repo's ``tests/_<name>.py`` shared-helper convention (cf.
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 from types import ModuleType
 
@@ -49,5 +50,23 @@ def load_script_module(name: str, path: str | Path | None = None) -> ModuleType:
         msg = f"could not build an import spec for {script_path}"
         raise ImportError(msg)
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    # Register BEFORE exec_module, per the importlib "importing a source file
+    # directly" recipe. Not cosmetic: a script that declares a `@dataclass` with a
+    # bare-identifier annotation (`n: int`) under `from __future__ import
+    # annotations` makes `dataclasses._process_class` resolve that string through
+    # `sys.modules[cls.__module__].__dict__` while scanning for `KW_ONLY`, which
+    # raises `AttributeError: 'NoneType' object has no attribute '__dict__'` when
+    # the module is absent. Any decorator that introspects its own module hits the
+    # same wall.
+    previous = sys.modules.get(name)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        # Leave no half-initialised module behind for the next loader call.
+        if previous is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = previous
+        raise
     return module
