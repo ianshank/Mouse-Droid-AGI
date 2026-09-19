@@ -259,12 +259,81 @@ def migrate_state_dict(
     return sd, report
 
 
+class CheckpointIntegrityError(RuntimeError):
+    """A checkpoint failed its integrity precondition and was not loaded.
+
+    Raised when ``expected_sha256`` is supplied and does not match, and when
+    ``allow_unsafe_pickle`` is requested without a digest to pin the bytes it
+    would execute.
+    """
+
+
+def _load_checkpoint_payload(
+    path: Path,
+    device: torch.device,
+    *,
+    expected_sha256: str | None,
+    allow_unsafe_pickle: bool,
+) -> object:
+    """Deserialise ``path`` under the safest mode its preconditions allow.
+
+    ``torch.load(..., weights_only=False)`` executes arbitrary pickle opcodes
+    from the file. This loader therefore defaults to ``weights_only=True`` and
+    admits the unsafe mode only behind an explicit, named precondition:
+
+    * ``expected_sha256`` given — the bytes are verified with the same
+      :func:`~mousedroid.utils.weights_manager.verify_sha256` helper the OTA
+      path uses *before* anything is deserialised, mirroring
+      ``growth/slot_store.py``'s verify-then-``weights_only=True`` order.
+    * ``allow_unsafe_pickle`` requires ``expected_sha256`` as well. An
+      un-pinned request to run pickle is refused rather than honoured, so the
+      unsafe mode cannot be reached by omission — only by an operator stating
+      a trusted digest.
+
+    Args:
+        path: Checkpoint file.
+        device: ``map_location`` target.
+        expected_sha256: Hex digest the file must match, or ``None``.
+        allow_unsafe_pickle: Permit ``weights_only=False`` for a legacy
+            checkpoint holding non-tensor objects. Requires a digest.
+
+    Returns:
+        The deserialised object, unvalidated.
+
+    Raises:
+        CheckpointIntegrityError: Digest mismatch, or unsafe pickle requested
+            without a digest.
+    """
+    from mousedroid.utils.weights_manager import verify_sha256
+
+    if allow_unsafe_pickle and expected_sha256 is None:
+        msg = (
+            f"refusing to load '{path}' with weights_only=False: that mode "
+            f"executes arbitrary pickle opcodes from the file, so it requires "
+            f"expected_sha256 naming the exact bytes you trust. Re-save the "
+            f"checkpoint as a plain state dict, or pass the digest."
+        )
+        raise CheckpointIntegrityError(msg)
+    if expected_sha256 is not None and not verify_sha256(
+        path, expected_sha256, log_event_prefix="rssm_checkpoint"
+    ):
+        msg = (
+            f"refusing to load '{path}': SHA-256 verification failed against "
+            f"the expected digest. Re-fetch the checkpoint or correct the "
+            f"recorded digest."
+        )
+        raise CheckpointIntegrityError(msg)
+    return torch.load(path, map_location=device, weights_only=not allow_unsafe_pickle)
+
+
 def load_rssm_with_migration(
     path: Path,
     cfg: ModelConfig,
     device: torch.device | None = None,
     *,
     strict: bool = True,
+    expected_sha256: str | None = None,
+    allow_unsafe_pickle: bool = False,
 ) -> RSSM:
     """Load an RSSM checkpoint, migrating encoder modality changes automatically.
 
@@ -272,17 +341,33 @@ def load_rssm_with_migration(
     ``"model_state_dict"`` key, as written by ``train_rssm._save_checkpoint``)
     and *bare* model state dicts (weights only).
 
+    The checkpoint is deserialised with ``weights_only=True``. That is a
+    behaviour change from the pre-gate version, which passed
+    ``weights_only=False`` with no preceding digest check — an arbitrary-code
+    path on any checkpoint that reached the rover. Checkpoints written by this
+    project (``train_rssm._save_checkpoint``, ``model.state_dict()``) contain
+    only tensors and plain containers and load unchanged under the safe mode;
+    a checkpoint that genuinely needs pickle must state a digest and opt in.
+
     Args:
         path: Path to the ``.pt`` checkpoint file.
         cfg: Target :class:`~mousedroid.config.schema.ModelConfig`.
         device: Target device; defaults to CPU when ``None``.
         strict: Passed to :meth:`torch.nn.Module.load_state_dict`.
+        expected_sha256: Hex SHA-256 the file must match before it is
+            deserialised. ``None`` skips verification (unchanged default) but
+            the safe load mode still applies.
+        allow_unsafe_pickle: Opt into ``weights_only=False`` for a legacy
+            checkpoint carrying non-tensor objects. Requires
+            ``expected_sha256``; a bare request is refused.
 
     Returns:
         A fully initialised :class:`~mousedroid.world_model.rssm.RSSM`
         placed on *device*.
 
     Raises:
+        CheckpointIntegrityError: Digest mismatch, or unsafe pickle requested
+            without a digest.
         TypeError: If the checkpoint file does not deserialise to a ``dict``.
         ValueError: If the state dict is incompatible with *cfg*.
     """
@@ -290,7 +375,12 @@ def load_rssm_with_migration(
     from mousedroid.world_model.rssm import RSSM
 
     _d = device if device is not None else torch.device("cpu")
-    raw = torch.load(path, map_location=_d, weights_only=False)
+    raw = _load_checkpoint_payload(
+        path,
+        _d,
+        expected_sha256=expected_sha256,
+        allow_unsafe_pickle=allow_unsafe_pickle,
+    )
     if not isinstance(raw, dict):
         raise TypeError(
             f"Unsupported checkpoint format at {path!s}: expected dict, got {type(raw).__name__}"

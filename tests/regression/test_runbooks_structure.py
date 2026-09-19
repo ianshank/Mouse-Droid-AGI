@@ -27,8 +27,10 @@ _PINNED_RUNBOOKS = (
     "jetson-full-bringup.md",
     "jetson-full-validation.md",
     "jetson-on-device-learning.md",
+    "jetson-onnx-benchmark.md",
     "jetson-rover-smoke.md",
     "mlflow-local-ui.md",
+    "pc-to-jetson-promotion.md",
     "secret-scanning.md",
 )
 

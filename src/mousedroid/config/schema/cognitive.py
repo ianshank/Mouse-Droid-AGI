@@ -53,6 +53,40 @@ class CognitiveConfig(StrictBaseModel):
         gt=0,
         description="Exponential backoff base for download retries (wait = base ^ attempt)",
     )
+    huggingface_revision: str = Field(
+        "main",
+        min_length=1,
+        description=(
+            "HuggingFace Hub revision (branch, tag, or commit SHA) pinned when "
+            "fetching the BDI weights and their SHA-256 manifest. This download "
+            "runs on every boot when auto_download is true, so an unpinned "
+            "fetch means an upstream push silently changes the deployed belief "
+            "model. Default 'main' reproduces hf_hub_download's own default, so "
+            "existing YAML keeps its behaviour."
+        ),
+    )
+    sha256_manifest_filename: str = Field(
+        "sha256.txt",
+        min_length=1,
+        description=(
+            "Filename inside huggingface_subfolder (and, once fetched, inside "
+            "weights_dir) listing the expected SHA-256 digest of each BDI "
+            ".npz file in sha256sum's '<digest>  <filename>' format. "
+            "SAFETY-CRITICAL: a weight file whose local SHA does not match "
+            "this manifest is refused. Mirrors "
+            "CloudWeightUpdateConfig.sha256_manifest_filename."
+        ),
+    )
+    require_sha256_manifest: bool = Field(
+        False,
+        description=(
+            "Fail closed when no SHA-256 manifest can be resolved for the BDI "
+            "weights. Default False preserves today's behaviour: unverifiable "
+            "weights load after a 'bdi_weights_manifest_unavailable' warning. "
+            "A digest that IS resolvable is always enforced regardless of this "
+            "flag -- this switch only governs the absent-manifest case."
+        ),
+    )
 
 
 class MetacognitiveConfig(StrictBaseModel):

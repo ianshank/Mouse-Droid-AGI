@@ -335,6 +335,13 @@ config-compat-*/
 # Dead-code audit reports (F-020) - dated JSON artifacts, never committed
 reports/dead_code/
 
+# observe_step consumer-ceiling desk calculation
+# (scripts/analyze_observe_step_ceiling.py, openspec task 2.1) - regenerable
+# from config alone, carries the analysing commit's SHA and dirty state, and
+# the durable record of the number is proposal.md. Local-only, per the
+# performance-evidence spec's "reports/<name>/" rule.
+reports/observe_step_ceiling/
+
 # Endurance snapshots (JSON/PSV artifacts; only the .gitkeep is tracked)
 reports/endurance/*
 !reports/endurance/.gitkeep

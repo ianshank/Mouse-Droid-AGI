@@ -18,11 +18,16 @@ from mousedroid.world_model.latent_utils import (
     kl_divergence,
     sample_gaussian,
 )
+from mousedroid.world_model.observe_step_timing import (
+    ObserveStepLatencySink,
+    ObserveStepTimingMixin,
+    observe_step_latency,
+)
 
 _log = get_logger(__name__)
 
 
-class RSSM(nn.Module):
+class RSSM(ObserveStepTimingMixin, nn.Module):
     """Recurrent State-Space Model with posterior/prior latent dynamics.
 
     Implements the core world-model loop: *observe* embeds real observations
@@ -33,9 +38,19 @@ class RSSM(nn.Module):
         cfg: Model configuration with all dimension parameters.
     """
 
-    def __init__(self, cfg: ModelConfig) -> None:
+    def __init__(
+        self,
+        cfg: ModelConfig,
+        *,
+        metrics: ObserveStepLatencySink | None = None,
+    ) -> None:
         super().__init__()
         self._cfg = cfg
+        # Keyword-only with a ``None`` default so every existing
+        # ``RSSM(cfg.model)`` call site keeps working unchanged. Stored as a
+        # plain attribute (not a submodule) so it never enters ``state_dict``
+        # and cannot perturb a checkpoint round-trip.
+        self._metrics = metrics
 
         # Sub-modules
         self.encoder = MultimodalEncoder(cfg)
@@ -103,8 +118,42 @@ class RSSM(nn.Module):
     # Public API
     # ------------------------------------------------------------------
 
-    @torch.no_grad()
     def observe_step(
+        self,
+        observation: ObservationProtocol,
+        prev_action: Tensor,
+        h: Tensor,
+        z: Tensor,
+    ) -> tuple[Tensor, Tensor, Tensor, float]:
+        """Process one real observation step, timed when a sink is wired.
+
+        Thin timing wrapper over :meth:`_observe_step_impl` so this PyTorch
+        engine populates the same
+        ``mousedroid_world_model_observe_step_seconds`` histogram the ONNX
+        runtime does. Before this, that family had exactly one writer —
+        :class:`~mousedroid.world_model.dual_stream_rssm_onnx.DualStreamRSSMOnnx`
+        — so a default ``engine="torch"`` deployment emitted no samples at all,
+        the two engines could not be compared, and the
+        ``WorldModelObserveStepLatencyHigh`` alert had nothing to evaluate.
+
+        ``@torch.no_grad()`` stays on the implementation rather than here, so
+        the inference boundary is declared exactly where the tensor work
+        happens (CLAUDE.md invariant 7).
+
+        Args:
+            observation: Sensor bundle implementing ``ObservationProtocol``.
+            prev_action: Previous action, shape ``(1, action_dim)``.
+            h: Previous hidden state.
+            z: Previous latent sample.
+
+        Returns:
+            ``(new_h, new_z, obs_embed, surprise)``.
+        """
+        with observe_step_latency(self._metrics, engine="rssm"):
+            return self._observe_step_impl(observation, prev_action, h, z)
+
+    @torch.no_grad()
+    def _observe_step_impl(
         self,
         observation: ObservationProtocol,
         prev_action: Tensor,

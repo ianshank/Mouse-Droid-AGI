@@ -1417,3 +1417,74 @@ features:
       No CHARTER carve-out in this slice. Do not enable on Jetson.
 
 
+  - id: "F-050"
+    epic: "Jetson deployment"
+    name: "World-model observe-step instrumentation + ONNX provider proof"
+    description: >-
+      Landed: give the observe-step histogram a production writer by threading a
+      MetricsRegistry through build_world_model to every call site, and emit it
+      from both PyTorch engines (RSSM and DualStreamRSSM) as well as the ONNX
+      runtime so the engines are comparable; gate the ONNX artifact on a SHA-256
+      digest before it is loaded; correct the live surfaces that tell operators
+      to flip engine='onnx_trt' in an overlay where it raises. NOT BUILT, gated
+      by the task 2.1 ceiling decision (end-to-end ceiling 1.0016x-1.0039x): the
+      onnx_copy_seconds spans that would make the histogram family sum to
+      wall-clock, observing the active execution provider after session
+      construction instead of predicting it, carrying provider options through
+      provider resolution, and validating the graph's input set against the
+      loading config at warmup. The observe-step histogram is the one metric
+      family this change adds a writer for; no onnx_copy_seconds family exists.
+    category: "infrastructure"
+    priority: "high"
+    status: "in_progress"
+    tier: "fast"
+    verification:
+      - "build_world_model accepts metrics= and threads it to the ONNX runtime"
+      - "Every build_world_model call site passes or defaults the registry"
+      - "Both PyTorch engines and the ONNX runtime emit the observe-step histogram"
+      - "The ONNX artifact is refused on a SHA-256 mismatch before the session is built"
+      - "NOT BUILT (task 2.1 gate): observed providers from session.get_providers() -- warmup_session still returns the pre-session intersection"
+      - "NOT BUILT (task 2.1 gate): resolve_providers carrying (name, options) pairs -- it still takes bare provider-name tuples"
+      - "NOT BUILT (task 2.1 gate): graph input set compared against all_input_names_for_cfg at warmup"
+      - "No live surface tells operators to enable onnx_trt from jetson_production.yaml"
+      - "Existing config/*.yaml load unchanged; no new world_model: YAML key"
+    validation_command: "bash scripts/validations/F-050.sh"
+    implemented_in: null
+    depends_on: ["F-002"]
+    notes: >-
+      Preconditions recorded in openspec/changes/mouse-droid-jetson-onnx-delivery:
+      the production world model loads no trained weights and jetson_production.yaml
+      builds plain RSSM (cfc_hidden_dim 0), so latency A/B and parity gates are
+      blocked until a trained DualStream checkpoint exists. Optimization work
+      (I/O binding, FP16) is gated on the consumer-ceiling calculation in
+      scripts/analyze_observe_step_ceiling.py and the three-part rubric in
+      docs/analysis/alayaworld-distillation-spike.md. CUDA Graph is out of scope.
+
+  - id: "F-051"
+    epic: "Jetson deployment"
+    name: "PC-to-rover delivery hardening + offline rollback drill"
+    description: >-
+      Harden the existing PC-side delivery path rather than adding a sixteenth
+      deploy script: refuse a dirty target and preserve rover-local work before
+      any destructive sync, make the promotion health check prove telemetry,
+      provider and digest instead of warning, persist the TensorRT cache in a
+      named volume outside the promotion boundary, and pin the GitHub trust
+      boundary that is already satisfied so it stays that way.
+    category: "infrastructure"
+    priority: "medium"
+    status: "in_progress"
+    tier: "fast"
+    verification:
+      - "deploy_remote.sh refuses a dirty target and preserves work before rsync --delete"
+      - "Promotion health check fails on dead telemetry, wrong provider or digest mismatch"
+      - "TensorRT cache persists across container recreation via a named volume"
+      - "All workflows keep contents:read, no secrets.* and no pull_request_target"
+      - "Rollback restores the prior image tag and commit without network access"
+    validation_command: "bash scripts/validations/F-051.sh"
+    implemented_in: null
+    depends_on: ["F-008", "F-050"]
+    notes: >-
+      Sequenced behind F-008 per the F-024 rule that hardware readiness preempts
+      in-flight software streams; the on-rover promotion and rollback drill are
+      operator steps. Evidence closes out as a declared local-only chain because
+      reports/endurance is gitignored by policy.

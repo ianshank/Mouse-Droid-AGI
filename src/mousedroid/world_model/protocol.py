@@ -95,3 +95,33 @@ class SafetyTraceProtocol(Protocol):
             CfC portion of hidden state, shape ``(batch, cfc_hidden_dim)``.
         """
         ...
+
+
+@runtime_checkable
+class WarmableProtocol(Protocol):
+    """Optional capability: a synchronous, idempotent, one-shot warmup.
+
+    ``WorldModelProtocol`` deliberately does not declare this. Only engines with
+    a runtime session to build implement it —
+    :class:`~mousedroid.world_model.dual_stream_rssm_onnx.DualStreamRSSMOnnx`
+    creates its ONNX Runtime session and runs dummy inferences in
+    ``warmup()``; the PyTorch engines need nothing and are simply not
+    ``Warmable``, so the orchestrator's capability check skips them.
+
+    Why this exists as a separate Protocol: ``observe_step`` warms *lazily* on
+    first call (``dual_stream_rssm_onnx.py:223-224``), and the orchestrator's
+    ``_update_world_model`` is synchronous
+    (``orchestrator/_world_model_state_mixin.py:28``) inside a tick wrapped in
+    ``asyncio.wait_for(..., tick_timeout_s)`` whose timeout path calls
+    ``emergency_stop()``. ``wait_for`` cannot preempt a synchronous call, so a
+    cold TensorRT engine build on the first tick would blow the tick budget and
+    e-stop the rover. The orchestrator therefore warms at ``start()`` through
+    :func:`asyncio.to_thread`, off the 30 Hz loop.
+
+    Implementations must be idempotent — the lazy path may still call
+    ``warmup()`` afterwards and must find the work already done.
+    """
+
+    def warmup(self) -> None:
+        """Build any runtime session and run dummy inferences. Idempotent."""
+        ...

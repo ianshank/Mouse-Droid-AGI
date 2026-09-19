@@ -361,3 +361,13 @@ MOCK_GOAL_REVERSE_LINEAR: float = -0.4
 
 MOCK_GOAL_REVERSE_CONFIDENCE: float = 0.9
 """Confidence score for mock reverse maneuvers."""
+
+JSON_SIDECAR_INDENT: int = 2
+"""Indent width for JSON written for a human to read in review or a diff.
+
+Used by the ONNX export-metadata sidecar. A serialization-formatting choice, not
+an operator-tunable threshold, so it lives here rather than in a Pydantic schema
+field — and it lives *somewhere* rather than inline, because
+``scripts/check_no_hardcoded_values.py`` rightly rejects a bare ``indent=2`` on a
+changed line and both suppression budgets are at their ceiling.
+"""
