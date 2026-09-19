@@ -30,7 +30,6 @@ makes the rating revisitable the day someone wires the seam.
 from __future__ import annotations
 
 import ast
-import re
 from pathlib import Path
 
 import pytest
@@ -45,19 +44,74 @@ from mousedroid.efficiency.tensorrt import (
 _SRC = Path(__file__).resolve().parents[2] / "src" / "mousedroid"
 _TENSORRT = _SRC / "efficiency" / "tensorrt.py"
 
-#: Any unpickling call. Matched loosely on purpose: the point is to catch a
-#: NEW one appearing, whatever it is named or however it is spelled.
-_UNPICKLE = re.compile(r"weights_only\s*=\s*False")
+#: The guard whose presence makes an unpickling call defensible.
+_GUARD_NAME = "cache_dir_is_private"
+
+#: The keyword that turns a load into arbitrary pickle deserialization.
+#: Matched on the keyword rather than on ``torch.load`` so that renaming or
+#: re-exporting the callee does not evade the gate.
+_UNPICKLE_KWARG = "weights_only"
+
+_FunctionNode = ast.FunctionDef | ast.AsyncFunctionDef
+
+
+def _is_unpickling_call(node: ast.AST) -> bool:
+    """Whether ``node`` is a call passing ``weights_only=False``."""
+    if not isinstance(node, ast.Call):
+        return False
+    return any(
+        keyword.arg == _UNPICKLE_KWARG
+        and isinstance(keyword.value, ast.Constant)
+        and keyword.value.value is False
+        for keyword in node.keywords
+    )
+
+
+def _calls_the_guard(node: ast.AST) -> bool:
+    """Whether ``node``'s subtree contains a real CALL to the guard.
+
+    A call, not a mention. ``cache_dir_is_private`` appearing in a comment,
+    a docstring, or a bare name reference does not protect anything.
+    """
+    for child in ast.walk(node):
+        if not isinstance(child, ast.Call):
+            continue
+        func = child.func
+        name = (
+            func.id
+            if isinstance(func, ast.Name)
+            else func.attr
+            if isinstance(func, ast.Attribute)
+            else None
+        )
+        if name == _GUARD_NAME:
+            return True
+    return False
 
 
 def _guarded_unpickle_sites(source: str) -> list[tuple[int, bool]]:
-    """Locate ``weights_only=False`` calls and whether a privacy guard precedes.
+    """Locate ``weights_only=False`` calls and whether a privacy guard applies.
 
-    Structural rather than textual: an ``ast`` walk finds the enclosing
-    function of each call and asks whether ``cache_dir_is_private`` is
-    consulted anywhere in it. A substring gate would have been coupled to
-    the current variable names -- the mistake the first version of this
-    review's NaN-clamp gate made, which is why this one carries a self-test.
+    Fully structural. Both halves are read off the AST:
+
+    * the unpickling site is an :class:`ast.Call` carrying
+      ``weights_only=False`` as a literal keyword, so the text
+      ``weights_only=False`` inside a comment or a string is *not* a site;
+    * the guard is an :class:`ast.Call` to ``cache_dir_is_private`` in an
+      enclosing function, so the *name* appearing in a comment or docstring
+      does not satisfy it.
+
+    That second point is the whole reason this helper was rewritten. Its
+    first version walked the AST only to find enclosing functions and then
+    did ``"cache_dir_is_private" in source_segment`` -- so a guard deleted
+    but *mentioned in a comment* passed the gate. In a change whose entire
+    thesis is that a security claim written in a comment is not a control
+    (peer review D-21/D-25), a gate satisfiable by a comment was the same
+    defect one level up. Caught in review on #234; the self-tests below now
+    pin both directions of it.
+
+    The line reported is the **call site**, not the enclosing ``def``, so a
+    failure points at the code to fix.
 
     Args:
         source: Module source text.
@@ -66,16 +120,23 @@ def _guarded_unpickle_sites(source: str) -> list[tuple[int, bool]]:
         ``(lineno, guarded)`` for every unpickling call found.
     """
     tree = ast.parse(source)
+
+    # Nearest-enclosing-function chain for every node, so a guard in an outer
+    # function still covers a call in a nested one (``load_compiled`` guards
+    # the call inside its own ``_load_sync``).
+    enclosing: dict[ast.AST, list[_FunctionNode]] = {tree: []}
+    for parent in ast.walk(tree):
+        chain = enclosing[parent]
+        for child in ast.iter_child_nodes(parent):
+            enclosing[child] = [child, *chain] if isinstance(child, _FunctionNode) else chain
+
     results: list[tuple[int, bool]] = []
     for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if not _is_unpickling_call(node):
             continue
-        body = ast.get_source_segment(source, node) or ""
-        if not _UNPICKLE.search(body):
-            continue
-        guarded = "cache_dir_is_private" in body
+        guarded = any(_calls_the_guard(fn) for fn in enclosing.get(node, []))
         results.append((node.lineno, guarded))
-    return results
+    return sorted(results)
 
 
 # -- the gate ---------------------------------------------------------------
@@ -106,7 +167,7 @@ def test_the_gate_flags_a_known_bad_sample() -> None:
     own synthetic samples. A gate that has never been shown to fail is a
     comment."""
     bad = "def _load():\n    return torch.load(p, weights_only=False)\n"
-    assert _guarded_unpickle_sites(bad) == [(1, False)]
+    assert _guarded_unpickle_sites(bad) == [(2, False)]
 
 
 def test_the_gate_accepts_a_known_good_sample() -> None:
@@ -117,7 +178,60 @@ def test_the_gate_accepts_a_known_good_sample() -> None:
         "        raise UntrustedEngineCacheError(p)\n"
         "    return torch.load(p, weights_only=False)\n"
     )
-    assert _guarded_unpickle_sites(good) == [(1, True)]
+    assert _guarded_unpickle_sites(good) == [(4, True)]
+
+
+def test_a_guard_that_exists_only_in_a_comment_does_not_satisfy_the_gate() -> None:
+    """The regression this gate's first version shipped with.
+
+    It did ``"cache_dir_is_private" in source_segment``, so deleting the call
+    and leaving the comment passed. In a change arguing that a security claim
+    in a comment is not a control, that was the same defect one level up.
+    Raised by review on #234.
+    """
+    commented_out = (
+        "def _load():\n"
+        "    # cache_dir_is_private(p.parent) used to be checked here\n"
+        "    return torch.load(p, weights_only=False)\n"
+    )
+    assert _guarded_unpickle_sites(commented_out) == [(3, False)]
+
+
+def test_a_docstring_mentioning_the_guard_does_not_satisfy_the_gate() -> None:
+    """The same false positive, in the form this module would really take."""
+    documented = (
+        "def _load():\n"
+        '    """Loads only when cache_dir_is_private(path) holds."""\n'
+        "    return torch.load(p, weights_only=False)\n"
+    )
+    assert _guarded_unpickle_sites(documented) == [(3, False)]
+
+
+def test_the_keyword_in_a_comment_is_not_a_call_site() -> None:
+    """The other direction: text is not a call, so it must not be flagged."""
+    mentioned = "def _load():\n    # never pass weights_only=False here\n    return 1\n"
+    assert _guarded_unpickle_sites(mentioned) == []
+
+
+def test_a_guard_in_an_enclosing_function_still_counts() -> None:
+    """``load_compiled`` guards the call inside its own nested ``_load_sync``."""
+    nested = (
+        "def outer(path):\n"
+        "    if not cache_dir_is_private(path.parent):\n"
+        "        raise UntrustedEngineCacheError(path)\n"
+        "\n"
+        "    def inner():\n"
+        "        return torch.load(path, weights_only=False)\n"
+        "\n"
+        "    return inner()\n"
+    )
+    assert _guarded_unpickle_sites(nested) == [(6, True)]
+
+
+def test_the_reported_line_is_the_call_site_not_the_def() -> None:
+    """A failure must point at the code to fix."""
+    offset = "import os\n\n\ndef _load():\n    return torch.load(p, weights_only=False)\n"
+    assert _guarded_unpickle_sites(offset) == [(5, False)]
 
 
 def test_no_chmod_free_mkdir_of_the_cache_remains() -> None:
