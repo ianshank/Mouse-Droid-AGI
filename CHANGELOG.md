@@ -8,6 +8,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Docs — the root `AGENTS.md` is now actually loaded, and stays out of the wheel
+
+`AGENTS.md` has been maintained in this repo as the behavioural contract for agentic workers, and
+until this change nothing read it. Claude Code reads `AGENTS.md` natively from v2.1.277, but *only*
+when no `CLAUDE.md` exists in the working directory or above it — the nested-subdirectory discovery
+rule sits inside that same "when none count" block, so a root `CLAUDE.md` turns `AGENTS.md`
+discovery off entirely rather than merely shadowing it at the root. The `claude-md-and-agents-md`
+setting that would change this lives under `pluginConfigs` and is ignored in project and local
+settings files, so it cannot be committed for the whole team. The one committable load path is a
+bare `@AGENTS.md` import from the `CLAUDE.md` beside it, which the root `CLAUDE.md` now carries.
+
+The import has to stay bare. Claude Code's `@path` parser skips code spans and fenced blocks, so a
+backticked `@AGENTS.md` imports nothing while reading as correct in a diff — precisely the failure
+this file was already exhibiting in a different form. `tests/regression/test_f053_aqa.py` pins the
+distinction, with the parsing logic factored into `tests/_claude_md.py` so the next agent-facing
+filename is added in one place.
+
+Loading the file surfaced three defects in it, now fixed: two references pointed at `CLAUDE.md`
+headings that do not exist, and the subagent roster said "the other five" where `.claude/agents/`
+holds seven (three named plus five is eight). The corrected text states the total, so the next
+drift is arithmetic rather than prose.
+
+The wheel `exclude` gains `**/AGENTS.md`. `**/CLAUDE.md` and `**/agent.md` were both present and
+this one was not, so an `AGENTS.md` added anywhere under `src/` would have shipped to PyPI. The
+pattern roster now lives in `tests/_claude_md.py::AGENT_FACING_WHEEL_PATTERNS` and is pinned against
+`pyproject.toml`, so a filename cannot be added to the test and forgotten in the build config. Built
+the wheel to confirm: 22 agent-facing files tracked under `src/`, zero in the artifact.
+
+
 ### Security — the TensorRT engine cache no longer unpickles from a directory anyone can write
 
 `efficiency/tensorrt.py::load_compiled` falls back to `torch.load(..., weights_only=False)` when a

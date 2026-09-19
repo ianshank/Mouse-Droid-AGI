@@ -10,23 +10,53 @@ tasks that were red until a later phase, so the rule now says what it means.
 
 ## Phase 1 — Make the root `AGENTS.md` load, and keep it out of the wheel
 
-- [ ] 1.1 Add `"**/AGENTS.md"` to `pyproject.toml:244`'s wheel `exclude`, plus a test asserting all
+- [x] 1.1 Add `"**/AGENTS.md"` to `pyproject.toml:244`'s wheel `exclude`, plus a test asserting all
   three agent-facing patterns. Today it is `["**/CLAUDE.md", "**/agent.md"]`. First, because it is the
   only task whose omission does harm outside this repository.
-- [ ] 1.2 Write `tests/regression/test_f053_aqa.py::test_the_root_agents_md_is_imported` — the root
+- [x] 1.2 Write `tests/regression/test_f053_aqa.py::test_the_root_agents_md_is_imported` — the root
   `CLAUDE.md` must contain the bare `@AGENTS.md` form. A backticked mention must fail, because `@path`
   parsing skips code spans. **Land this test before 1.3**, so it has a genuine failing case; revision 2
   ordered the equivalent proof after the fix, where nothing could fail.
-- [ ] 1.3 Add `@AGENTS.md` as the first line of the root `CLAUDE.md`. 1.2 goes green.
-- [ ] 1.4 Fix the staleness this makes live, since both files now load together: root `AGENTS.md`
+- [x] 1.3 Add `@AGENTS.md` as the first line of the root `CLAUDE.md`. 1.2 goes green.
+- [x] 1.4 Fix the staleness this makes live, since both files now load together: root `AGENTS.md`
   points twice at `CLAUDE.md` sections that do not exist ("Test surface mirror", "Live deployment +
   CI-gate contracts") and says "any of the other five" subagents where `.claude/agents/` holds 7 and
   `SKILLS.md:802` says 7.
-- [ ] 1.5 Confirm the root `CLAUDE.md` stays inside `docs.core_max_lines: 250` (currently 114). This is
+- [x] 1.5 Confirm the root `CLAUDE.md` stays inside `docs.core_max_lines: 250` (currently 114). This is
   the one doc budget that is actually enforced, by `tools/claude_hooks/docs_trimmer.py` in
   `local-gates`. Do **not** assert a byte size on `AGENTS.md`: `.gitattributes` is absent, so a CRLF
   checkout changes it, and `test-windows` runs `tests/regression`.
 - [ ] **Stop here if the rest is declined.** Nothing below is required for this to be correct.
+
+### Phase 1 landed — declared deviations
+
+Phase 1 is complete and green. Four deviations from the task wording, declared rather than silent:
+
+- **1.1 / 1.2 added a shared helper not in the plan.** The pattern roster and the `@path` parsing
+  both live in `tests/_claude_md.py`, following the established `tests/_<name>.py` convention
+  (`_bash.py`, `_pyproject.py`, `_script_loader.py`, `_jetson_hardware.py`) rather than being
+  inlined in the regression file. The roster is imported by the test *and* referenced from the
+  `pyproject.toml` comment, which is what makes "added in one place and forgotten in the other"
+  detectable. Line cited in 1.1 moved 244 -> 249 because the fix added five comment lines above it.
+- **1.2 grew a second test from a prove-pin-fails pass.** The wheel-behaviour test initially passed
+  for the wrong reason: removing `"**/AGENTS.md"` from the exclude left it green, because no
+  `AGENTS.md` exists under `src/` today, so the built wheel was identical either way. The docstring
+  was narrowed to what it actually proves and `test_the_build_test_is_not_vacuous` was added. The
+  original test as written would have shipped as decoration.
+- **1.3 carries an explanatory HTML comment, not a bare line.** A future editor's most likely
+  mistake is backticking the import for "consistency" with the surrounding prose, which silently
+  imports nothing. The comment states that and names the pinning test. Nine lines against the
+  250-line budget; `CLAUDE.md` is 123 of 250.
+- **1.4 left one item deliberately unfixed.** `AGENTS.md` prescribes a `Co-Authored-By` trailer
+  naming a different model than the one now writing commits. The import made that line live, so it
+  is in scope by the letter of 1.4 — but it is the user's policy surface, not a docs defect, and
+  rewriting a user's attribution policy under cover of a staleness sweep is not this change's call.
+  Flagged for the user, unchanged. The two phantom section references and the subagent count were
+  fixed as written.
+
+Verification: the gate was proven failing first (2 failures). `make gates` green. `make regression`
+1966 passed / 31 skipped. Wheel built empirically — 22 agent-facing files tracked under `src/`, zero
+in the artifact.
 
 ## Phase 2 — Execute WS-8d: one format, every subsystem indexed
 
