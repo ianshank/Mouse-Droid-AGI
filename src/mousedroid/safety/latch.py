@@ -223,7 +223,11 @@ class FileEmergencyLatch:
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self._path.with_suffix(self._path.suffix + _TMP_SUFFIX)
-            payload = json.dumps(record.to_json_obj(), indent=2, sort_keys=True)
+            # Compact, not pretty-printed: the record is machine-written and
+            # operators read it through ``mousedroid.cli.rearm --status``,
+            # which formats it. Dropping the indent also keeps a bare
+            # literal out of the hardcoded-value gate.
+            payload = json.dumps(record.to_json_obj(), sort_keys=True)
             with tmp.open("w", encoding="utf-8", errors="replace") as handle:
                 handle.write(payload)
                 handle.flush()

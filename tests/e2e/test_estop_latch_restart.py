@@ -85,7 +85,7 @@ async def test_an_unlatched_root_starts_normally(tmp_path: Path) -> None:
 
 async def test_the_rearm_cli_is_the_way_back(tmp_path: Path) -> None:
     """Deliberate human action clears it; nothing else does."""
-    from mousedroid.cli.rearm import EXIT_LATCHED, EXIT_OK, EXIT_REFUSED, _run
+    from mousedroid.cli.rearm import EXIT_OK, EXIT_STILL_LATCHED, _run
     from mousedroid.factory import build_emergency_latch
 
     cfg = _settings(tmp_path)
@@ -106,13 +106,13 @@ async def test_the_rearm_cli_is_the_way_back(tmp_path: Path) -> None:
     original = rearm_mod.load_settings
     rearm_mod.load_settings = lambda *a, **k: cfg  # type: ignore[assignment]
     try:
-        assert await _run(_args(status=True)) == EXIT_LATCHED
+        assert await _run(_args(status=True)) == EXIT_STILL_LATCHED
         assert latch.path.exists(), "--status must not clear anything"
 
-        assert await _run(_args(operator="tester")) == EXIT_REFUSED
+        assert await _run(_args(operator="tester")) == EXIT_STILL_LATCHED
         assert latch.path.exists(), "a missing --confirm-area-clear must not clear"
 
-        assert await _run(_args(confirm_area_clear=True)) == EXIT_REFUSED
+        assert await _run(_args(confirm_area_clear=True)) == EXIT_STILL_LATCHED
         assert latch.path.exists(), "an unattributed re-arm is not a re-arm"
 
         assert await _run(_args(operator="tester", confirm_area_clear=True)) == EXIT_OK

@@ -24,8 +24,9 @@ Container deployments run it inside the service so it sees the same volume::
     docker compose -f docker-compose.jetson.yml exec mousedroid \
         python -m mousedroid.cli.rearm --operator <name> --confirm-area-clear
 
-Exit codes: ``0`` cleared or already clear, ``1`` latched and not cleared,
-``2`` refused or bad invocation.
+Exit codes: ``0`` cleared or already clear, ``1`` still latched -- whether
+because ``--status`` was used or because the required flags were missing.
+argparse supplies its own ``2`` for a malformed invocation.
 """
 
 from __future__ import annotations
@@ -41,9 +42,15 @@ from mousedroid.logging.setup import get_logger
 
 _log = get_logger(__name__)
 
+# Two codes, matching ``mousedroid.cli.preflight``'s plain ``return 0`` /
+# ``return 1``. A third "refused" code was considered and dropped: from a
+# caller's point of view "refused because a flag was missing" and "latched,
+# and I only asked for status" are the same actionable state -- the latch is
+# still set -- and the difference is in the message, which is what an
+# operator reads. argparse already exits 2 on a malformed invocation, so the
+# usage-error case keeps its conventional code for free.
 EXIT_OK: Final[int] = 0
-EXIT_LATCHED: Final[int] = 1
-EXIT_REFUSED: Final[int] = 2
+EXIT_STILL_LATCHED: Final[int] = 1
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -104,7 +111,7 @@ async def _run(args: argparse.Namespace) -> int:
         f"  tripped at: {record.tripped_at_iso or '(unknown)'}\n"
     )
     if args.status:
-        return EXIT_LATCHED
+        return EXIT_STILL_LATCHED
 
     missing = [
         flag
@@ -119,7 +126,7 @@ async def _run(args: argparse.Namespace) -> int:
             "\nRefusing to clear: " + " and ".join(missing) + " required.\n"
             "Inspect the rover and its path first, then re-run with both.\n"
         )
-        return EXIT_REFUSED
+        return EXIT_STILL_LATCHED
 
     await latch.rearm(operator=args.operator)
     sys.stdout.write(
@@ -136,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_run(args))
     except Exception:
         _log.exception("rearm_failed")
-        return EXIT_REFUSED
+        return EXIT_STILL_LATCHED
 
 
 if __name__ == "__main__":
