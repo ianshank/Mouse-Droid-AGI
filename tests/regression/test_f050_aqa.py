@@ -409,3 +409,48 @@ class TestUnsafeLoadersAreFenced:
         ]
         assert values
         assert all(isinstance(v, ast.Constant) and v.value is True for v in values)
+
+
+def test_orchestrator_factory_threads_metrics_into_the_cognitive_core() -> None:
+    """Task 7.1b's counter is useless if the registry never reaches the BDI gate.
+
+    ``build_cognitive_core`` carries the digest gate for the BDI weights, which
+    downloads on **every** boot. Its ``metrics=`` seam is keyword-only and
+    defaulted, so omitting it is silent: a digest refusal would raise and log but
+    increment ``mousedroid_model_artifact_sha256_mismatches_total`` not at all —
+    and the ``fallback_to_mcts`` branch immediately below the call site would then
+    swallow the exception, leaving no trace of a refused artifact anywhere.
+
+    Checked on the source because the alternative is booting a real cognitive
+    core, which needs a network fetch.
+    """
+    source = (_REPO_ROOT / "src" / "mousedroid" / "factory" / "orchestrator.py").read_text(
+        encoding="utf-8"
+    )
+    assert "build_cognitive_core(cfg, metrics=metrics_registry)" in source, (
+        "build_cognitive_core must receive the registry; without it a BDI digest "
+        "mismatch is invisible to Prometheus"
+    )
+    registry_at = source.index("metrics_registry = build_metrics_registry(cfg)")
+    cognitive_at = source.index("build_cognitive_core(cfg, metrics=metrics_registry)")
+    assert registry_at < cognitive_at, "the registry must exist before the call"
+
+
+def test_the_cognitive_fallback_records_the_exception_type() -> None:
+    """The MCTS fallback catches ``Exception``, so it also catches a digest refusal.
+
+    Narrowing that catch is a change to e-stop-adjacent control flow and belongs
+    to a different requirement. What this change owes is that the degradation not
+    be indistinguishable from an ordinary init failure: the warning carries
+    ``error_type`` so an operator can tell ``ArtifactIntegrityError`` from a
+    timeout in the logs.
+    """
+    source = (_REPO_ROOT / "src" / "mousedroid" / "factory" / "orchestrator.py").read_text(
+        encoding="utf-8"
+    )
+    marker = '"cognitive_core_init_failed_falling_back_to_mcts"'
+    start = source.index(marker)
+    assert "error_type=type(e).__name__" in source[start : start + 300], (
+        "the fallback warning must name the exception type, or a refused artifact "
+        "reads exactly like a network timeout"
+    )

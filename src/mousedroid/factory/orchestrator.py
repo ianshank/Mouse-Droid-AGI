@@ -167,12 +167,25 @@ def build_orchestrator(cfg: Settings) -> object:
     cognitive_core: CognitiveCore | None = None
     if cfg.cognitive.enabled:
         try:
-            cognitive_core = build_cognitive_core(cfg)
+            # Task 7.1b: the registry (built at the top of this function so it
+            # reaches the world model) also carries
+            # mousedroid_model_artifact_sha256_mismatches_total. Without it a BDI
+            # digest refusal raises and logs but increments nothing, and the
+            # fallback below would then hide it entirely.
+            cognitive_core = build_cognitive_core(cfg, metrics=metrics_registry)
         except Exception as e:
             if cfg.cognitive.fallback_to_mcts:
+                # Known gap, recorded rather than silently changed: this also
+                # catches an ArtifactIntegrityError from the BDI digest gate, so a
+                # digest MISMATCH degrades to the MCTS planner instead of refusing
+                # to boot. Narrowing it is a deliberate change to e-stop-adjacent
+                # control flow and belongs to the "random-weight fallback SHALL be
+                # observable and refusable" requirement, not to task 7.1b. The
+                # counter above makes the degradation observable in the meantime.
                 _log.warning(
                     "cognitive_core_init_failed_falling_back_to_mcts",
                     error=str(e),
+                    error_type=type(e).__name__,
                 )
             else:
                 raise

@@ -375,11 +375,11 @@ unselectable.
 
 **Phase 7 — Artifact integrity**
 
-- [ ] 7.1 Digest verification in `src/mousedroid/factory/world_model.py`, where the
+- [x] 7.1 Digest verification in `src/mousedroid/factory/world_model.py`, where the
       download happens — today it checks only `model_path.is_file()`. Precedent for the
       mismatch counter is `_registry_cloud.py:227`
       (`inc_cloud_weight_update_sha256_mismatch`). Not a deploy-time shell check.
-- [ ] 7.1b Spell out the integrity chain the spec requires, not just "digest verification":
+- [x] 7.1b Spell out the integrity chain the spec requires, not just "digest verification":
       reuse `utils/weights_manager.py::verify_sha256` with a same-repo `sha256.txt` manifest
       and a new `onnx_sha256_manifest_filename` field shaped after
       `config/schema/gcp_cloud.py:412-420`; pin `revision=` on the Hugging Face fetch; wire the
@@ -388,19 +388,19 @@ unselectable.
       check) and the silent legacy fallback at `export_dual_stream_rssm_onnx.py:353-359`.
       Apply the same treatment to the BDI download in `factory/cognitive.py`, which has no
       digest check or revision pin and runs on every boot.
-- [ ] 7.2 Export metadata beside the artifact: checkpoint digest, config digest, git SHA,
+- [x] 7.2 Export metadata beside the artifact: checkpoint digest, config digest, git SHA,
       opset, input/output names, shapes, dtypes, tool versions. The IO contract is owned by
       `src/mousedroid/world_model/onnx_io.py` (`OBSERVE_STEP_OUTPUT_NAMES`) and pinned by
       `tests/unit/world_model/test_onnx_io.py` — go through that module.
-- [ ] 7.3 `onnx.checker` plus ORT CPU inference on the PC, and multi-step seeded parity over
+- [ ] 7.3 **NOT DONE — needs a real ONNX export plus ORT on the PC. The multi-step seeded parity gate is additionally vacuous while the production model loads no trained weights (task 2.2), and task 6.10's injectable sampler — which the `new_h`/`new_z` split depends on — is not built.** Original: `onnx.checker` plus ORT CPU inference on the PC, and multi-step seeded parity over
       `new_h`, `obs_embed`, `surprise` at `atol=1e-4`. `new_z` is **excluded** — ADR-008
       documents its `torch.randn_like` divergence; compare `post_mean`/`post_logvar`
       instead.
-- [ ] 7.4 `scripts/export_dual_stream_rssm_onnx.py::_push_to_hf` (`:456`) extended to
+- [ ] 7.4 **NOT DONE — needs a Hugging Face write token and a published artifact. Ordering note for whoever lands it: `_push_to_hf` must upload the `.onnx`, the metadata sidecar **and** a `sha256.txt`, because without that manifest in the repo `onnx_require_sha256_manifest=true` is not yet a usable operator setting and the enforcement path stays in warn-mode by default.** Original: `scripts/export_dual_stream_rssm_onnx.py::_push_to_hf` (`:456`) extended to
       upload the metadata sidecar and refresh the model card, mirroring
       `training/upload_weights.py`'s `_COMPONENT_DOCS` pattern. Token from the environment,
       never logged, never uploaded from a test or a deploy script.
-- [ ] 7.5 `scripts/benchmark_latency.py` extended with an `observe_step` mode across torch /
+- [ ] 7.5 **NOT DONE — the `observe_step` benchmark mode needs the rover to be worth running, and the gate closed against the optimization it would have measured.** Original: `scripts/benchmark_latency.py` extended with an `observe_step` mode across torch /
       `onnx_portable` / `onnx_iobinding_*`, reusing its existing
       `--config`/`--checkpoint`/threshold/exit-code contract. `tests/performance/
       test_observe_step_budget.py:126,157` extended with the per-span breakdown, still
