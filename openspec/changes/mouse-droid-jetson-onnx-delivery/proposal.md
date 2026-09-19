@@ -1,0 +1,221 @@
+# Proposal — Jetson ONNX runtime evidence + PC-to-rover delivery
+
+- change_id: mouse-droid-jetson-onnx-delivery
+- project: mouse-droid
+- status: proposed
+- feature_id: F-050, F-051
+- epic: Jetson deployment
+- owner: ianshank
+- created: 2026-09-19
+- basis_commit: 18aba56
+- rev: B (revision of the external plan `jetson-onnx-runtime-and-pc-delivery`, rev A)
+
+## Why
+
+Rev A of this plan proposed optimizing `DualStreamRSSM.observe_step` with ONNX Runtime
+I/O binding, FP16, TensorRT engine caches and CUDA Graph, then promoting it to the rover
+through a new release/symlink deployment scheme. Peer review against the tree
+(`peer-review.md`) found the direction sound and five load-bearing premises false. Rev B
+keeps the architecture and re-sequences the work behind what the repository can actually
+prove.
+
+Three facts reorder everything:
+
+1. **The stage is unmeasured.** `reports/` holds three files and `smoke-reports/` two;
+   none carries an `observe_step`, `tick_phase` or `world_model` measurement. The only
+   on-device report (`smoke-reports/smoke_report.md`, 2026-05-12) records
+   `telemetry down`. Rev A's own risk row — "observe-step optimization does not improve
+   the whole loop" — is unfalsifiable today.
+2. **The metric that would measure it is dead.** `build_world_model(cfg)`
+   (`factory/world_model.py:55`) has no metrics parameter, and `_build_onnx_world_model`
+   constructs `DualStreamRSSMOnnx` at `:262-266` without `metrics=`. `observe_step`
+   records only `if self._metrics is not None`
+   (`dual_stream_rssm_onnx.py:271-279`), so `mousedroid_world_model_observe_step_seconds`
+   has no production writer and `WorldModelObserveStepLatencyHigh`
+   (`config/prometheus/alerts.yml:388-421`) cannot fire. Where it does fire — in
+   `tests/performance/test_observe_step_budget.py` — the timer brackets `session.run`
+   only (`:255-258`), excluding both `pack_observation` and the NumPy round-trip that
+   I/O binding exists to remove.
+3. **The path is not enabled on the rover.** No `config/*.yaml` sets a `world_model:`
+   block, so `engine` sits at its `"torch"` default. Worse, `engine: onnx_trt` cannot be
+   switched on from the overlay ADR-008 documents: `_build_onnx_world_model` raises when
+   `cfg.model.cfc_hidden_dim <= 0` (`factory/world_model.py:246-253`), the schema default
+   is `0` (`world_model.py:205`), and only `config/jetson_dual_stream.yaml:29` sets `64`.
+
+So rev A would have optimized a code path the rover does not execute, measured by a metric
+that never emits, against a baseline that does not exist. Rev B makes instrumentation and
+enablement the price of admission, and makes the FP16 / I/O-binding / CUDA-Graph work
+conditional on evidence that `world_model` is in fact the dominant tick phase.
+
+Two further gaps justify the change independently of any speedup. ADR-008's own
+"Negative" section records that the factory cannot detect a stale `.onnx` against
+retrained weights — "wrong weights = wrong inference, silently" — and there is still no
+digest check on the download path (`factory/world_model.py` checks only
+`model_path.is_file()`), while the OTA weight poller already has the precedent
+(`_registry_cloud.py:227`, `inc_cloud_weight_update_sha256_mismatch`). And
+`ianshank/mousedroid-dual-stream-rssm` holds only `.gitattributes` and `README.md` —
+verified against the Hub — while ADR-008's migration step 2 invites operators to leave
+`onnx_path: null` and rely on it. That documented path fails closed at best and silently
+at worst.
+
+## What Changes
+
+**Measurement and enablement (F-050, must land first)**
+
+- `src/mousedroid/factory/world_model.py`: `build_world_model` gains a keyword-only
+  `metrics: MetricsRegistry | None = None`, threaded to `DualStreamRSSMOnnx`. All four
+  call sites updated (`factory/orchestrator.py:121`, `factory/on_device_learning.py:102,
+  274,304`, `validation/pillars.py:184`); `factory/orchestrator.py` builds the registry
+  before the world model instead of after.
+- `src/mousedroid/world_model/dual_stream_rssm_onnx.py`: the existing
+  `observe_world_model_observe_step_seconds` timer keeps its ORT-execute scope, and two
+  new spans are added around `pack_observation` and the tensor conversions so the
+  histogram family finally sums to wall-clock `observe_step`.
+- `src/mousedroid/world_model/dual_stream_rssm.py`: the PyTorch engine emits the same
+  observe-step histogram, so the two engines are comparable in production and not only in
+  a Jetson-gated advisory test.
+- `config/jetson_production.yaml`: `model.cfc_hidden_dim` set so `engine: onnx_trt` is
+  reachable, or ADR-008 and `scripts/export_dual_stream_rssm_onnx.py:17-21` corrected to
+  name `config/jetson_dual_stream.yaml`. Design D-3 picks the second.
+- `src/mousedroid/config/schema/world_model.py`: typed ONNX runtime options — execution
+  mode, strict-provider policy, device id, engine/timing cache toggles, CUDA-graph and
+  context-memory switches, profile batch. Precision, workspace size and TRT cache
+  directory are **read from `cfg.jetson`**, not duplicated.
+- `src/mousedroid/common/onnx_session.py`: `resolve_providers` and `warmup_session` widened
+  to carry `(name, options)` provider tuples; a post-construction `session.get_providers()`
+  comparison; `sess_options` passed explicitly. `vla/policy.py` and both ORT test stubs
+  move with them.
+- `src/mousedroid/telemetry/metrics/_registry_onnx_runtime.py` (new module, per ADR-017):
+  `onnx_session_build_seconds`, `onnx_copy_seconds`, `onnx_provider_fallback` — registry
+  field names without the `_total` suffix that `primitives.py:422-429` appends at render.
+- `docs/architecture/ADR-019-onnx-runtime-provider-policy.md` + a row in
+  `docs/architecture/adr-log.md`, superseding the ADR-008 clauses it changes.
+
+**Evidence (F-050)**
+
+- `scripts/benchmark_latency.py` extended — not replaced — with an `observe_step` mode
+  covering torch, `onnx_portable`, and (when present) `onnx_iobinding_*`, reusing its
+  existing `--config`/`--checkpoint`/threshold/exit-code contract.
+- `tests/performance/test_observe_step_budget.py` extended with the per-span breakdown,
+  still budgeted by `MOUSEDROID_OBSERVE_STEP_BUDGET_MS`. No second source of truth for the
+  10 ms / 33 ms numbers.
+- Whole-tick evidence comes from the existing `mousedroid_tick_phase_ms{phase=...}`
+  (`orchestrator.py:522`) and `mousedroid_tick_overruns_total`
+  (`_registry_core.py:91`, written at `_telemetry_experience_mixin.py:114-126`). No new
+  deadline counter.
+
+**Delivery (F-051)**
+
+- `scripts/deploy_remote.sh`: the `rsync -avz --delete` path (`:151`) gains a mandatory
+  dirty-target refusal and a `rover/wip-<date>` preservation step, or is retired in favour
+  of the git spine. It is the existing PC-side push command and rev A never named it.
+- `docker-compose.jetson.yml`: a named volume for the TensorRT engine/timing cache, since
+  nothing persists `HF_HOME` or a TRT cache today. The directory comes from schema config,
+  not a literal.
+- `scripts/docker_deploy.sh`: `health_check` gains a strict mode that fails on a dead
+  telemetry endpoint, an unexpected ORT provider, or a model-digest mismatch. Today every
+  leg is downgraded to a warning at `:241`.
+- `deployments/jetson-image.json` extended in place per `config-compat.yml:8-10`, with the
+  model digest and ORT provider recorded. No parallel manifest format.
+- `docs/runbooks/jetson-onnx-benchmark.md`, `docs/runbooks/pc-to-jetson-promotion.md`, and
+  rows in `docs/README.md`.
+
+## What does NOT change
+
+- The bind-mount-editable deployment model. `/opt/mousedroid:/opt/mousedroid`
+  (`docker-compose.jetson.yml:80`) is a git checkout carrying an editable install and
+  rover-local WIP commits. Rev A's `releases/<id>` + `current`/`previous` symlink scheme
+  changes the identity of that path and breaks the compose mount, `sync_jetson_overlay.sh`,
+  `jetson-nightly.yml:87` and `preflight_check.sh:29-31`. Rev B keeps the spine and uses
+  the established rollback anchor — `docker tag mousedroid:jetson
+  mousedroid:jetson-rollback-<date>` — which already rolls back offline without rebuilding.
+- `imagine_step` stays PyTorch. `CompositeWorldModel` also delegates `get_safety_trace`
+  to it (`composite.py:128-150`), so the PyTorch graph is load-bearing for the safety
+  monitor, not only MCTS.
+- No second direct-TensorRT runtime. ADR-008 already reserves `torch2trt` via
+  `JetsonTensorRTCompiler` as a separate future option.
+- No INT8. No Cosmos — already catalogued as F-049 `deferred`. No Isaac ROS. No stereo
+  pipeline. No ROS 2 rewrite.
+- No GitHub-hosted runner driving a LAN robot, and no new job on the existing
+  `[self-hosted, jetson]` runner (`jetson-nightly.yml:53`).
+- No `world_model:` block in `config/default.yaml`. Per the F-043 precedent
+  ("Do not add isaac keys to config/default.yaml") opt-in subsystem knobs stay on schema
+  defaults, and `loader.py:76-96` would otherwise deep-merge the block into all 17
+  overlays.
+
+## Charter
+
+No CHARTER.md §3 carve-out is required, and this paragraph exists because
+`charter-carveout/SKILL.md:52-60` requires the determination in writing even when the
+answer is "none apply".
+
+- **Q1, motion without a human gate — no.** Nothing here commands actuators. Both motion
+  gates keep their defaults: `MOUSEDROID_SMOKE_ALLOW_MOTION` (`jetson_smoke_test.sh:29`,
+  default `0`) and `ESP32Config.smoke_test_allow_motion` (`hardware.py:231`, default
+  `False`). All on-rover work in Phase 7 runs the canonical no-motion invocation, which
+  clears both (`jetson_full_validation.sh:423,429`). The delivery half does not gain the
+  ability to restart the rover service unattended: the service switch stays an operator
+  step, which is why rev A's `--approved-release` auto-confirm is removed in rev B.
+- **Q2, LLM or training in the 30 Hz loop — no.** `engine: onnx_trt` is already the
+  accepted in-loop design (ADR-008, `WorldModelConfig.engine`
+  `Literal["torch","onnx_trt"]` at `world_model.py:39`). F-047's "never RSSM TensorRT" is
+  scoped to loading a PPO graph through `vla/policy.py` into the 30 Hz loop — the isaac
+  bundle's verdict table says so — not to the RSSM observe path ADR-008 accepts.
+- **Q3, behaviour change by editing source rather than YAML/env — no.** Every new field is
+  `Field(default=..., description=...)` preserving today's behaviour; FP16 and caches are
+  opt-in via `config/jetson_onnx_fp16.yaml`.
+
+FP16 does change recurrent-state numerics, which is a safety-adjacent property. It is
+gated on multi-step parity plus recorded task replay (`specs/performance-evidence`) and
+ships default-off. If the evidence in Phase 6 shows safety-envelope drift, FP16 is dropped
+rather than carved out.
+
+## Impact
+
+Backwards compatibility is preserved by default: `engine` stays `"torch"`, every new
+switch defaults off, and no shipped YAML gains a key.
+
+The real blast radius is three-fold.
+
+**`config-compat` silently swallows new fields.** `.github/workflows/config-compat.yml`
+worktrees the SHA in `deployments/jetson-image.json` (`032942b5…`) and validates new YAML
+against the old `Settings`. At that SHA `WorldModelConfig` is a plain `BaseModel`
+(`schema.py:1597`), i.e. `extra="ignore"` — so a new `world_model.*` key in
+`config/jetson_production.yaml` passes the gate and is then ignored by the pinned schema.
+A new *top-level* block hard-fails instead. Rev B therefore adds no `world_model:` key to
+any tracked overlay; `config/jetson_onnx_fp16.yaml` is an explicitly-selected overlay, and
+Phase 8 re-pins the record post-merge.
+
+**That pin is one branch cleanup from repo-wide failure.** `deployments/jetson-image.json`
+states it itself: zero tags exist, and the SHA's only reachability is ten stale feature
+branches — "precisely the set `scripts/archive_stale_branches.sh` exists to delete". Any
+SHA this change records inherits `mouse-droid-deploy-repin`'s pin-reachability spec
+(remote-*tag* reachability, remedied by `scripts/repin_tags.sh`). Phase 8 runs the audit.
+
+**The ONNX surface has no blocking CI.** `onnx-world-model-extras` is the only job
+installing `[onnx_world_model]` and it carries `continue-on-error: true`
+(`ci.yml:579-583`), tracked with `promote_after_days: 180` since 2026-05-16 — due
+2026-11-12, and the real bar is a 7-consecutive-green-run count the tracker admits nobody
+has re-derived. Rev B does not claim coverage it lacks: the config, provider-policy and
+artifact-contract tests land in the blocking `test` job via `tests/regression`; only the
+ORT-dependent integration tests stay advisory, and Phase 8 records the streak impact.
+
+F-008 remains `todo` ("USB-C rover smoke passes on the physical Jetson"). Nothing here is
+path-blocked by `freeze_gate.py` — `.claude/workforce.yaml` freezes only
+`src/mousedroid/arm/**` — but Phase 7 competes with F-008 for the same bench, so this
+change is explicitly sequenced *behind* it, in the house idiom "while F-008 is
+bench-blocked".
+
+## Spec Deltas
+
+- `openspec/changes/mouse-droid-jetson-onnx-delivery/specs/onnx-runtime/spec.md`
+- `openspec/changes/mouse-droid-jetson-onnx-delivery/specs/performance-evidence/spec.md`
+- `openspec/changes/mouse-droid-jetson-onnx-delivery/specs/pc-to-jetson-delivery/spec.md`
+
+## Tasks
+
+See `openspec/changes/mouse-droid-jetson-onnx-delivery/tasks.md`.
+
+## Validation
+
+`bash scripts/validations/F-050.sh` and `bash scripts/validations/F-051.sh`
