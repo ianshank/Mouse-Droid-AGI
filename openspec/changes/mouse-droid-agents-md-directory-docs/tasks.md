@@ -202,6 +202,14 @@ Phase 4 is complete. Deviations from the task wording, declared rather than sile
   `config-guardian` and `test-engineer` already cover the two overlapping
   titles with richer rules; promoting the rest would dilute the workforce
   roster with stubs that do not earn a definition.
+- **4.4 also required updating a skill path the plan missed.** Task 4.4 named
+  only `test_doc_reconciliation_aqa.py`'s `_SRC_COVERAGE_DOCS` entry as the
+  delete-breaker. `tools/validate_skill_commands.py` additionally fails on
+  backtick-wrapped missing paths in `.claude/skills/`, and
+  `narrative-correction-sweep/SKILL.md` cited ``tests/agent.md`` as a historical
+  example. Rephrased that example to name `HARNESS_SPEC.md` (still live) so
+  F-004 / validate-fast stay green. Docstring prose in loaders.py and
+  `test_ci_gate_wiring_aqa.py` remains untouched per the task.
 - **4.1 / 4.4 / 4.6 helpers and gates updated in-process.** Cloud Agents remain
   blocked; work stayed on `gh` + local clone. `test_f053_aqa.py` gains
   `TestAgentMdIsRetired` (zero tracked `agent.md`; wheel exclude retained).
