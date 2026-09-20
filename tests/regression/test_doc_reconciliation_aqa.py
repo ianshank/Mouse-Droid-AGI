@@ -53,9 +53,10 @@ _JOB_COUNT_DOCS = (
 )
 
 # Live surfaces that state the src/mousedroid line-coverage floor.
+# tests/agent.md was retired by F-053 Phase 4 (WS-8d); HARNESS_SPEC.md and
+# c4-spec-harness.md remain the live pins for the dual-gate claim.
 _SRC_COVERAGE_DOCS = (
     _REPO_ROOT / "HARNESS_SPEC.md",
-    _REPO_ROOT / "tests" / "agent.md",
     _REPO_ROOT / "docs" / "architecture" / "c4-spec-harness.md",
 )
 
@@ -126,12 +127,13 @@ def test_no_live_doc_claims_a_stale_src_coverage_floor() -> None:
     not the next one, whichever direction it goes.
 
     The tools_hooks exemption is scoped to the SPECIFIC claimed value, not the
-    whole line: HARNESS_SPEC.md:303 and tests/agent.md:6 both state the real
-    90% src/mousedroid claim and the 85% tools_hooks claim on the same line.
-    An earlier version of this test skipped any line containing "claude_hooks"
-    at all, which -- caught by a Copilot review comment on this same PR --
-    exempted the legitimate 90% claim right along with the 85% one, on
-    exactly the two lines this test exists to check.
+    whole line: HARNESS_SPEC.md:303 states the real 90% src/mousedroid claim and
+    the 85% tools_hooks claim on the same line (tests/agent.md:6 carried the
+    same dual claim until F-053 Phase 4 retired that file). An earlier version
+    of this test skipped any line containing "claude_hooks" at all, which --
+    caught by a Copilot review comment on this same PR -- exempted the
+    legitimate 90% claim right along with the 85% one, on exactly the lines
+    this test exists to check.
     """
     from tools.claude_hooks.config import load_config
 

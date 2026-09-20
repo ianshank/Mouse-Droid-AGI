@@ -1,4 +1,4 @@
-"""AQA — F-053 Phase 1+2: root ``AGENTS.md`` loads; every in-package surface is ``CLAUDE.md``.
+"""AQA - F-053 Phases 1-4: ``AGENTS.md`` loads; surfaces are ``CLAUDE.md``; ``agent.md`` gone.
 
 The defect this pins shut is silent. Claude Code reads ``AGENTS.md`` natively, but
 only *"when you have no ``CLAUDE.md`` in your working directory or above it"* — and
@@ -162,10 +162,11 @@ class TestTheBuiltWheelReallyExcludesThem:
     by reverting: deleting ``**/AGENTS.md`` from the exclude list leaves this
     test **green**, because ``packages = ["src/mousedroid"]`` means only files
     under that directory are build candidates and the sole ``AGENTS.md`` is at
-    the repository root. So this test covers ``CLAUDE.md`` and ``agent.md``,
-    which have 22 files between them under ``src/``, and the ``AGENTS.md``
-    pattern is defence-in-depth that ``test_every_agent_facing_pattern_is_excluded``
-    is the real gate for.
+    the repository root. After F-053 Phase 4 retired every ``agent.md``, the
+    same limit applies to that pattern: this build exercises ``CLAUDE.md``
+    under ``src/`` only. ``AGENTS.md`` and ``agent.md`` excludes are
+    defence-in-depth that ``test_every_agent_facing_pattern_is_excluded`` is
+    the real gate for.
 
     ``test_the_build_test_is_not_vacuous`` makes that limit explicit, so a reader
     cannot mistake this class for coverage it does not have.
@@ -203,10 +204,15 @@ class TestTheBuiltWheelReallyExcludesThem:
             "no agent-facing file exists under src/, so the wheel build below "
             "cannot prove any exclusion — it would pass with the patterns removed"
         )
-        # Recorded, not asserted: AGENTS.md has no file under src/ by design
-        # (F-053 keeps it at the root), so its pattern is not build-exercised.
-        assert {CLAUDE_MD, "agent.md"} <= exercised, (
-            f"expected CLAUDE.md and agent.md to be build-exercised; got {exercised}"
+        # CLAUDE.md under src/ is the only pattern the build can exercise.
+        # AGENTS.md stays at the root (D-1/D-3); agent.md was retired in Phase 4
+        # but its wheel exclude remains defence-in-depth.
+        assert CLAUDE_MD in exercised, (
+            f"expected {CLAUDE_MD} to be build-exercised; got {exercised}"
+        )
+        assert "agent.md" not in exercised, (
+            "F-053 Phase 4 retired agent.md — a file under src/ means the "
+            f"retirement regressed: {candidates['agent.md']}"
         )
 
     def test_no_agent_facing_file_reaches_the_wheel(self, tmp_path: Path) -> None:
@@ -307,4 +313,39 @@ class TestEveryInPackageSurfaceIsClaudeMd:
         assert nested == [], (
             "F-053 D-1/D-3: AGENTS.md under src/ or tests/ is unreachable without "
             f"a sibling CLAUDE.md importer and would duplicate purpose prose: {nested}"
+        )
+
+
+class TestAgentMdIsRetired:
+    """Phase 4 / WS-8d: the 16 ``agent.md`` persona stubs are gone.
+
+    Folder-purpose prose lives in sibling ``CLAUDE.md`` (Phases 2-3). Personas
+    were evaluated against ``.claude/agents/`` and none earned a new definition
+    — the existing seven are meta-workforce agents; the stubs mostly restated
+    root invariants. ``pyproject.toml`` keeps ``**/agent.md`` excluded so a
+    reintroduction cannot ship to PyPI.
+    """
+
+    def test_zero_agent_md_remain_tracked(self) -> None:
+        remaining = discover_tracked("agent.md")
+        assert remaining == (), (
+            "F-053 Phase 4 / WS-8d retires every agent.md; these are still "
+            f"tracked: {[str(p) for p in remaining]}"
+        )
+
+    def test_agent_md_wheel_exclude_is_kept_as_defence_in_depth(self) -> None:
+        """Task 4.6: leave the dead exclude; removing it would let a stub ship."""
+        assert "**/agent.md" in AGENT_FACING_WHEEL_PATTERNS
+        data = load_pyproject()
+        exclude = (
+            data.get("tool", {})
+            .get("hatch", {})
+            .get("build", {})
+            .get("targets", {})
+            .get("wheel", {})
+            .get("exclude", [])
+        )
+        assert "**/agent.md" in exclude, (
+            "keep **/agent.md in the wheel exclude even with zero files — "
+            "reintroduction must not reach PyPI"
         )

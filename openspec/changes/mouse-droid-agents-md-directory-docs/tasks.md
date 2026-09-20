@@ -158,25 +158,56 @@ Phase 3 is complete. Deviations from the task wording, declared rather than sile
 
 ## Phase 4 — Retire the 16 `agent.md`
 
-- [ ] 4.1 Record that this executes WS-8d (`docs/planning/TECH_DEBT_REMEDIATION_PLAN.md:1492-1500`),
+- [x] 4.1 Record that this executes WS-8d (`docs/planning/TECH_DEBT_REMEDIATION_PLAN.md:1492-1500`),
   and update that table. Cite WS-8d, not the root-docs row — the root row rules on the root `agent.md`;
   WS-8d rules on the per-directory pair, which is what this change touches.
-- [ ] 4.2 Merge each folder-purpose half into the sibling `CLAUDE.md` (new for the 9, existing for the
+- [x] 4.2 Merge each folder-purpose half into the sibling `CLAUDE.md` (new for the 9, existing for the
   5 that have both, plus root).
-- [ ] 4.3 **Fix, do not migrate,** `src/mousedroid/llm_gateway/agent.md:6`: "velocity commands via local
+- [x] 4.3 **Fix, do not migrate,** `src/mousedroid/llm_gateway/agent.md:6`: "velocity commands via local
   LLM" is false in both halves (`protocol.py:65` returns a `GoalVector`;
   `src/mousedroid/config/schema/llm.py:96` includes the cloud `anthropic` backend).
-- [ ] 4.4 Update the **one** reference that actually breaks a delete:
+- [x] 4.4 Update the **one** reference that actually breaks a delete:
   `tests/regression/test_doc_reconciliation_aqa.py:46` lists `tests/agent.md` in `_SRC_COVERAGE_DOCS`
   and `read_text()`s it at `:130`. The other two commonly cited references are docstring prose —
   `src/mousedroid/skills/loaders.py:7,103` names no file, and
   `tests/regression/test_ci_gate_wiring_aqa.py:825` sits in a docstring stating the roster now comes
   from `git ls-files`.
-- [ ] 4.5 Evaluate each persona against the seven existing `.claude/agents/` definitions; promote only
+- [x] 4.5 Evaluate each persona against the seven existing `.claude/agents/` definitions; promote only
   those that earn one, under the existing contract.
-- [ ] 4.6 Remove the 16 `agent.md`; assert zero remain. **This is also where `pyproject.toml`'s
+- [x] 4.6 Remove the 16 `agent.md`; assert zero remain. **This is also where `pyproject.toml`'s
   `"**/agent.md"` exclude becomes dead** — leave it, and say why in the commit: it costs nothing and
   removing it would let a reintroduced `agent.md` ship to PyPI.
+
+### Phase 4 landed — declared deviations
+
+Phase 4 is complete. Deviations from the task wording, declared rather than silent:
+
+- **4.2 required no prose merge.** Every unique folder-purpose line from the 14
+  in-package `agent.md` already lived in the sibling `CLAUDE.md` purpose
+  blockquote (Phase 2 for the nine that lacked one; pre-existing for the five
+  that had both). Root `agent.md`'s architectural-coherence responsibilities
+  restate root `CLAUDE.md` / `AGENTS.md`; the validation-surface note is already
+  in `AGENTS.md` (imported by root `CLAUDE.md`). `tests/agent.md`'s coverage-gate
+  claim is already pinned by `HARNESS_SPEC.md` and
+  `docs/architecture/c4-spec-harness.md`, so no `tests/CLAUDE.md` was authored.
+- **4.3 fixed by deletion, not by editing then migrating.** Sibling
+  `llm_gateway/CLAUDE.md` already correctly names `GoalVector` and local+cloud
+  backends; the false "velocity commands via local LLM" line was not carried
+  forward. Removing the file is the fix Phase 3 deferred to this task.
+- **4.5 promoted zero personas.** The seven `.claude/agents/` definitions are
+  meta-workforce agents (`peer-reviewer`, `config-guardian`, `test-engineer`,
+  …) under a validated frontmatter/`max_lines: 60` contract. The sixteen
+  `agent.md` stubs were thin domain personas whose non-boilerplate lines mostly
+  restated root invariants (Protocol DI, no hardcoded values, structlog).
+  `config-guardian` and `test-engineer` already cover the two overlapping
+  titles with richer rules; promoting the rest would dilute the workforce
+  roster with stubs that do not earn a definition.
+- **4.1 / 4.4 / 4.6 helpers and gates updated in-process.** Cloud Agents remain
+  blocked; work stayed on `gh` + local clone. `test_f053_aqa.py` gains
+  `TestAgentMdIsRetired` (zero tracked `agent.md`; wheel exclude retained).
+  The wheel-build vacuity pin now expects only `CLAUDE.md` under `src/` and
+  asserts `agent.md` is absent there — the exclude stays defence-in-depth like
+  `AGENTS.md`.
 
 ## Phase 5 — The generated package map: all 41 folders, with the diagrams
 
