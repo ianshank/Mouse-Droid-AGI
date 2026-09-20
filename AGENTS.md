@@ -31,8 +31,8 @@
 7. **`torch.no_grad()`** on every inference path. `deque(maxlen=N)` (with
    `N` from config) for every sensor ring buffer.
 8. **Test-pyramid discipline.** Every behavioural change lands across the
-   matching tiers — see "Test surface mirror" in `CLAUDE.md` and the PR #104
-   files as the reference shape.
+   matching tiers — see invariant 9 ("Test-Pyramid Discipline") in `CLAUDE.md`
+   and the PR #104 files as the reference shape.
 9. **Bounded complexity.** Every function stays under `ruff` `C901`
    (`max-complexity = 15`; ADR-014). When a function trips the gate,
    **decompose it** into cohesive helpers — do NOT add a file-level `C901`
@@ -76,8 +76,9 @@
   validates it against the schema of the SHA pinned in
   `deployments/jetson-image.json`. If your change needs a schema field the
   deployed image doesn't have, you MUST bump that record to a reachable
-  trunk commit that carries the field (see "Live deployment + CI-gate
-  contracts" in `CLAUDE.md`) — otherwise the gate fails the PR.
+  trunk commit that carries the field — the contract lives in
+  `scripts/check_config_compat.py` and `.github/workflows/config-compat.yml`,
+  not in `CLAUDE.md` — otherwise the gate fails the PR.
 - When you edit any `.github/workflows/*.yml`, run `actionlint` locally
   before pushing — it's a pinned CI gate (Stage 0). In particular, never
   put a literal `${{ ... }}` token inside a `run:` block, even in a
@@ -136,7 +137,7 @@ Runtime `Settings.harness` stays None. Dispatch `config-guardian` +
 
 ## Subagent dispatch
 
-When delegating to a subagent (`peer-reviewer`, `test-engineer`, `config-guardian`, or any of the other five in `.claude/agents/`):
+When delegating to a subagent (`peer-reviewer`, `test-engineer`, `config-guardian`, or any of the other four in `.claude/agents/`, which holds seven):
 
 - The subagent does NOT inherit your conversation context. Brief it like a
   smart colleague who just walked in: include file paths, the worktree

@@ -138,7 +138,7 @@ Stated because a review that finds nothing wrong with its own output is not a re
    Mitigation: assert `isinstance(DualStreamRSSMOnnx, WarmableProtocol)` at class level in
    the same test, which needs no `onnxruntime` import at runtime. Without that, 4.2
    reintroduces the assert-what-you-wrote failure in a new place.
-4. **This plan has 70 tasks across 9 phases.** That is a programme, not a change. Phases
+4. **This plan has 92 tasks across 9 phases.** That is a programme, not a change. Phases
    0, 1 and 2 are the ones with teeth; 6 and 7 are largely mechanical. If it must be cut,
    cut 6 and 7 — but cut them *explicitly*, because task 6.1 is not documentation: it is a
    safety-relevant metric with a documented paging expectation and no alert rule.
@@ -150,6 +150,41 @@ Stated because a review that finds nothing wrong with its own output is not a re
    softened.
 
 ---
+
+## Revision 2 — the weakness this bundle named and then ignored
+
+Revision 1's weakness list said, at item 4: *"This plan has 70 tasks across 9 phases. That is a
+programme, not a change."* It then grew to 92 and shipped anyway. Naming a defect is not fixing one,
+and a bundle that does that is doing the thing it criticises elsewhere.
+
+Revision 2 changes nothing about the tasks and everything about the shape: the same 92 are regrouped
+into **eight slices that each ship as one PR**, with the single hard dependency stated (slice A, the
+ratchet headroom, because all three budgets sit at ceiling and every other slice that needs a
+suppression is blocked until it lands). `tasks.md` carries the table and the "if cut to a third"
+answer — keep A, C, D, E: create the headroom, close the security items left open, fix the promotion
+gate that passes for the wrong reason, add the alert for a digest mismatch nothing pages on.
+
+**Every premise was re-verified in the merged tree** rather than carried forward from `b0759da`: the
+five reclaimable markers, the three at-ceiling budgets, `mypy --strict` over 424 files after PR #234
+added code, the three `C901` offenders, `ruff NPY`, and the `test-windows` window arithmetic. No row
+of `proposal.md` §6 has gone false. That check mattered: a "do not churn" table that silently rots is
+worse than no table, because the next pass trusts it.
+
+### Where this bundle now overlaps F-053
+
+The two plans touch the same surfaces and should not be implemented blind to each other:
+
+- **Task 4.5** here defers validating the ~50 existing mermaid fences under `docs/`. F-053 establishes
+  that **no renderer exists anywhere in the toolchain** — nothing in `pyproject.toml`,
+  `.github/workflows/ci.yml`, `scripts/ci.sh` or the `Makefile`, and no Python parser installed. So
+  4.5 is not a small follow-up; it is a Node dependency in a Python-only CI. F-053's answer —
+  generate the diagrams so correctness comes from the generator's tests rather than a renderer — is
+  the cheaper route for this backlog too.
+- **Phase 3** here adds a hooks→runbook inventory pin. F-053's Phase 2 adds an `AGENTS.md`→importer
+  pin. They are the same shape of gate (an asset exists ⟹ something references it) and should share
+  one helper rather than growing two.
+- **Task 6.1** here adds the missing `ModelArtifactDigestMismatch` alert. Unaffected by F-053, and the
+  highest-value single item across both plans.
 
 ## Sign-off condition
 
