@@ -97,6 +97,11 @@ echo "=== Hardcoded Value Gate (changed lines) ==="
 echo "=== Subsystem Boundary Gate (Protocol-based DI, full tree) ==="
 "$PYTHON_BIN" scripts/check_subsystem_boundaries.py
 
+echo "=== Package Import Map (F-053, regenerate-and-diff) ==="
+# Staleness gate for docs/architecture/package-map{,.md}. The regenerate-and-diff
+# regression also covers this; this step is the fast local/CI mirror.
+"$PYTHON_BIN" scripts/generate_package_map.py --check
+
 echo "=== Settings Identity Smoke Check ==="
 "$PYTHON_BIN" scripts/check_settings_identity.py
 

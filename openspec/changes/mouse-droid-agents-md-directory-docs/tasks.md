@@ -219,25 +219,45 @@ Phase 4 is complete. Deviations from the task wording, declared rather than sile
 
 ## Phase 5 — The generated package map: all 41 folders, with the diagrams
 
-- [ ] 5.1 Write `scripts/generate_package_map.py`: walk `src/mousedroid/*/`, `ast`-parse imports,
+- [x] 5.1 Write `scripts/generate_package_map.py`: walk `src/mousedroid/*/`, `ast`-parse imports,
   **filter `TYPE_CHECKING` blocks** (three live cases in `world_model` alone), and emit one section per
   package — purpose line, imports, dependents, mermaid subgraph.
-- [ ] 5.2 Label it an **import map**, not a dataflow map. In a factory-first DI codebase these diverge
+- [x] 5.2 Label it an **import map**, not a dataflow map. In a factory-first DI codebase these diverge
   by design: `factory` has 35 outbound package edges and `config` 33 inbound because invariants 1-2
   require it, and the runtime seams run through injected Protocols `ast` cannot see. State that in the
   generated header so no reader mistakes it for architecture.
-- [ ] 5.3 Source each purpose line from the package's `__init__.py` docstring, failing closed on a
+- [x] 5.3 Source each purpose line from the package's `__init__.py` docstring, failing closed on a
   package without one. 40 of 41 have one; `src/mousedroid/telemetry/__init__.py` is **0 bytes**, so
   write it here. Note this makes Phase 5 a `src/` edit subject to `mypy --strict`, ruff docstring rules
   and the coverage floor — it is not a docs-only phase.
-- [ ] 5.4 Split the output **per epic** from the start: 41 packages and 221 directed edges estimate to
+- [x] 5.4 Split the output **per epic** from the start: 41 packages and 221 directed edges estimate to
   ~34 KB, so a single file would be a fork in the deliverable rather than a decision.
-- [ ] 5.5 Add a regenerate-and-diff test that **normalises line endings and path separators** before
+- [x] 5.5 Add a regenerate-and-diff test that **normalises line endings and path separators** before
   comparing, so it holds on `test-windows`. Assert determinism: sorted output, no timestamps, no
   absolute paths.
-- [ ] 5.6 Unit-test the generator against a fixture package tree; correctness comes from those tests,
+- [x] 5.6 Unit-test the generator against a fixture package tree; correctness comes from those tests,
   not from rendering. No renderer is added — none exists anywhere in the toolchain.
-- [ ] 5.7 Wire into `scripts/ci.sh` and a `Makefile` target.
+- [x] 5.7 Wire into `scripts/ci.sh` and a `Makefile` target.
+
+### Phase 5 landed — declared deviations
+
+Phase 5 is complete. Deviations from the task wording, declared rather than silent:
+
+- **5.4 uses architectural epics, not `features.yaml` delivery epics.** The feature catalog's epic
+  strings track F-number delivery streams and do not partition `src/mousedroid/*`. Membership lives in
+  `scripts/package_map_epics.yaml` (fail-closed: every discovered package must appear exactly once).
+  Output is `docs/architecture/package-map.md` (index) plus
+  `docs/architecture/package-map/<epic-id>.md` — keeping the proposal's index path while honouring the
+  per-epic split. Measured: 41 packages, 166 runtime package edges (~28 KB across 7 files).
+- **5.7 wires Makefile + `scripts/ci.sh`; the workflow step is an explicit exemption.**
+  `test_ci_gate_wiring_aqa.py` would flag a ci.sh-only gate, so
+  `scripts/generate_package_map.py` is listed in `_CI_EXEMPT_GATES` with the reason that
+  `tests/regression/test_f053_package_map_aqa.py` already runs the same regenerate-and-diff in the
+  blocking `test` job. Editing `.github/workflows/ci.yml` was attempted and rejected by the GitHub
+  OAuth token (no `workflow` scope); the exemption is the durable wiring, not a dodge. No Phase 6
+  surface-index work.
+- **5.1 / 5.6 / 5.7 were not fanned out to subagents.** Cloud Agents remain blocked; work stayed on
+  `gh` + local clone per operator preference.
 
 ## Phase 6 — Wiring and documentation
 

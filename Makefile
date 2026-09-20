@@ -39,7 +39,7 @@ COV_MIN   := 90
 .DEFAULT_GOAL := help
 .PHONY: help install install-isaac lint format typecheck test test-cov test-fast smoke \
         regression behaviour coverage branch-coverage validate skills boundaries \
-        doc-budgets hooks gates ci clean
+        package-map package-map-check doc-budgets hooks gates ci clean
 
 # `make test` is an ordered composite of the four pytest steps below, and they
 # all write the same .coverage / .pytest_cache state. Under `-j` make would
@@ -131,6 +131,12 @@ skills: ## Validate .claude/skills/<name>/SKILL.md
 boundaries: ## Protocol-based DI subsystem boundary gate, full tree (local-gates parity)
 	$(PYTHON) scripts/check_subsystem_boundaries.py
 
+package-map: ## Regenerate docs/architecture/package-map (F-053 import map)
+	$(PYTHON) scripts/generate_package_map.py
+
+package-map-check: ## Fail if the package import map is stale (local-gates parity)
+	$(PYTHON) scripts/generate_package_map.py --check
+
 # The first of the three used to be the one gate in this file that NO CI job ran:
 # only scripts/ci.sh checked root CLAUDE.md against DocsConfig.core_max_lines,
 # and test_docs_trimmer.py exercises the tool against synthetic fixtures rather
@@ -170,7 +176,7 @@ hooks: ## Workforce hook tests under workforce.yaml's own coverage gate
 # `make ci` for the authoritative superset. `hooks` is in scope despite being a
 # pytest run: 272 tests in ~2s, and local-gates treats it as a deterministic
 # gate rather than a test tier.
-gates: lint format typecheck skills validate boundaries doc-budgets hooks ## Fast gates only, fail-fast (no src test suite)
+gates: lint format typecheck skills validate boundaries package-map-check doc-budgets hooks ## Fast gates only, fail-fast (no src test suite)
 
 ci: ## The authoritative local superset (scripts/ci.sh)
 	bash scripts/ci.sh
