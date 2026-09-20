@@ -1503,7 +1503,7 @@ features:
       Does not implement F-052.
     category: "non-functional"
     priority: "high"
-    status: "in_progress"
+    status: "done"
     tier: "fast"
     verification:
       - "root CLAUDE.md Surface Map indexes all 17 in-package CLAUDE.md surfaces"
@@ -1512,12 +1512,13 @@ features:
       - "docs/architecture/package-map.md matches a fresh generate_package_map.py run"
       - "the eight pre-F-053 contracts keep their purpose blockquotes and invariant titles"
     validation_command: "bash scripts/validations/F-053.sh"
-    implemented_in: null
+    implemented_in: "22ec000ead8949a11776fa50660186a05c609655"
     depends_on: ["F-030"]
     notes: >-
-      Phases 1-5 landed on the default branch tip; Phase 6-7 is the wiring and
-      closeout. implemented_in stays null until the dedicated closeout PR, per
-      the F-030/F-031 convention. Cloud Agents are blocked for this account;
-      work stayed on gh + local clone. Workflow-scope may still block ci.yml
-      edits — package-map stays in _CI_EXEMPT_GATES with the regenerate-and-diff
-      regression as the blocking gate (Phase 5 pattern).
+      implemented_in pins to PR #240's squash SHA per the F-030/F-031 convention
+      (bookkeeping closeout after the implementation merge). Cloud Agents were
+      blocked for this account; work stayed on gh + local clone. Package-map
+      remains in _CI_EXEMPT_GATES with the regenerate-and-diff regression as the
+      blocking gate (Phase 5 pattern). Does not implement F-052. No
+      openspec/changes/archive/ layout exists — the change folder stays in place
+      with status flipped to implemented in openspec/project.md.
