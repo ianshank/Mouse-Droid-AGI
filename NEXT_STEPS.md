@@ -207,6 +207,15 @@ audit (R2/R7 first — they cost minutes and can flip the decision):
 
 ## Deferred / Out Of Scope
 
+
+- **F-053 / WS-8d declines (recorded, not deferred work):** validating the 49 existing mermaid
+  fences under `docs/` plus the 1 in root `README.md`; a `.claude/rules/` migration; a full audit
+  of the root `AGENTS.md` beyond the contradictions Phase 1 made live when `@AGENTS.md` began to
+  load; and fixing `arm/CLAUDE.md`'s `mock_arm.py` Key Files path (real:
+  `hardware/mock_arm_driver.py`) while F-008 is still `todo` — that edit is freeze-gated
+  (item 18 above). F-053 itself is the closeout of one-format nested `CLAUDE.md` + package import
+  map; it does not implement F-052.
+
 - **HC-SR04 ultrasonic work**: not part of the active Jetson production baseline until the
   sensor path is ready for real-device validation. (Note: `config/default.yaml` still ships
   a populated `ultrasonic:` block — "parked" is a roadmap status, not a config default;

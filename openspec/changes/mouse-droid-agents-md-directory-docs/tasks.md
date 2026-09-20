@@ -261,29 +261,63 @@ Phase 5 is complete. Deviations from the task wording, declared rather than sile
 
 ## Phase 6 — Wiring and documentation
 
-- [ ] 6.1 Root `CLAUDE.md` Surface Map indexes all 17 in-package `CLAUDE.md`, and
+- [x] 6.1 Root `CLAUDE.md` Surface Map indexes all 17 in-package `CLAUDE.md`, and
   `docs/claude/surfaces/README.md` gains the package map.
-- [ ] 6.2 `CHANGELOG.md` entry: WS-8d executed, one format, `agent.md` retired and why, root
+- [x] 6.2 `CHANGELOG.md` entry: WS-8d executed, one format, `agent.md` retired and why, root
   `AGENTS.md` now loads.
-- [ ] 6.3 `NEXT_STEPS.md`: record what this declines — validating the 49 existing `docs/` fences plus
+- [x] 6.3 `NEXT_STEPS.md`: record what this declines — validating the 49 existing `docs/` fences plus
   the 1 in root `README.md`, a `.claude/rules/` migration, a full root `AGENTS.md` audit, and the `arm`
   `Key Files` fix pending F-008.
-- [ ] 6.4 Check `docs/architecture/c4-claude-workforce.md`; it diagrams the workforce surfaces and goes
+- [x] 6.4 Check `docs/architecture/c4-claude-workforce.md`; it diagrams the workforce surfaces and goes
   stale once 17 `CLAUDE.md` are indexed.
-- [ ] 6.5 If a skill is written for this procedure, index it in `SKILLS.md` —
+- [x] 6.5 If a skill is written for this procedure, index it in `SKILLS.md` —
   `tests/regression/test_claude_workforce_aqa.py:290` fails an unindexed skill. `.gitignore:10` already
   negates `.claude/skills/`, so no negation task is needed.
 
 ## Phase 7 — Validation and closeout
 
-- [ ] 7.1 `make gates`, `make test`, `bash scripts/ci.sh`, `python scripts/validate.py --tier fast` all
+- [x] 7.1 `make gates`, `make test`, `bash scripts/ci.sh`, `python scripts/validate.py --tier fast` all
   pass.
-- [ ] 7.2 `python -m tools.ratchet_budgets --strict` exits 0, budgets unchanged. Phase 5 touches `src/`,
+- [x] 7.2 `python -m tools.ratchet_budgets --strict` exits 0, budgets unchanged. Phase 5 touches `src/`,
   so this is a real check rather than a formality.
-- [ ] 7.3 Write `scripts/validations/F-053.sh`; register F-053 in `features.yaml` with
+- [x] 7.3 Write `scripts/validations/F-053.sh`; register F-053 in `features.yaml` with
   `status: in_progress`, `implemented_in: null`, `depends_on: ["F-030"]`.
-- [ ] 7.4 Add the regression pair. The backwards-compat half asserts all 17 `CLAUDE.md` still load and
+- [x] 7.4 Add the regression pair. The backwards-compat half asserts all 17 `CLAUDE.md` still load and
   the 8 existing contracts' invariants are unchanged — the risk of this change is weakening a contract
   while moving prose around it.
-- [ ] 7.5 `openspec/project.md` already carries the registry row (landed in `20cdd63`); update its text
+- [x] 7.5 `openspec/project.md` already carries the registry row (landed in `20cdd63`); update its text
   to match revision 3 rather than adding a second row.
+
+
+### Phase 6 landed — declared deviations
+
+Phase 6 is complete. Deviations from the task wording, declared rather than silent:
+
+- **6.1 Surface Map indexing was already green from Phase 2.** Task 2.4 / Phase 2 deviation
+  made "indexes all 17" a no-op confirmation. This phase added the package import map to
+  `docs/claude/surfaces/README.md` and the root Surface Map Cross-Cutting section, and synced
+  the surfaces README subsystem list to all 17 contracts.
+- **6.4 `c4-claude-workforce.md` body was not stale.** It diagrams edit-time hooks, not the
+  nested `CLAUDE.md` inventory. Related links were added for the Surface Map, surfaces README,
+  and package import map so the workforce surface set stays discoverable. No diagram rewrite.
+- **6.5 no skill was written**, so `SKILLS.md` was not touched — the workforce AQA unindexed-skill
+  gate stays green by omission. `.gitignore` negation for `.claude/skills/` needed no change.
+- **Cloud Agents remain blocked**; work stayed on `gh` + local clone.
+
+### Phase 7 landed — declared deviations
+
+Phase 7 is complete. Deviations from the task wording, declared rather than silent:
+
+- **7.1 / 7.2 run results are recorded in the PR.** Local `make gates`, `make test`,
+  `bash scripts/ci.sh`, `python scripts/validate.py --tier fast`, and
+  `python -m tools.ratchet_budgets --strict` are the closeout evidence.
+- **7.3 registers F-053 as `in_progress` with `implemented_in: null`**, matching the
+  F-030/F-031 convention of a separate bookkeeping closeout after merge. `depends_on: ["F-030"]`.
+- **7.4 backwards-compat half pins purpose blockquotes and invariant titles** for the eight
+  pre-Phase-2 contracts (`orchestrator`, `llm_gateway`, `hardware`, `telemetry`, `learning`,
+  `growth`, `world_model`, `arm`) plus the "all 17 still load and are indexed" assertion. Shared
+  helpers stay in `tests/_claude_md.py`.
+- **ci.yml still not edited** — no `workflow` OAuth scope. Package-map remains in
+  `_CI_EXEMPT_GATES` with the regenerate-and-diff regression as the blocking gate (Phase 5
+  pattern). No F-052 work.
+

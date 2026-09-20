@@ -84,7 +84,7 @@ are already right:
 | Blocking calls inside `async def` (invariant 4) | **Zero** across `src/` (AST scan) |
 | `deque(maxlen=…)` schema-sourced (invariant 8) | **13 of 14** — one violation, `hardware/lidar_driver.py:37` |
 | Factory-First DI (invariant 1) | **Enforced in CI** by `scripts/check_subsystem_boundaries.py`, whole-tree, no diff carve-out |
-| Root `CLAUDE.md` accuracy | **0 drifted claims** — 17-job CI list, Surface Map (14/14 links), Makefile targets all verified |
+| Root `CLAUDE.md` accuracy | **0 drifted claims** — 17-job CI list, Surface Map (17/17 in-package CLAUDE.md links), Makefile targets all verified |
 | `features.yaml` governance | **Clean** — 39/39 `done` entries carry a resolvable `implemented_in` + `validation_command` |
 | Test-tier mirror discipline | **40 of 41** packages have a `tests/unit/<pkg>/` mirror (only `interfaces/` lacks one) |
 

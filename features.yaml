@@ -1488,3 +1488,36 @@ features:
       in-flight software streams; the on-rover promotion and rollback drill are
       operator steps. Evidence closes out as a declared local-only chain because
       reports/endurance is gitignored by policy.
+
+  - id: "F-053"
+    epic: "Quality Gates"
+    name: "Per-directory CLAUDE.md surfaces + package import map (WS-8d)"
+    description: >-
+      Execute docs/planning/TECH_DEBT_REMEDIATION_PLAN.md WS-8d: one nested
+      format (CLAUDE.md), index all 17 in-package surfaces from the root Surface
+      Map, retire the 16 agent.md persona stubs, gate Key Files / named paths /
+      config Literals, and ship a generated package import map (not a dataflow
+      map). Root AGENTS.md loads via a bare @AGENTS.md import; wheel excludes
+      remain defence-in-depth. Declines fence validation, .claude/rules/
+      migration, a full AGENTS.md audit, and the arm Key Files fix pending F-008.
+      Does not implement F-052.
+    category: "non-functional"
+    priority: "high"
+    status: "in_progress"
+    tier: "fast"
+    verification:
+      - "root CLAUDE.md Surface Map indexes all 17 in-package CLAUDE.md surfaces"
+      - "zero tracked agent.md remain; **/agent.md wheel exclude is retained"
+      - "every nested CLAUDE.md Key Files / named path resolves (arm exempt until F-008)"
+      - "docs/architecture/package-map.md matches a fresh generate_package_map.py run"
+      - "the eight pre-F-053 contracts keep their purpose blockquotes and invariant titles"
+    validation_command: "bash scripts/validations/F-053.sh"
+    implemented_in: null
+    depends_on: ["F-030"]
+    notes: >-
+      Phases 1-5 landed on the default branch tip; Phase 6-7 is the wiring and
+      closeout. implemented_in stays null until the dedicated closeout PR, per
+      the F-030/F-031 convention. Cloud Agents are blocked for this account;
+      work stayed on gh + local clone. Workflow-scope may still block ci.yml
+      edits — package-map stays in _CI_EXEMPT_GATES with the regenerate-and-diff
+      regression as the blocking gate (Phase 5 pattern).
