@@ -60,24 +60,51 @@ in the artifact.
 
 ## Phase 2 — Execute WS-8d: one format, every subsystem indexed
 
-- [ ] 2.1 Author a `CLAUDE.md` for the **9** subsystems that have only an `agent.md`: `agents`,
+- [x] 2.1 Author a `CLAUDE.md` for the **9** subsystems that have only an `agent.md`: `agents`,
   `cognitive`, `comms`, `config`, `experience`, `logging`, `memory`, `safety`, `sensing`. Each carries
   the purpose blockquote at lines 3-4 and a `Key Files` section, matching the shape of the existing 8 so
   there is one format rather than two.
-- [ ] 2.2 Fan out authoring to `doc-reconciler` subagents, briefs disprove-shaped ("find a statement the
+- [x] 2.2 Fan out authoring to `doc-reconciler` subagents, briefs disprove-shaped ("find a statement the
   tree contradicts"). Each brief carries the target package's `__init__.py` docstring and its real
   imports inline — a subagent that skips project instructions loads neither.
-- [ ] 2.3 Derive every purpose line from the package's actual Protocols and imports. **No line may
+- [x] 2.3 Derive every purpose line from the package's actual Protocols and imports. **No line may
   restate a root invariant**: 15 of the 16 `agent.md` carry the same three boilerplate lines already in
   the root `CLAUDE.md`, and one of those is enforced by `ruff` `T20`. Repeating them is pure token cost.
-- [ ] 2.4 Add `test_f053_aqa.py::test_every_subsystem_with_in_package_docs_has_a_claude_md`, and assert
+- [x] 2.4 Add `test_f053_aqa.py::test_every_subsystem_with_in_package_docs_has_a_claude_md`, and assert
   the root Surface Map indexes each one — WS-8d's complaint is that 9 subsystems are invisible from the
   root surface, so indexing is half the deliverable.
-- [ ] 2.5 `peer-reviewer` pass per batch; `config-guardian` pass for thresholds or paths restated from a
+- [x] 2.5 `peer-reviewer` pass per batch; `config-guardian` pass for thresholds or paths restated from a
   Pydantic schema into prose.
-- [ ] 2.6 Do **not** create any `AGENTS.md` outside the root. Assert it: an `AGENTS.md` anywhere under
+- [x] 2.6 Do **not** create any `AGENTS.md` outside the root. Assert it: an `AGENTS.md` anywhere under
   `src/` or `tests/` fails. D-1/D-3 — it would be unreachable and would duplicate a purpose statement
   that already exists.
+
+
+
+### Phase 2 landed — declared deviations
+
+Phase 2 is complete. Deviations from the task wording, declared rather than silent:
+
+- **2.2 / 2.5 were not fanned out to `doc-reconciler` / `peer-reviewer` /
+  `config-guardian` subagents.** Cloud Agents are blocked for this account
+  (on-demand usage), and the operator asked for `gh` + local clone only. Authoring
+  and review were done in-process by the implementing agent: each purpose line and
+  Key Files entry was derived from the package `__init__.py` docstring, its
+  `@runtime_checkable` Protocols, and the concrete symbols those imports name.
+  No threshold or path was restated from a Pydantic schema into prose beyond naming
+  the config classes the code already reads (`SafetyConfig`, `ThreeLawsConfig`,
+  `ExperienceConfig`, `MemoryConfig`, `LoggingConfig`).
+- **2.4 added shared helpers in `tests/_claude_md.py`.** Package discovery and
+  Surface Map link detection live beside the Phase 1 import helpers rather than
+  being inlined, matching the Phase 1 deviation pattern and the `tests/_<name>.py`
+  convention. The roster is discovered via `git ls-files`, not hard-coded.
+- **Sensing omits a ring-buffer invariant that would restate root invariant 8.**
+  Task 2.3 forbids restating root invariants; `deque(maxlen=N)` is already in the
+  root `CLAUDE.md`, so the sensing surface keeps fusion / protocol / human-presence
+  rules only.
+- **Root Surface Map gains all 9 new links in this phase** (not deferred to 6.1).
+  Task 2.4 requires the indexing half of WS-8d with the new files; Phase 6.1's
+  "indexes all 17" becomes a no-op confirmation once Phase 2 is green.
 
 ## Phase 3 — Gate the `Key Files` lists, by generalising a gate that works
 

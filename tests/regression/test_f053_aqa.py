@@ -1,4 +1,4 @@
-"""AQA — F-053 Phase 1: the root ``AGENTS.md`` is loaded, and stays out of the wheel.
+"""AQA — F-053 Phase 1+2: root ``AGENTS.md`` loads; every in-package surface is ``CLAUDE.md``.
 
 The defect this pins shut is silent. Claude Code reads ``AGENTS.md`` natively, but
 only *"when you have no ``CLAUDE.md`` in your working directory or above it"* — and
@@ -39,10 +39,12 @@ from tests._claude_md import (
     AGENT_FACING_WHEEL_PATTERNS,
     AGENTS_MD,
     CLAUDE_MD,
+    discover_in_package_doc_packages,
     discover_tracked,
     imported_paths,
     imports_target,
     repo_root,
+    surface_map_indexes,
 )
 from tests._pyproject import load_pyproject
 
@@ -253,4 +255,56 @@ class TestTheRootClaudeMdStaysWithinItsBudget:
         assert actual <= budget, (
             f"root {CLAUDE_MD} is {actual} lines against a configured budget of "
             f"{budget} (DocsConfig.core_max_lines); docs_trimmer fails local-gates"
+        )
+
+
+class TestEveryInPackageSurfaceIsClaudeMd:
+    """Phase 2 / WS-8d: one format, every subsystem with docs indexed from root.
+
+    Nine packages previously carried only ``agent.md``. Phase 2 authors a sibling
+    ``CLAUDE.md`` for each and indexes them from the root Surface Map so they are
+    reachable the same way as the eight that already had one. ``AGENTS.md`` stays
+    at the repository root only (D-1/D-3) — already gated above; re-asserted here
+    for the ``src/`` and ``tests/`` trees the task names explicitly.
+    """
+
+    def test_every_subsystem_with_in_package_docs_has_a_claude_md(self) -> None:
+        packages = discover_in_package_doc_packages()
+        assert packages, "expected in-package agent docs under src/mousedroid/"
+        missing = [
+            pkg
+            for pkg in packages
+            if not (_REPO_ROOT / "src" / "mousedroid" / pkg / CLAUDE_MD).is_file()
+        ]
+        assert missing == [], (
+            "these packages have agent.md and/or CLAUDE.md neighbours but no "
+            f"{CLAUDE_MD} — WS-8d requires one format: {missing}"
+        )
+
+    def test_root_surface_map_indexes_every_in_package_claude_md(self) -> None:
+        packages = discover_in_package_doc_packages()
+        root = _read(Path(CLAUDE_MD))
+        unindexed = [pkg for pkg in packages if not surface_map_indexes(root, pkg)]
+        assert unindexed == [], (
+            "root CLAUDE.md Surface Map does not link these in-package "
+            f"{CLAUDE_MD} files (WS-8d visibility half): {unindexed}"
+        )
+
+    def test_a_backticked_surface_map_mention_is_not_an_index(self) -> None:
+        """Indexing must be a real markdown link, not a code-span mention."""
+        assert surface_map_indexes(
+            f"- [X](file:///src/mousedroid/agents/{CLAUDE_MD}) — ok", "agents"
+        )
+        assert not surface_map_indexes(f"see `file:///src/mousedroid/agents/{CLAUDE_MD}`", "agents")
+
+    def test_no_agents_md_under_src_or_tests(self) -> None:
+        """Task 2.6: do not create any AGENTS.md outside the root."""
+        nested = [
+            str(p)
+            for p in discover_tracked(AGENTS_MD)
+            if p.parts and p.parts[0] in {"src", "tests"}
+        ]
+        assert nested == [], (
+            "F-053 D-1/D-3: AGENTS.md under src/ or tests/ is unreachable without "
+            f"a sibling CLAUDE.md importer and would duplicate purpose prose: {nested}"
         )
