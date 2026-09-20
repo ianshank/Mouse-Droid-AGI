@@ -240,12 +240,12 @@ Issues = "https://github.com/ianshank/mouse-droid-agi/issues"
 [tool.hatch.build.targets.wheel]
 packages = ["src/mousedroid"]
 # Internal agent instructions are not part of the distribution; without this
-# the wheel ships the tracked CLAUDE.md / agent.md / AGENTS.md files to PyPI.
-# AGENTS.md was added to this list by F-053: the pattern was absent while the
-# other two were present, so any AGENTS.md under src/ would have shipped. The
-# roster lives in tests/_claude_md.py::AGENT_FACING_WHEEL_PATTERNS and is pinned
-# by tests/regression/test_f053_aqa.py, so a future agent-facing filename cannot
-# be added in one place and forgotten here.
+# the wheel ships tracked CLAUDE.md / AGENTS.md (and any reintroduced agent.md)
+# under src/ to PyPI. AGENTS.md was added by F-053 Phase 1. F-053 Phase 4
+# retired every agent.md, but keeps "**/agent.md" here on purpose: the pattern
+# costs nothing and removing it would let a reintroduced stub ship. The roster
+# lives in tests/_claude_md.py::AGENT_FACING_WHEEL_PATTERNS and is pinned by
+# tests/regression/test_f053_aqa.py.
 exclude = ["**/CLAUDE.md", "**/agent.md", "**/AGENTS.md"]
 # No force-include block: hatchling's `packages =` above already includes every
 # file under the package directory (dashboard.html ships today despite never

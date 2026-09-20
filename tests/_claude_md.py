@@ -137,10 +137,12 @@ def discover_tracked(filename: str) -> tuple[Path, ...]:
 def discover_in_package_doc_packages() -> tuple[str, ...]:
     """Package names under ``src/mousedroid/`` that carry in-package agent docs.
 
-    A package "has in-package docs" when git tracks an ``agent.md`` and/or a
-    ``CLAUDE.md`` directly inside ``src/mousedroid/<package>/``. Discovered
-    rather than enumerated so a new subsystem that lands either file is
-    covered without editing a roster.
+    A package "has in-package docs" when git tracks a ``CLAUDE.md`` (or a
+    reintroduced ``agent.md``) directly inside ``src/mousedroid/<package>/``.
+    ``agent.md`` was retired by F-053 Phase 4; the name remains in the scan so
+    a reintroduction still counts as an in-package surface for the CLAUDE.md
+    gate. Discovered rather than enumerated so a new subsystem is covered
+    without editing a roster.
 
     Returns:
         Sorted package directory names (not paths).

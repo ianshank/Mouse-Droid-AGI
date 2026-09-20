@@ -30,8 +30,9 @@ F-030's own doc-reconciliation pins repeated the lesson from the other
 direction: `test_ci_gate_wiring_aqa.py`'s `_DOC_GLOBS` was a five-pattern
 directory roster (`*.md`, `docs/**/*.md`, `openspec/**/*.md`,
 `.claude/**/*.md`, `src/**/*.md`) that silently missed 15 git-tracked docs —
-including `tests/agent.md`, a file this exact sprint corrected a stale claim
-in. A sweep is only as complete as its file list; a hand-maintained list of
+including the former tests agent-facing stub (retired by F-053 Phase 4;
+coverage-floor claims now live in `HARNESS_SPEC.md`), a file this exact sprint
+corrected a stale claim in. A sweep is only as complete as its file list; a hand-maintained list of
 prefixes drifts the same way the narrative it is meant to catch does.
 
 ## The procedure
