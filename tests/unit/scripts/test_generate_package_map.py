@@ -29,7 +29,7 @@ class TestDiscoverAndPurpose:
 
     def test_purpose_from_docstring_first_line(self, gen) -> None:
         purpose = gen.purpose_from_init(_SRC / "alpha" / "__init__.py")
-        assert purpose == "Alpha package — root of the fixture graph."
+        assert purpose == "Alpha package - root of the fixture graph."
 
     def test_missing_docstring_fails_closed(self, gen) -> None:
         bare = _FIXTURES / "no_docstring" / "src" / "mousedroid" / "bare" / "__init__.py"
