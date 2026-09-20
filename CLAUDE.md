@@ -90,6 +90,15 @@ Detailed operational guidelines and subsystem contracts live in partitioned surf
 - [Growth & Distillation](file:///src/mousedroid/growth/CLAUDE.md) — Off-loop VLA teacher-student distillation.
 - [World Model](file:///src/mousedroid/world_model/CLAUDE.md) — RSSM latent dynamics, MCTS planner, ONNX engine.
 - [Robot Arm](file:///src/mousedroid/arm/CLAUDE.md) — Parked platform, F-008 freeze notice, MuJoCo envs.
+- [Agents](file:///src/mousedroid/agents/CLAUDE.md) — MCTS navigation agents, AgentProtocol, safety override.
+- [Cognitive](file:///src/mousedroid/cognitive/CLAUDE.md) — Dual-cadence BDI / metacognition / constitutional RL.
+- [Comms](file:///src/mousedroid/comms/CLAUDE.md) — ESP32 serial/WiFi drivers (ESP32CommProtocol).
+- [Config](file:///src/mousedroid/config/CLAUDE.md) — Settings schema and YAML loader.
+- [Experience](file:///src/mousedroid/experience/CLAUDE.md) — LMDB experience logging and versioned records.
+- [Logging](file:///src/mousedroid/logging/CLAUDE.md) — structlog setup, safe extras, URI redaction.
+- [Memory](file:///src/mousedroid/memory/CLAUDE.md) — Working / episodic / semantic tiers and consolidation.
+- [Safety](file:///src/mousedroid/safety/CLAUDE.md) — SafetyMonitorProtocol, SafetyContext, Three Laws.
+- [Sensing](file:///src/mousedroid/sensing/CLAUDE.md) — SensorManager fusion and ObservationProtocol bundles.
 
 ### Cross-Cutting Operational Surfaces
 

@@ -29,10 +29,12 @@ __all__ = [
     "AGENTS_MD",
     "AGENT_FACING_WHEEL_PATTERNS",
     "CLAUDE_MD",
+    "discover_in_package_doc_packages",
     "discover_tracked",
     "imported_paths",
     "imports_target",
     "repo_root",
+    "surface_map_indexes",
 ]
 
 AGENTS_MD = "AGENTS.md"
@@ -114,3 +116,39 @@ def discover_tracked(filename: str) -> tuple[Path, ...]:
             if entry and Path(entry).name == filename
         )
     )
+
+
+def discover_in_package_doc_packages() -> tuple[str, ...]:
+    """Package names under ``src/mousedroid/`` that carry in-package agent docs.
+
+    A package "has in-package docs" when git tracks an ``agent.md`` and/or a
+    ``CLAUDE.md`` directly inside ``src/mousedroid/<package>/``. Discovered
+    rather than enumerated so a new subsystem that lands either file is
+    covered without editing a roster.
+
+    Returns:
+        Sorted package directory names (not paths).
+    """
+    packages: set[str] = set()
+    for filename in (CLAUDE_MD, "agent.md"):
+        for path in discover_tracked(filename):
+            parts = path.parts
+            if (
+                len(parts) == 4
+                and parts[0] == "src"
+                and parts[1] == "mousedroid"
+                and parts[3] == filename
+            ):
+                packages.add(parts[2])
+    return tuple(sorted(packages))
+
+
+def surface_map_indexes(root_claude_md: str, package: str) -> bool:
+    """Whether the root Surface Map links to ``src/mousedroid/<package>/CLAUDE.md``.
+
+    Matches the ``file:///src/mousedroid/...`` link form used by the root
+    ``CLAUDE.md`` Surface Map. Code spans and fences are excluded so a
+    backticked mention cannot satisfy the gate.
+    """
+    needle = f"file:///src/mousedroid/{package}/{CLAUDE_MD}"
+    return needle in _strip_code(root_claude_md)
