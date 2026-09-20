@@ -8,6 +8,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Docs — F-053 / WS-8d: one per-directory format, every subsystem indexed, `agent.md` retired
+
+Executes `docs/planning/TECH_DEBT_REMEDIATION_PLAN.md` **WS-8d** ("Pick one format; index all
+subsystems"). Nested guidance is **`CLAUDE.md` only**:
+
+- Phase 1 made the root `AGENTS.md` load via a bare `@AGENTS.md` import (see prior Unreleased entry)
+  and excluded `**/AGENTS.md` from the wheel.
+- Phase 2 authored `CLAUDE.md` for the nine subsystems that had only an `agent.md`, and the root
+  Surface Map indexes all **17** in-package surfaces.
+- Phase 3 generalised the Key Files / named-path / config-Literal gate across every nested
+  `CLAUDE.md` (arm path exempt until F-008; `llm_gateway` phantom `mock_gateway.py` and illegal
+  `fallback_backend` values fixed).
+- Phase 4 retired the **16** `agent.md` persona stubs. Folder-purpose prose already lived in the
+  sibling `CLAUDE.md` (or, for `tests/`, in `HARNESS_SPEC.md` /
+  `docs/architecture/c4-spec-harness.md`). Zero personas were promoted into `.claude/agents/` —
+  those seven definitions are meta-workforce agents under a different contract. `pyproject.toml`
+  keeps `"**/agent.md"` in the wheel exclude as defence-in-depth.
+- Phase 5 added the generated **package import map** (`scripts/generate_package_map.py` →
+  `docs/architecture/package-map.md` + per-epic splits). It is an import map, not a dataflow map:
+  factory-first DI means `ast` edges diverge from runtime Protocol seams by design.
+- Phase 6 wires the package map into `docs/claude/surfaces/README.md` and the root Surface Map,
+  records declines in `NEXT_STEPS.md`, and registers the closeout validation surface.
+
+**Why retire `agent.md`.** Fifteen of sixteen stubs restated root invariants already enforced by
+ruff / the root `CLAUDE.md`; one (`llm_gateway`) was factually wrong ("velocity commands via local
+LLM"). Keeping two formats meant nine subsystems stayed invisible from the root Surface Map.
+
+**What this declines** (also in `NEXT_STEPS.md`): validating the 49 existing mermaid fences under
+`docs/` plus the one in root `README.md`; a `.claude/rules/` migration; a full root `AGENTS.md`
+audit beyond the contradictions Phase 1 made live; and the `arm/CLAUDE.md` `mock_arm.py` Key Files
+fix pending F-008.
+
 ### Docs — the root `AGENTS.md` is now actually loaded, and stays out of the wheel
 
 `AGENTS.md` has been maintained in this repo as the behavioural contract for agentic workers, and
