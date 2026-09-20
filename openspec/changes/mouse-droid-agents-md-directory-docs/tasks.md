@@ -108,25 +108,53 @@ Phase 2 is complete. Deviations from the task wording, declared rather than sile
 
 ## Phase 3 — Gate the `Key Files` lists, by generalising a gate that works
 
-- [ ] 3.1 Generalise `tests/regression/test_doc_reconciliation_aqa.py::test_orchestrator_claude_md_names_only_real_symbols`
+- [x] 3.1 Generalise `tests/regression/test_doc_reconciliation_aqa.py::test_orchestrator_claude_md_names_only_real_symbols`
   (`:191`) from one file to every nested `CLAUDE.md`: each named symbol resolves to a real `class`/`def`
   in its mapped file, and each named path exists.
-- [ ] 3.2 Prove 3.1 fails before any fix lands — it should immediately flag
+- [x] 3.2 Prove 3.1 fails before any fix lands — it should immediately flag
   `src/mousedroid/llm_gateway/CLAUDE.md:26` (`mock_gateway.py`, which does not exist; the real file is
   `fallback_gateway.py`) and `src/mousedroid/arm/CLAUDE.md:19` (`mock_arm.py`; the real path is
   `src/mousedroid/arm/hardware/mock_arm_driver.py`).
-- [ ] 3.3 Fix the `llm_gateway` entry.
-- [ ] 3.4 Record `src/mousedroid/arm/CLAUDE.md` as a **declared exemption** with F-008 as the reason:
+- [x] 3.3 Fix the `llm_gateway` entry.
+- [x] 3.4 Record `src/mousedroid/arm/CLAUDE.md` as a **declared exemption** with F-008 as the reason:
   `src/mousedroid/arm/**` is denied by the `freeze_gate` PreToolUse hook
   (`.claude/workforce.yaml:23-24`) while `F-008` is `todo`. Enumerate it as a frozenset entry following
   `_GATED_FACTORY_FILES` (`tests/regression/test_f042_aqa.py:14-20`), never a prefix, and add a test
   asserting the exemption lapses when F-008 reaches `done`. Do **not** use
   `MOUSEDROID_WORKFORCE_ALLOW_FROZEN` — a stale filename is not an exceptional edit.
-- [ ] 3.5 Extend 3.1 to config values named in prose. It should catch
+- [x] 3.5 Extend 3.1 to config values named in prose. It should catch
   `src/mousedroid/llm_gateway/CLAUDE.md:20-21`, which requires `LLMConfig.fallback_backend` to target
   "`mock`, `ollama`" while `src/mousedroid/config/schema/llm.py:157` permits only `none`, `llama_cpp`,
   `openai_compatible` — **neither named value is legal**. Revision 1 found this and revision 2 dropped
   it; the gate is what stops that happening again.
+
+
+### Phase 3 landed — declared deviations
+
+Phase 3 is complete. Deviations from the task wording, declared rather than silent:
+
+- **3.1 / 3.5 helpers live in `tests/_claude_md.py`, not inlined.** Path/symbol
+  parsing, config-Literal checks, the arm exemption frozenset, and feature-status
+  lookup share the Phase 1–2 helper module rather than growing a second private
+  copy inside `test_doc_reconciliation_aqa.py`. The orchestrator-specific phantom
+  pin at `:191` is kept; the new tests generalise the *shape* (every nested
+  `CLAUDE.md`) rather than deleting the four-symbol roster.
+- **3.1 also scans whole-file backticked `*.py` paths, not only Key Files.**
+  Task 3.2 requires `arm/CLAUDE.md:19` (`mock_arm.py` in the Invariants section)
+  to fail the gate; that line is outside `## Key Files`. Negative/historical
+  phrasings ("there is no", "split from a monolithic") are excluded so
+  orchestrator/telemetry do not false-positive.
+- **3.2 was proven failing before the fix in-process.** Without the arm
+  exemption and before the llm_gateway edit, the gate reported both
+  `llm_gateway/CLAUDE.md:26` (`mock_gateway.py`) and `arm/CLAUDE.md:19`
+  (`mock_arm.py`). After the fix, `test_arm_key_files_exemption_is_not_vacuous`
+  still asserts the exemption hides a real arm failure.
+- **3.3 did not touch `llm_gateway/agent.md`.** The velocity-commands claim is
+  Phase 4 task 4.3; this phase only fixed the nested `CLAUDE.md` Key Files entry
+  and the `fallback_backend` prose. The purpose blockquote already correctly
+  named `GoalVector`.
+- **3.4 / 3.5 were not fanned out to subagents.** Cloud Agents remain blocked
+  (on-demand usage); work stayed on `gh` + local clone per operator preference.
 
 ## Phase 4 — Retire the 16 `agent.md`
 
