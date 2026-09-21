@@ -8,7 +8,7 @@ correct MissionIntent construction.
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -111,3 +111,44 @@ async def test_agent_source_field(adapter: Any) -> None:
     adapter._degraded = True
     intents = await adapter.decompose("test command")
     assert all(i.agent_source == "adk" for i in intents)
+
+
+@pytest.mark.asyncio
+async def test_start_success_and_decompose() -> None:
+    import sys
+    from unittest.mock import MagicMock
+
+    from mousedroid.agents.adk_adapter import ADKMissionAdapter
+    from mousedroid.config.schema.agents import ADKConfig
+
+    mock_adk = MagicMock()
+    mock_agent_instance = MagicMock()
+    # Mocking what ADK agent returns
+    mock_agent_instance.decompose.return_value = [{"intent": "navigate", "parameters": {}}]
+    mock_adk.Agent.return_value = mock_agent_instance
+
+    # Store old module
+    old_google_adk = sys.modules.get("google.adk")
+    sys.modules["google.adk"] = mock_adk
+
+    try:
+        cfg = ADKConfig(enabled=True, model_name="test")
+        adapter = ADKMissionAdapter(cfg)
+
+        await adapter.start()
+        assert adapter.is_ready is True
+        assert adapter.is_degraded is False
+
+        # Test decompose success path
+        intents = await adapter.decompose("test command")
+        assert len(intents) == 1
+        assert intents[0].agent_source == "adk"
+
+        # Test stop
+        await adapter.stop()
+        assert adapter.is_ready is False
+    finally:
+        if old_google_adk is not None:
+            sys.modules["google.adk"] = old_google_adk
+        else:
+            del sys.modules["google.adk"]

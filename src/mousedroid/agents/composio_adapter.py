@@ -33,7 +33,7 @@ class ComposioToolAdapter:
     async def start(self) -> None:
         """Start the adapter and lazily import Composio SDK."""
         try:
-            import composio  # type: ignore[import-not-found]
+            import composio
             self._composio = composio
             self._client = composio.Composio()
             _log.info("composio_adapter_started")

@@ -43,10 +43,10 @@ class ADKMissionAdapter:
     async def start(self) -> None:
         """Start the adapter and initialize the ADK agent lazily."""
         try:
-            import google.adk as adk  # type: ignore[import-not-found]
+            import google.adk as adk
             self._adk = adk
             # Assuming agent creation looks something like this
-            self._agent = await asyncio.to_thread(adk.Agent)
+            self._agent = await asyncio.to_thread(lambda: adk.Agent(name="mousedroid"))
             self._ready = True
             _log.info("adk_adapter_started")
         except ImportError:

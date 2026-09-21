@@ -6,7 +6,6 @@ so that existing YAML loads byte-identical after a ``git pull``.
 
 from __future__ import annotations
 
-import pytest
 from pydantic import SecretStr
 
 from mousedroid.config.schema.agents import AgentsConfig, HonchoConfig

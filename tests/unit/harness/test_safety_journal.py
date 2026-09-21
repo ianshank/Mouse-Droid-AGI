@@ -7,7 +7,6 @@ entries through the JournalProtocol.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import Any
 
 import pytest
 
@@ -89,7 +88,9 @@ async def test_record_proximity_event(writer: SafetyJournalWriter, journal: _Fak
 
 
 @pytest.mark.asyncio
-async def test_record_mission_transition(writer: SafetyJournalWriter, journal: _FakeJournal) -> None:
+async def test_record_mission_transition(
+    writer: SafetyJournalWriter, journal: _FakeJournal
+) -> None:
     """Mission transitions are logged with state info."""
     await writer.record_mission_transition(
         from_state="PENDING",

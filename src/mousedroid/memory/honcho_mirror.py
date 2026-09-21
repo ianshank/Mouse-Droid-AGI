@@ -65,7 +65,7 @@ class HonchoMemoryMirror:
     async def start(self) -> None:
         """Start the mirror and lazily import Honcho SDK."""
         try:
-            import honcho  # type: ignore[import-not-found]
+            import honcho
 
             self._honcho = honcho
             api_key = self._cfg.api_key.get_secret_value()

@@ -53,11 +53,14 @@ Built by `factory/` and driven by the 30 Hz sense-plan-act orchestrator.
 #### Factory-instantiated, default-OFF pending a soak decision
 
 Wired by `factory/` (the builder is called, metrics-registered) but gated behind an
-`Optional` config block that defaults `None` — same posture as on-device incremental learning
+`Optional` config block that defaults `None` ?" same posture as on-device incremental learning
 (M6). Byte-identical to pre-feature behaviour when the config block is absent.
 
 | Pillar | Module | What it does |
 | ------ | ------ | ------------ |
+| External Mission Decomposition | `agents.adk_adapter` | Google ADK off-loop integration for converting complex NL commands into multi-step GoalVectors |
+| Long-Horizon Memory | `memory.honcho_mirror` | Honcho API integration for syncing safety-critical operator memory and past mission failures |
+| Operator Cloud Actions | `agents.composio_adapter` | Composio API integration allowing safe, dry-run-supported execution of external workflows |
 | Growth & Distillation | `growth/` | Regression-objective (MSE) knowledge distillation to a compact student policy (~0.1k LOC); `factory/growth.py::build_growth_coordinator`. `KnowledgeDistiller` also supports a legacy KL+CE `"classification"` objective, but the wired call site passes `objective="regression"`. |
 
 #### Implemented and unit-tested — not yet wired into the loop

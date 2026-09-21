@@ -147,3 +147,68 @@ async def test_local_journal_authoritative(
         entries.append(e)
     assert len(entries) == 1
     assert entries[0].event == "test"
+
+
+@pytest.mark.asyncio
+async def test_start_success_and_mirror_functions() -> None:
+    from mousedroid.config.schema.agents import HonchoConfig
+    from mousedroid.memory.honcho_mirror import HonchoMemoryMirror
+    from mousedroid.harness.journal.protocol import JournalEntry
+    import sys
+    from unittest.mock import MagicMock, AsyncMock
+    from pydantic import SecretStr
+
+    mock_honcho = MagicMock()
+    mock_client = MagicMock()
+    mock_app = MagicMock()
+    mock_app.create_session.return_value = MagicMock(id="test-session")
+    mock_client.app.create.return_value = mock_app
+
+    # Mocking async methods using AsyncMock
+    mock_client.app.create = AsyncMock(return_value=mock_app)
+    mock_app.create_session = AsyncMock(return_value=MagicMock(id="test-session"))
+    mock_client.message.create = AsyncMock()
+
+    # Recall return mock
+    mock_msg1 = MagicMock()
+    mock_msg1.content = "recalled text"
+    mock_client.message.list = AsyncMock(return_value=MagicMock(items=[mock_msg1]))
+
+    mock_honcho.Client = MagicMock(return_value=mock_client)
+
+    old_honcho = sys.modules.get("honcho")
+    sys.modules["honcho"] = mock_honcho
+
+    try:
+        cfg = HonchoConfig(enabled=True, api_key=SecretStr("test_key"))
+
+        # Mock journal
+        mock_journal = MagicMock()
+        mock_journal.read_since.return_value = [
+            JournalEntry(
+                category="operator_preference", severity="INFO", event="fast mode"
+            ),
+            JournalEntry(category="telemetry", severity="INFO", event="ignored")
+        ]
+
+        mirror = HonchoMemoryMirror(cfg, journal=mock_journal)
+
+        await mirror.start()
+        assert mirror.is_degraded is False
+
+        # Sync
+        count = await mirror.sync_to_remote()
+        assert count == 1
+
+        # Recall
+        results = await mirror.recall("query")
+        assert len(results) == 1
+        assert "recalled text" in results[0]
+
+        # Stop
+        await mirror.stop()
+    finally:
+        if old_honcho is not None:
+            sys.modules["honcho"] = old_honcho
+        else:
+            del sys.modules["honcho"]
