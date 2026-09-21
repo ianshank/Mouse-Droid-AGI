@@ -19,6 +19,10 @@ class JournalEntry:
         event: Stable event identifier (e.g. ``"task_submitted"``).
         payload: Arbitrary JSON-serialisable data.
         agent_id: Optional id of the (sub-)agent that produced the entry.
+        category: Entry type (``"harness"``, ``"safety_state"``,
+            ``"observation"``, ``"mission"``, ``"operator_preference"``).
+        severity: Log-level-style severity tag (``"info"``, ``"warning"``,
+            ``"error"``, ``"critical"``).
     """
 
     ts_ns: int = field(default_factory=time.monotonic_ns)
@@ -27,6 +31,8 @@ class JournalEntry:
     event: str = ""
     payload: dict[str, Any] = field(default_factory=dict)
     agent_id: str | None = None
+    category: str = "harness"
+    severity: str = "info"
 
 
 @runtime_checkable

@@ -39,6 +39,8 @@ class MissionIntent:
         confidence: Parser confidence in [0, 1].
         raw_command: Original NL command.
         parameters: Additional intent-specific parameters.
+        sub_tasks: Decomposed sub-mission steps (from ADK or similar).
+        agent_source: Provenance tag indicating origin of this intent.
     """
 
     intent_type: IntentType = IntentType.UNKNOWN
@@ -46,6 +48,8 @@ class MissionIntent:
     confidence: float = 0.0
     raw_command: str = ""
     parameters: dict[str, float | str] = field(default_factory=dict)
+    sub_tasks: tuple[str, ...] = ()
+    agent_source: str = "local"
 
 
 @runtime_checkable
