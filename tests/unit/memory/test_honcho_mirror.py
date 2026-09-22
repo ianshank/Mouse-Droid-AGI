@@ -172,7 +172,7 @@ async def test_start_success_and_mirror_functions() -> None:
     # Recall return mock
     mock_msg1 = MagicMock()
     mock_msg1.content = "recalled text"
-    mock_client.message.list = AsyncMock(return_value=MagicMock(items=[mock_msg1]))
+    mock_client.query = MagicMock(return_value=[mock_msg1])
 
     mock_honcho.Client = MagicMock(return_value=mock_client)
 
@@ -184,12 +184,12 @@ async def test_start_success_and_mirror_functions() -> None:
 
         # Mock journal
         mock_journal = MagicMock()
-        mock_journal.read_since.return_value = [
-            JournalEntry(
-                category="operator_preference", severity="INFO", event="fast mode"
-            ),
-            JournalEntry(category="telemetry", severity="INFO", event="ignored")
-        ]
+        
+        async def mock_read_all():
+            yield JournalEntry(category="operator_preference", severity="INFO", event="fast mode", ts_ns=2)
+            yield JournalEntry(category="telemetry", severity="INFO", event="ignored", ts_ns=3)
+            
+        mock_journal.read_all.return_value = mock_read_all()
 
         mirror = HonchoMemoryMirror(cfg, journal=mock_journal)
 

@@ -19,7 +19,7 @@ Epic id: `deliberative`. Index: [`package-map.md`](../package-map.md).
 
 **Imports:** `config`, `interfaces`, `logging`, `security`
 
-**Dependents:** `factory`, `orchestrator`
+**Dependents:** `agents`, `factory`, `orchestrator`
 
 ```mermaid
 graph LR
@@ -28,6 +28,7 @@ graph LR
   llm_gateway --> interfaces
   llm_gateway --> logging
   llm_gateway --> security
+  agents --> llm_gateway
   factory --> llm_gateway
   orchestrator --> llm_gateway
 ```

@@ -1397,70 +1397,72 @@ features:
 - id: F-054
   epic: External Agent Integration
   name: External Agent ADK Adapter (MD-E1)
-  description: Define MissionIntent boundary and implement Google ADK lazy adapter
-    for off-loop mission decomposition.
-  category: feature
+  description: Define MissionIntent boundary and implement Google ADK lazy adapter for off-loop mission decomposition.
+  category: functional
   priority: medium
   status: done
   tier: fast
   verification:
   - MissionIntent carries sub_tasks and agent_source
   - ADKMissionAdapter passes dry-run and injection tests
-  implemented_in: 86d3c35
+  validation_command: python -m pytest tests/unit/agents/test_adk_adapter.py -q
+  implemented_in: 2e5a8a52ae52f5220b5d97b49d4cf0f24e535218
   depends_on: []
 - id: F-055
   epic: External Agent Integration
   name: Authoritative Append-Only Journal (MD-E2)
   description: Extend JournalEntry with category and severity; create SafetyJournalWriter.
-  category: safety
+  category: infrastructure
   priority: high
   status: done
   tier: fast
   verification:
   - JournalEntry backwards compat loads
   - SafetyJournalWriter records events correctly
-  implemented_in: 86d3c35
+  validation_command: python -m pytest tests/unit/harness/test_safety_journal.py -q
+  implemented_in: 2e5a8a52ae52f5220b5d97b49d4cf0f24e535218
   depends_on: []
 - id: F-056
   epic: External Agent Integration
   name: Honcho Memory Mirror (MD-E3)
-  description: Implement MemoryMirrorProtocol with Honcho backend for long-horizon
-    operator memory sync.
-  category: feature
+  description: Implement MemoryMirrorProtocol with Honcho backend for long-horizon operator memory sync.
+  category: functional
   priority: medium
   status: done
   tier: fast
   verification:
   - HonchoMemoryMirror correctly filters safety_state entries
   - Mirror strips injected prompts on recall
-  implemented_in: 86d3c35
+  validation_command: python -m pytest tests/unit/memory/test_honcho_mirror.py -q
+  implemented_in: 2e5a8a52ae52f5220b5d97b49d4cf0f24e535218
   depends_on:
   - F-055
 - id: F-057
   epic: External Agent Integration
   name: Composio Cloud Tool Adapter (MD-E4)
-  description: Implement CloudToolAdapterProtocol with Composio backend for operator-approved
-    cloud actions.
-  category: feature
+  description: Implement CloudToolAdapterProtocol with Composio backend for operator-approved cloud actions.
+  category: functional
   priority: medium
   status: done
   tier: fast
   verification:
   - ComposioToolAdapter enforces allowed_tools scoping
   - Dry run mode correctly logs instead of executing
-  implemented_in: 86d3c35
+  validation_command: python -m pytest tests/unit/agents/test_composio_adapter.py -q
+  implemented_in: 2e5a8a52ae52f5220b5d97b49d4cf0f24e535218
   depends_on: []
 - id: F-058
   epic: External Agent Integration
   name: External Agent Factory Wiring
-  description: Add build_mission_decomposer, build_memory_mirror, and build_cloud_tool_adapter
-    to factory builders and orchestrator safety interlocks.
-  category: tech-debt
+  description: Add build_mission_decomposer, build_memory_mirror, and build_cloud_tool_adapter to factory builders and orchestrator safety interlocks.
+  category: infrastructure
   priority: medium
-  status: todo
-  tier: slow
+  status: done
+  tier: fast
   verification:
   - Agents dynamically wired based on config.agents payload
+  validation_command: python -m pytest tests/unit/factory/ -q
+  implemented_in: 2e5a8a52ae52f5220b5d97b49d4cf0f24e535218
   depends_on:
   - F-054
   - F-055

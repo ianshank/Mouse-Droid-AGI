@@ -275,7 +275,7 @@ def _resolve_under(package_dir: Path, rel: str, root: Path) -> Path | None:
         if hits:
             return min(hits, key=lambda p: len(p.relative_to(package_dir).parts))
         repo_hits = [
-            p for p in root.rglob(name) if ".git" not in p.parts and ".venv" not in p.parts
+            p for p in root.rglob(name) if ".git" not in p.parts and ".venv" not in p.parts and ".claude" not in p.parts
         ]
         if len(repo_hits) == 1:
             return repo_hits[0]

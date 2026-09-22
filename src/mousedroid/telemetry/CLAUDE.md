@@ -24,7 +24,7 @@
   monolithic `server.py` per ADR-017).
 - `metrics/` — In-memory lock-free `MetricsRegistry` and the Prometheus text
   format renderer (`registry.py`, `primitives.py`, plus one
-  `_registry_<area>.py` mixin per metric family — split from a monolithic
-  `metrics.py` per the same ADR).
-- `tests/unit/telemetry/` — test suites (incl. `test_telemetry_server.py`,
-  `test_prometheus_alerts_yml.py`).
+  `_registry_<area>.py` mixin per metric family — split from a 
+  monolithic `metrics.py` per the same ADR).
+- `tests/unit/telemetry/` — test suites (incl. `../../tests/unit/telemetry/test_telemetry_server.py`,
+  `../../tests/unit/telemetry/test_prometheus_alerts_yml.py`).

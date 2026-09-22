@@ -79,7 +79,7 @@ async def test_start_success_and_execute_tool() -> None:
 
     mock_composio = MagicMock()
     mock_client = MagicMock()
-    mock_client.execute.return_value = {"status": "success"}
+    mock_client.execute_action.return_value = {"status": "success"}
     mock_composio.Composio.return_value = mock_client
 
     old_composio = sys.modules.get("composio")
@@ -94,7 +94,7 @@ async def test_start_success_and_execute_tool() -> None:
 
         # Test execute tool success path
         res = await adapter.execute_tool("send_email", {"to": "test"})
-        assert res["status"] == "success"
+        assert res["result"]["status"] == "success"
 
         # Test stop
         await adapter.stop()
