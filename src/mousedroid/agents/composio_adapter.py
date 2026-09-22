@@ -34,11 +34,15 @@ class ComposioToolAdapter:
     async def start(self) -> None:
         """Start the adapter and lazily import Composio SDK."""
         try:
-            import composio
+            import importlib
 
+            composio = importlib.import_module("composio")
             self._composio = composio
-            api_key = self._cfg.api_key.get_secret_value() or None
-            self._client = composio.Composio(api_key=api_key)
+            api_key = self._cfg.api_key.get_secret_value()
+            if api_key:
+                self._client = composio.Composio(api_key=api_key)
+            else:
+                self._client = composio.Composio()
             self._degraded = False
             _log.info("composio_adapter_started")
         except ImportError:

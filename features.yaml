@@ -1,1470 +1,1621 @@
+# Feature catalog — the cognitive anchor of the spec-driven harness.
+# See HARNESS_SPEC.md §5. There is NO `passes` field: a feature is `done` only
+# when its validation_command exits 0 under scripts/validate.py (the Golden Rule).
+#
+# implemented_in must be a RESOLVABLE git ref (validate.py --strict-git checks it):
+#   - pre-existing subsystems → their landing commit SHA on main
+#   - harness-introduced features → the working branch (POST-MERGE: replace with
+#     the squash/merge SHA so the nightly --strict-git job stays green on main).
 features:
-  - id: F-001
-    epic: Harness
-    name: Spec-driven harness initialized
-    description: HARNESS_SPEC.md, features.yaml, features.schema.json, validate.py and
+  - id: "F-001"
+    epic: "Harness"
+    name: "Spec-driven harness initialized"
+    description: >-
+      HARNESS_SPEC.md, features.yaml, features.schema.json, validate.py and
       select_next.py exist and parse. The harness can validate itself.
-    category: infrastructure
-    priority: critical
-    status: done
-    tier: fast
+    category: "infrastructure"
+    priority: "critical"
+    status: "done"
+    tier: "fast"
     verification:
-    - Core harness files present and parseable
-    - scripts/validations/F-001.sh exits 0
-    validation_command: bash scripts/validations/F-001.sh
-    implemented_in: 7f375815f53729ab54a271df6ae5835b8d1356d4
+      - "Core harness files present and parseable"
+      - "scripts/validations/F-001.sh exits 0"
+    validation_command: "bash scripts/validations/F-001.sh"
+    implemented_in: "7f375815f53729ab54a271df6ae5835b8d1356d4"
     depends_on: []
-    notes: Routed through F-001.sh (not validate.py --check F-001) to avoid the recursive
-      self-reference in the upstream template example.
-  - id: F-002
-    epic: Configuration
-    name: Config overlays validate against the Pydantic schema
-    description: Every config/*.yaml overlay loads cleanly against src/mousedroid/config/schema/
+    notes: "Routed through F-001.sh (not validate.py --check F-001) to avoid the recursive self-reference in the upstream template example."
+
+  - id: "F-002"
+    epic: "Configuration"
+    name: "Config overlays validate against the Pydantic schema"
+    description: >-
+      Every config/*.yaml overlay loads cleanly against src/mousedroid/config/schema/
       (the single source of truth). Guards the no-hardcoded-values invariant.
-    category: infrastructure
-    priority: critical
-    status: done
-    tier: fast
+    category: "infrastructure"
+    priority: "critical"
+    status: "done"
+    tier: "fast"
     verification:
-    - scripts/validate_configs.py loads all overlays and exits 0
-    validation_command: python scripts/validate_configs.py
-    implemented_in: eff85fb43d9f95897b38a1562e1458ae6eca6005
-    depends_on:
-    - F-001
-    notes: ''
-  - id: F-003
-    epic: Harness
-    name: Harness self-test (AQA) passes
-    description: features.yaml parses, validates against features.schema.json, the dependency
-      DAG is acyclic with no dangling edges, every referenced validation script exists,
-      and the runner modules import.
-    category: validation
-    priority: high
-    status: done
-    tier: fast
+      - "scripts/validate_configs.py loads all overlays and exits 0"
+    validation_command: "python scripts/validate_configs.py"
+    implemented_in: "eff85fb43d9f95897b38a1562e1458ae6eca6005"
+    depends_on: ["F-001"]
+    notes: ""
+
+  - id: "F-003"
+    epic: "Harness"
+    name: "Harness self-test (AQA) passes"
+    description: >-
+      features.yaml parses, validates against features.schema.json, the dependency
+      DAG is acyclic with no dangling edges, every referenced validation script
+      exists, and the runner modules import.
+    category: "validation"
+    priority: "high"
+    status: "done"
+    tier: "fast"
     verification:
-    - features.yaml validates against features.schema.json
-    - DAG has no cycles and no dangling depends_on edges
-    - All referenced scripts/validations/*.sh exist
-    validation_command: python -m pytest tests/regression/test_harness_spec_aqa.py -q
-    implemented_in: 7f375815f53729ab54a271df6ae5835b8d1356d4
-    depends_on:
-    - F-001
-    notes: ''
-  - id: F-004
-    epic: Skills
-    name: Project skills + builtin skill docs are hygienic
-    description: 'Skill-validation regression gate over .claude/skills/<name>/SKILL.md
-      (migrated from the legacy .claude/commands layout, WS-F7a): front-matter present,
-      referenced repo paths exist, no hardcoded host/IP leaks.'
-    category: infrastructure
-    priority: high
-    status: done
-    tier: fast
+      - "features.yaml validates against features.schema.json"
+      - "DAG has no cycles and no dangling depends_on edges"
+      - "All referenced scripts/validations/*.sh exist"
+    validation_command: "python -m pytest tests/regression/test_harness_spec_aqa.py -q"
+    implemented_in: "7f375815f53729ab54a271df6ae5835b8d1356d4"
+    depends_on: ["F-001"]
+    notes: ""
+
+  - id: "F-004"
+    epic: "Skills"
+    name: "Project skills + builtin skill docs are hygienic"
+    description: >-
+      Skill-validation regression gate over .claude/skills/<name>/SKILL.md
+      (migrated from the legacy .claude/commands layout, WS-F7a): front-matter
+      present, referenced repo paths exist, no hardcoded host/IP leaks.
+    category: "infrastructure"
+    priority: "high"
+    status: "done"
+    tier: "fast"
     verification:
-    - tests/regression/test_skill_commands_aqa.py passes
-    validation_command: python -m pytest tests/regression/test_skill_commands_aqa.py
-      -q
-    implemented_in: cf191277cb73c93e7133bcd0ce241bc330e37b71
-    depends_on:
-    - F-001
-    notes: ''
-  - id: F-005
-    epic: Deliberative brain
-    name: LLM gateway factory dispatch + metrics threading
-    description: 'build_llm_gateway dispatches on backend, threads fallback_retry_cooldown_s
-      and the keyword-only metrics registry, and preserves byte-identical legacy construction
-      (PR #107/#115 contracts).'
-    category: functional
-    priority: high
-    status: done
-    tier: fast
+      - "tests/regression/test_skill_commands_aqa.py passes"
+    validation_command: "python -m pytest tests/regression/test_skill_commands_aqa.py -q"
+    implemented_in: "cf191277cb73c93e7133bcd0ce241bc330e37b71"
+    depends_on: ["F-001"]
+    notes: ""
+
+  - id: "F-005"
+    epic: "Deliberative brain"
+    name: "LLM gateway factory dispatch + metrics threading"
+    description: >-
+      build_llm_gateway dispatches on backend, threads fallback_retry_cooldown_s
+      and the keyword-only metrics registry, and preserves byte-identical legacy
+      construction (PR #107/#115 contracts).
+    category: "functional"
+    priority: "high"
+    status: "done"
+    tier: "fast"
     verification:
-    - tests/unit/factory/test_build_llm_gateway_dispatch.py passes
-    validation_command: python -m pytest tests/unit/factory/test_build_llm_gateway_dispatch.py
-      -q
-    implemented_in: 1362ef8f04db622a88f63ad9dec1e3ed1cb2b445
-    depends_on:
-    - F-001
-    notes: ''
-  - id: F-006
-    epic: Validation efficiency
-    name: Pure validation helpers stay sensor-stack-free
-    description: Importing the pure validation modules never drags numpy/cv2/pyaudio
-      into the process (PEP 562 lazy re-export contract).
-    category: non-functional
-    priority: high
-    status: done
-    tier: fast
+      - "tests/unit/factory/test_build_llm_gateway_dispatch.py passes"
+    validation_command: "python -m pytest tests/unit/factory/test_build_llm_gateway_dispatch.py -q"
+    implemented_in: "1362ef8f04db622a88f63ad9dec1e3ed1cb2b445"
+    depends_on: ["F-001"]
+    notes: ""
+
+  - id: "F-006"
+    epic: "Validation efficiency"
+    name: "Pure validation helpers stay sensor-stack-free"
+    description: >-
+      Importing the pure validation modules never drags numpy/cv2/pyaudio into
+      the process (PEP 562 lazy re-export contract).
+    category: "non-functional"
+    priority: "high"
+    status: "done"
+    tier: "fast"
     verification:
-    - tests/regression/test_validation_import_decoupling.py passes
-    validation_command: python -m pytest tests/regression/test_validation_import_decoupling.py
-      -q
-    implemented_in: 5aba102088f250d4cea79401449edd5b4b6a7a0b
-    depends_on:
-    - F-001
-    notes: ''
-  - id: F-007
-    epic: Cognitive pillars
-    name: Ten-pillar validation harness is green
-    description: The async validate_all_pillars dispatcher (factory-builder + pytest-delegation
+      - "tests/regression/test_validation_import_decoupling.py passes"
+    validation_command: "python -m pytest tests/regression/test_validation_import_decoupling.py -q"
+    implemented_in: "5aba102088f250d4cea79401449edd5b4b6a7a0b"
+    depends_on: ["F-001"]
+    notes: ""
+
+  - id: "F-007"
+    epic: "Cognitive pillars"
+    name: "Ten-pillar validation harness is green"
+    description: >-
+      The async validate_all_pillars dispatcher (factory-builder + pytest-delegation
       patterns) and its CLI behave correctly under mock hardware.
-    category: validation
-    priority: high
-    status: done
-    tier: slow
+    category: "validation"
+    priority: "high"
+    status: "done"
+    tier: "slow"
     verification:
-    - tests/unit/validation/test_pillars.py passes
-    - tests/integration/test_validate_pillars_dispatch.py passes
-    validation_command: python -m pytest tests/unit/validation/test_pillars.py tests/integration/test_validate_pillars_dispatch.py
-      -q
-    implemented_in: e92d9900bb751f17e8362eaa25947ef0ab5e1421
-    depends_on:
-    - F-001
-    notes: "Slow tier \xE2\u20AC\u201D runs nightly, not on every push."
-  - id: F-008
-    epic: Rover bring-up
-    name: USB-C rover smoke passes on the physical Jetson
-    description: "The Wave Rover USB-C wiring is discoverable and the power-chain smoke\
-      \ gate passes on real hardware (PR #106). Hardware-tier \xE2\u20AC\u201D runs\
-      \ only on the self-hosted Jetson runner, never in hosted CI."
-    category: functional
-    priority: critical
-    status: todo
-    tier: hardware
+      - "tests/unit/validation/test_pillars.py passes"
+      - "tests/integration/test_validate_pillars_dispatch.py passes"
+    validation_command: "python -m pytest tests/unit/validation/test_pillars.py tests/integration/test_validate_pillars_dispatch.py -q"
+    implemented_in: "e92d9900bb751f17e8362eaa25947ef0ab5e1421"
+    depends_on: ["F-001"]
+    notes: "Slow tier — runs nightly, not on every push."
+
+  - id: "F-008"
+    epic: "Rover bring-up"
+    name: "USB-C rover smoke passes on the physical Jetson"
+    description: >-
+      The Wave Rover USB-C wiring is discoverable and the power-chain smoke gate
+      passes on real hardware (PR #106). Hardware-tier — runs only on the
+      self-hosted Jetson runner, never in hosted CI.
+    category: "functional"
+    priority: "critical"
+    status: "todo"
+    tier: "hardware"
     verification:
-    - scripts/jetson_smoke_test.sh exits 0 on the rover
-    - usbc_endpoint_* / power_chain_probe_complete structlog events present
-    validation_command: bash scripts/jetson_smoke_test.sh
+      - "scripts/jetson_smoke_test.sh exits 0 on the rover"
+      - "usbc_endpoint_* / power_chain_probe_complete structlog events present"
+    validation_command: "bash scripts/jetson_smoke_test.sh"
     implemented_in: null
-    depends_on:
-    - F-001
-    notes: Cannot reach `done` in hosted CI; verify with `validate.py --tier hardware`
-      on the rover.
-  - id: F-015
-    epic: Security
-    name: Secret-scan gate blocks the next credential leak
-    description: gitleaks scans the full history in CI (advisory until the 7-green-run
-      promotion) and the working tree in scripts/ci.sh, with a regex-only allowlist
-      (.gitleaks.toml) so fake-key placeholders never require path-based waivers (WS-0.4,
-      rev. B).
-    category: infrastructure
-    priority: high
-    status: done
-    tier: fast
+    depends_on: ["F-001"]
+    notes: "Cannot reach `done` in hosted CI; verify with `validate.py --tier hardware` on the rover."
+
+  # F-009..F-014 are intentionally SKIPPED: those IDs are already used by the
+  # independent SMOKE_REPORT.md operational-findings namespace (see
+  # HARNESS_SPEC.md "F-number namespaces"). The catalog continues at F-015.
+  - id: "F-015"
+    epic: "Security"
+    name: "Secret-scan gate blocks the next credential leak"
+    description: >-
+      gitleaks scans the full history in CI (advisory until the 7-green-run
+      promotion) and the working tree in scripts/ci.sh, with a regex-only
+      allowlist (.gitleaks.toml) so fake-key placeholders never require
+      path-based waivers (WS-0.4, rev. B).
+    category: "infrastructure"
+    priority: "high"
+    status: "done"
+    tier: "fast"
     verification:
-    - tests/regression/test_secret_scan_gate.py passes
-    - ci.yml gitleaks job pinned + advisory; .gitleaks.toml regex-only allowlist
-    validation_command: python -m pytest tests/regression/test_secret_scan_gate.py -q
-    implemented_in: a12c95b3855bd51667bace17e6dc150e69b1b4e2
-    depends_on:
-    - F-001
-    notes: 'Runbook: docs/runbooks/secret-scanning.md.'
-  - id: F-016
-    epic: Hygiene
-    name: Planning docs stay forward-looking (truth reconciliation)
-    description: NEXT_STEPS.md carries only forward-looking items (landed work lives
-      in CHANGELOG.md), the T3/arm contradiction is resolved as pause-at-T2 with an
-      explicit unfreeze condition, the Phase-5 vocabulary collision is disambiguated,
-      frozen skills carry validated status front-matter, and tools/doc_hygiene.py guards
-      against re-drift (WS-1, rev. B).
-    category: infrastructure
-    priority: medium
-    status: done
-    tier: fast
+      - "tests/regression/test_secret_scan_gate.py passes"
+      - "ci.yml gitleaks job pinned + advisory; .gitleaks.toml regex-only allowlist"
+    validation_command: "python -m pytest tests/regression/test_secret_scan_gate.py -q"
+    implemented_in: "a12c95b3855bd51667bace17e6dc150e69b1b4e2"
+    depends_on: ["F-001"]
+    notes: "Runbook: docs/runbooks/secret-scanning.md."
+
+  - id: "F-016"
+    epic: "Hygiene"
+    name: "Planning docs stay forward-looking (truth reconciliation)"
+    description: >-
+      NEXT_STEPS.md carries only forward-looking items (landed work lives in
+      CHANGELOG.md), the T3/arm contradiction is resolved as pause-at-T2 with
+      an explicit unfreeze condition, the Phase-5 vocabulary collision is
+      disambiguated, frozen skills carry validated status front-matter, and
+      tools/doc_hygiene.py guards against re-drift (WS-1, rev. B).
+    category: "infrastructure"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
     verification:
-    - tests/unit/tools/test_doc_hygiene.py passes
-    - tests/regression/test_next_steps_reconciled.py passes
-    validation_command: python -m pytest tests/unit/tools/test_doc_hygiene.py tests/regression/test_next_steps_reconciled.py
-      -q
-    implemented_in: a12c95b3855bd51667bace17e6dc150e69b1b4e2
-    depends_on:
-    - F-001
-    notes: Advisory guard runs in scripts/ci.sh.
-  - id: F-017
-    epic: Deployment
-    name: Per-host docker.env overrides survive a reflash
-    description: config/docker.env.example enumerates the live LLM host overrides, the
-      WARN-only host_env_keys preflight check flags key-set drift on the deployed env
-      file (names only, never values), and scripts/host_bootstrap.sh seeds/repairs the
-      host surface with dry-run, backup, and rollback safety (WS-3.1, rev. B).
-    category: infrastructure
-    priority: high
-    status: done
-    tier: fast
+      - "tests/unit/tools/test_doc_hygiene.py passes"
+      - "tests/regression/test_next_steps_reconciled.py passes"
+    validation_command: "python -m pytest tests/unit/tools/test_doc_hygiene.py tests/regression/test_next_steps_reconciled.py -q"
+    implemented_in: "a12c95b3855bd51667bace17e6dc150e69b1b4e2"
+    depends_on: ["F-001"]
+    notes: "Advisory guard runs in scripts/ci.sh."
+
+  - id: "F-017"
+    epic: "Deployment"
+    name: "Per-host docker.env overrides survive a reflash"
+    description: >-
+      config/docker.env.example enumerates the live LLM host overrides, the
+      WARN-only host_env_keys preflight check flags key-set drift on the
+      deployed env file (names only, never values), and
+      scripts/host_bootstrap.sh seeds/repairs the host surface with dry-run,
+      backup, and rollback safety (WS-3.1, rev. B).
+    category: "infrastructure"
+    priority: "high"
+    status: "done"
+    tier: "fast"
     verification:
-    - tests/unit/validation/test_preflight_host_env.py passes
-    - tests/regression/test_host_bootstrap_script.py passes
-    validation_command: python -m pytest tests/unit/validation/test_preflight_host_env.py
-      tests/unit/validation/test_preflight_real_branches.py tests/regression/test_host_bootstrap_script.py
-      -q
-    implemented_in: a12c95b3855bd51667bace17e6dc150e69b1b4e2
-    depends_on:
-    - F-001
-    notes: 'Check is OFF by default (host_env: enabled: false); enable on the Jetson
-      overlay.'
-  - id: F-018
-    epic: Validation efficiency
-    name: Full-validation runs feed the trend journal and surface regressions
-    description: Phase-2 preflight in jetson_full_validation.sh appends to a persistent
-      trend journal (under the report root, rotation-capped), the Phase-4 SUMMARY.md
-      is rendered by a tested pure module with a Trend section (bash fallback for python-less
-      hosts), and mousedroid-trend.{service, timer} sample non-exclusive checks hourly
-      between manual runs (WS-4, rev. B). The timer's check subset is regression-pinned
-      so it can never contend with the orchestrator for camera/UART/LiDAR devices.
-    category: validation
-    priority: medium
-    status: done
-    tier: fast
+      - "tests/unit/validation/test_preflight_host_env.py passes"
+      - "tests/regression/test_host_bootstrap_script.py passes"
+    validation_command: "python -m pytest tests/unit/validation/test_preflight_host_env.py tests/unit/validation/test_preflight_real_branches.py tests/regression/test_host_bootstrap_script.py -q"
+    implemented_in: "a12c95b3855bd51667bace17e6dc150e69b1b4e2"
+    depends_on: ["F-001"]
+    notes: "Check is OFF by default (host_env: enabled: false); enable on the Jetson overlay."
+
+  - id: "F-018"
+    epic: "Validation efficiency"
+    name: "Full-validation runs feed the trend journal and surface regressions"
+    description: >-
+      Phase-2 preflight in jetson_full_validation.sh appends to a persistent
+      trend journal (under the report root, rotation-capped), the Phase-4
+      SUMMARY.md is rendered by a tested pure module with a Trend section
+      (bash fallback for python-less hosts), and mousedroid-trend.{service,
+      timer} sample non-exclusive checks hourly between manual runs (WS-4,
+      rev. B). The timer's check subset is regression-pinned so it can never
+      contend with the orchestrator for camera/UART/LiDAR devices.
+    category: "validation"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
     verification:
-    - tests/unit/validation/test_summary.py passes
-    - tests/regression/test_trend_timer_units.py pins the non-exclusive check subset
-    validation_command: python -m pytest tests/unit/validation/test_summary.py tests/unit/scripts/test_render_validation_summary.py
-      tests/regression/test_trend_timer_units.py -q
-    implemented_in: a12c95b3855bd51667bace17e6dc150e69b1b4e2
-    depends_on:
-    - F-001
-    - F-017
-    notes: Install the timer via scripts/host_bootstrap.sh --with-trend-timer.
-  - id: F-019
-    epic: Observability
-    name: LLM-gateway metric families are dashboarded and alerted
-    description: 'docs/grafana_dashboard.json carries panels for all four PR #115 LLM
-      families (token burn, latency percentiles, served-by-tier, budget exceeded) and
-      config/prometheus/alerts.yml gains the mousedroid_llm_gateway group (latency p95,
-      budget spikes, degraded fallback serving, token burn) - closing the WS-5 observability
-      deferral (rev. B). Every expr resolves against generate_metrics_sample(); every
-      rule carries severity + config_ref.'
-    category: infrastructure
-    priority: medium
-    status: done
-    tier: fast
+      - "tests/unit/validation/test_summary.py passes"
+      - "tests/regression/test_trend_timer_units.py pins the non-exclusive check subset"
+    validation_command: "python -m pytest tests/unit/validation/test_summary.py tests/unit/scripts/test_render_validation_summary.py tests/regression/test_trend_timer_units.py -q"
+    implemented_in: "a12c95b3855bd51667bace17e6dc150e69b1b4e2"
+    depends_on: ["F-001", "F-017"]
+    notes: "Install the timer via scripts/host_bootstrap.sh --with-trend-timer."
+
+  - id: "F-019"
+    epic: "Observability"
+    name: "LLM-gateway metric families are dashboarded and alerted"
+    description: >-
+      docs/grafana_dashboard.json carries panels for all four PR #115 LLM
+      families (token burn, latency percentiles, served-by-tier, budget
+      exceeded) and config/prometheus/alerts.yml gains the
+      mousedroid_llm_gateway group (latency p95, budget spikes, degraded
+      fallback serving, token burn) - closing the WS-5 observability
+      deferral (rev. B). Every expr resolves against
+      generate_metrics_sample(); every rule carries severity + config_ref.
+    category: "infrastructure"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
     verification:
-    - tests/unit/telemetry/test_grafana_dashboard_json.py passes (incl. LLM panel needles)
-    - tests/unit/telemetry/test_prometheus_alerts_yml.py passes
-    validation_command: python -m pytest tests/unit/telemetry/test_grafana_dashboard_json.py
-      tests/unit/telemetry/test_prometheus_alerts_yml.py -q
-    implemented_in: a12c95b3855bd51667bace17e6dc150e69b1b4e2
-    depends_on:
-    - F-001
-    notes: 'Operator action: import the dashboard + load alerts.yml on the monitoring
-      host.'
-  - id: F-020
-    epic: Hygiene
-    name: Redundancy and gap audit pipeline is findings-only and self-testing
-    description: scripts/dead_code_audit.py runs vulture in-process (dated JSON report,
-      allowlist for verified-alive Protocol/DI symbols, advisory unless --strict), an
-      AST import-graph freeze pins that no active module gains a module-scope dependency
-      on the deferred arm platform or the parked HC-SR04 driver, and scripts/check_advisory_promotions.py
-      WARNs on advisory CI stages that outlive their tracked promotion window (.github/advisory_stages.yaml)
-      (WS-8, rev. B). Deletion decisions stay with a human - the audit only reports.
-    category: validation
-    priority: medium
-    status: done
-    tier: slow
+      - "tests/unit/telemetry/test_grafana_dashboard_json.py passes (incl. LLM panel needles)"
+      - "tests/unit/telemetry/test_prometheus_alerts_yml.py passes"
+    validation_command: "python -m pytest tests/unit/telemetry/test_grafana_dashboard_json.py tests/unit/telemetry/test_prometheus_alerts_yml.py -q"
+    implemented_in: "a12c95b3855bd51667bace17e6dc150e69b1b4e2"
+    depends_on: ["F-001"]
+    notes: "Operator action: import the dashboard + load alerts.yml on the monitoring host."
+
+  - id: "F-020"
+    epic: "Hygiene"
+    name: "Redundancy and gap audit pipeline is findings-only and self-testing"
+    description: >-
+      scripts/dead_code_audit.py runs vulture in-process (dated JSON report,
+      allowlist for verified-alive Protocol/DI symbols, advisory unless
+      --strict), an AST import-graph freeze pins that no active module gains
+      a module-scope dependency on the deferred arm platform or the parked
+      HC-SR04 driver, and scripts/check_advisory_promotions.py WARNs on
+      advisory CI stages that outlive their tracked promotion window
+      (.github/advisory_stages.yaml) (WS-8, rev. B). Deletion decisions stay
+      with a human - the audit only reports.
+    category: "validation"
+    priority: "medium"
+    status: "done"
+    tier: "slow"
     verification:
-    - planted-defect tests prove the audit pipeline finds/suppresses/reports
-    - import-graph freeze green on the current tree
-    validation_command: python -m pytest tests/regression/test_dead_code_audit.py tests/regression/test_import_graph_freeze.py
-      tests/unit/scripts/test_check_advisory_promotions.py -q
-    implemented_in: a12c95b3855bd51667bace17e6dc150e69b1b4e2
-    depends_on:
-    - F-001
-    notes: Slow tier - runs nightly; the ci.sh stages are advisory mirrors.
-  - id: F-021
-    epic: Hygiene
-    name: Cyclomatic-complexity gate enforced with an empty src baseline
-    description: ruff C901 + [tool.ruff.lint.mccabe] max-complexity = 15 is enforced
-      across src/tests/scripts. Every pre-existing src/ offender (render_prometheus,
-      telemetry server _handle_mission_post / _broadcast_loop, orchestrator start /
-      stop) was decomposed below the ceiling, so the src/ C901 baseline is empty; only
-      the scripts/ procedural-glue glob is baselined. A future change cannot silently
-      drop the gate or re-open a src/ C901 ignore to dodge a decomposition. See ADR-014.
-    category: validation
-    priority: medium
-    status: done
-    tier: fast
+      - "planted-defect tests prove the audit pipeline finds/suppresses/reports"
+      - "import-graph freeze green on the current tree"
+    validation_command: "python -m pytest tests/regression/test_dead_code_audit.py tests/regression/test_import_graph_freeze.py tests/unit/scripts/test_check_advisory_promotions.py -q"
+    implemented_in: "a12c95b3855bd51667bace17e6dc150e69b1b4e2"
+    depends_on: ["F-001"]
+    notes: "Slow tier - runs nightly; the ci.sh stages are advisory mirrors."
+
+  - id: "F-021"
+    epic: "Hygiene"
+    name: "Cyclomatic-complexity gate enforced with an empty src baseline"
+    description: >-
+      ruff C901 + [tool.ruff.lint.mccabe] max-complexity = 15 is enforced across
+      src/tests/scripts. Every pre-existing src/ offender (render_prometheus,
+      telemetry server _handle_mission_post / _broadcast_loop, orchestrator
+      start / stop) was decomposed below the ceiling, so the src/ C901 baseline
+      is empty; only the scripts/ procedural-glue glob is baselined. A future
+      change cannot silently drop the gate or re-open a src/ C901 ignore to
+      dodge a decomposition. See ADR-014.
+    category: "validation"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
     verification:
-    - C901 selected + max-complexity=15 pinned in pyproject.toml
-    - no src/ C901 per-file-ignore; no src function exceeds the ceiling
-    validation_command: python -m pytest tests/regression/test_complexity_gate.py -q
-    implemented_in: 40a6399045ac520824bf706debed8ed7cdd37200
-    depends_on:
-    - F-001
-    notes: ADR-014.
-  - id: F-022
-    epic: Cognitive Integration
-    name: Growth pillar wired as off-loop VLA distillation (default-OFF, soak-gated)
-    description: The growth pillar (knowledge distillation) is wired into the runtime
-      as a default-OFF, off-loop background coordinator that distils the live VLA teacher
-      policy into a compact StudentVLAPolicy over real on-policy (h, z) latents rolled
-      from the live world model. KnowledgeDistiller gained a backwards-compatible regression
-      (MSE) objective; the distilled student is persisted to a SHA-256 slot (GrowthSlotStore)
-      and NEVER hot-swapped - deployment stays a soak-gated operator decision. GrowthConfig
-      is Optional/None on Settings (enabled=False); build_growth_coordinator returns
-      None when the block is absent/disabled OR no VLA teacher is wired. A gated pure-add
-      {ns}_growth_distillations_total{outcome} counter surfaces on /metrics, omitted
-      until the first cycle. Moves one of the three previously-unwired pillars (meta,
-      growth, scaling) onto a runtime seam.
-    category: functional
-    priority: medium
-    status: done
-    tier: fast
+      - "C901 selected + max-complexity=15 pinned in pyproject.toml"
+      - "no src/ C901 per-file-ignore; no src function exceeds the ceiling"
+    validation_command: "python -m pytest tests/regression/test_complexity_gate.py -q"
+    implemented_in: "40a6399045ac520824bf706debed8ed7cdd37200"
+    depends_on: ["F-001"]
+    notes: "ADR-014."
+
+  - id: "F-022"
+    epic: "Cognitive Integration"
+    name: "Growth pillar wired as off-loop VLA distillation (default-OFF, soak-gated)"
+    description: >-
+      The growth pillar (knowledge distillation) is wired into the runtime as a
+      default-OFF, off-loop background coordinator that distils the live VLA
+      teacher policy into a compact StudentVLAPolicy over real on-policy (h, z)
+      latents rolled from the live world model. KnowledgeDistiller gained a
+      backwards-compatible regression (MSE) objective; the distilled student is
+      persisted to a SHA-256 slot (GrowthSlotStore) and NEVER hot-swapped -
+      deployment stays a soak-gated operator decision. GrowthConfig is
+      Optional/None on Settings (enabled=False); build_growth_coordinator returns
+      None when the block is absent/disabled OR no VLA teacher is wired. A gated
+      pure-add {ns}_growth_distillations_total{outcome} counter surfaces on
+      /metrics, omitted until the first cycle. Moves one of the three
+      previously-unwired pillars (meta, growth, scaling) onto a runtime seam.
+    category: "functional"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
     verification:
-    - regression + classification distiller objectives both proven (classification byte-identical)
-    - factory returns None when disabled / no-VLA; non-None + real distill cycle when
-      enabled
-    - default YAML loads unchanged; /metrics byte-identical until first cycle
-    validation_command: python -m pytest tests/unit/growth/ tests/unit/factory/test_build_growth_coordinator.py
-      tests/unit/orchestrator/test_growth_distill_loop.py tests/unit/telemetry/test_growth_metrics.py
-      tests/regression/test_growth_distillation_aqa.py tests/regression/test_growth_backwards_compat.py
-      -q
-    implemented_in: 27b52338d6ddb2f6c882518f0fa78bd50a593101
-    depends_on:
-    - F-001
-    notes: 'Default-OFF + soak-gated: keep growth.enabled off on the live rover until
-      a soak gate passes. Distils the Phase-3 VLA policy. implemented_in pins to the
-      squash SHA post-merge (per the F-015..F-021 convention).'
-  - id: F-023
-    epic: Cognitive Integration
-    name: AlayaWorld-adapted bounded-context memory + drift-reduction training (default-OFF)
-    description: 'Adapts two AlayaWorld ideas (arXiv:2607.18367) to the RSSM latent
-      world model - NOT the paper''s video-diffusion architecture. (1) A bounded-context
-      latent memory (per-mission sink anchor + recent ring + EMA long-summary, constant-size
-      storage) blended into the orchestrator-carried (h, z) at the observe seam; WorldModelMemoryConfig
-      is Optional/None on Settings (enabled=False), build_latent_context returns None
-      when absent/disabled and the tick path is byte-identical. (2) Corrupted-history
-      drift-reduction training: RSSM.train_sequence_corrupted rolls a random open-loop
-      prior prefix (the model''s own drifted imagination) then trains the posterior
-      suffix to recover; measure_drift + scripts/compare_drift.py provide the deterministic
-      baseline-vs-augmented comparison (documented negative result acceptable). A scripts-only
-      k-step imagination distillation spike (non-binding) produces a written go/no-go.
-      RSSM is the feasibility vehicle; the DualStreamRSSM port is explicitly deferred
-      (ADR-015).'
-    category: functional
-    priority: medium
-    status: done
-    tier: fast
+      - "regression + classification distiller objectives both proven (classification byte-identical)"
+      - "factory returns None when disabled / no-VLA; non-None + real distill cycle when enabled"
+      - "default YAML loads unchanged; /metrics byte-identical until first cycle"
+    validation_command: >-
+      python -m pytest tests/unit/growth/
+      tests/unit/factory/test_build_growth_coordinator.py
+      tests/unit/orchestrator/test_growth_distill_loop.py
+      tests/unit/telemetry/test_growth_metrics.py
+      tests/regression/test_growth_distillation_aqa.py
+      tests/regression/test_growth_backwards_compat.py -q
+    implemented_in: "27b52338d6ddb2f6c882518f0fa78bd50a593101"
+    depends_on: ["F-001"]
+    notes: >-
+      Default-OFF + soak-gated: keep growth.enabled off on the live rover until a
+      soak gate passes. Distils the Phase-3 VLA policy. implemented_in pins to the
+      squash SHA post-merge (per the F-015..F-021 convention).
+
+  - id: "F-023"
+    epic: "Cognitive Integration"
+    name: "AlayaWorld-adapted bounded-context memory + drift-reduction training (default-OFF)"
+    description: >-
+      Adapts two AlayaWorld ideas (arXiv:2607.18367) to the RSSM latent world
+      model - NOT the paper's video-diffusion architecture. (1) A bounded-context
+      latent memory (per-mission sink anchor + recent ring + EMA long-summary,
+      constant-size storage) blended into the orchestrator-carried (h, z) at the
+      observe seam; WorldModelMemoryConfig is Optional/None on Settings
+      (enabled=False), build_latent_context returns None when absent/disabled and
+      the tick path is byte-identical. (2) Corrupted-history drift-reduction
+      training: RSSM.train_sequence_corrupted rolls a random open-loop prior
+      prefix (the model's own drifted imagination) then trains the posterior
+      suffix to recover; measure_drift + scripts/compare_drift.py provide the
+      deterministic baseline-vs-augmented comparison (documented negative result
+      acceptable). A scripts-only k-step imagination distillation spike
+      (non-binding) produces a written go/no-go. RSSM is the feasibility vehicle;
+      the DualStreamRSSM port is explicitly deferred (ADR-015).
+    category: "functional"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
     verification:
-    - memory footprint constant over long rollouts; disabled path byte-identical; sink
-      incorporated into predictions (S1b test)
-    - train_sequence_corrupted k=0 allclose-identical to train_sequence; RSSM state_dict
-      keys unchanged; golden suites green
-    - compare_drift.py produces a deterministic seeded baseline-vs-augmented report;
-      spike report carries go/no-go + consumer-ceiling framing
-    validation_command: python -m pytest tests/unit/world_model/test_bounded_context.py
-      tests/unit/world_model/test_train_sequence_corrupted.py tests/unit/training/test_drift_metrics.py
-      tests/unit/training/test_drift_reduction.py tests/unit/factory/test_build_latent_context.py
-      tests/unit/orchestrator/test_latent_context_tick.py tests/integration/test_compare_drift_script.py
-      tests/integration/test_spike_step_distillation.py tests/regression/test_alayaworld_memory_distill_aqa.py
+      - "memory footprint constant over long rollouts; disabled path byte-identical; sink incorporated into predictions (S1b test)"
+      - "train_sequence_corrupted k=0 allclose-identical to train_sequence; RSSM state_dict keys unchanged; golden suites green"
+      - "compare_drift.py produces a deterministic seeded baseline-vs-augmented report; spike report carries go/no-go + consumer-ceiling framing"
+    validation_command: >-
+      python -m pytest tests/unit/world_model/test_bounded_context.py
+      tests/unit/world_model/test_train_sequence_corrupted.py
+      tests/unit/training/test_drift_metrics.py
+      tests/unit/training/test_drift_reduction.py
+      tests/unit/factory/test_build_latent_context.py
+      tests/unit/orchestrator/test_latent_context_tick.py
+      tests/integration/test_compare_drift_script.py
+      tests/integration/test_spike_step_distillation.py
+      tests/regression/test_alayaworld_memory_distill_aqa.py
       tests/regression/test_alayaworld_memory_distill_backwards_compat.py -q
-    implemented_in: e730a0a3fd14f66f1d39520abc67f5d153e3ddc4
-    depends_on:
-    - F-001
-    notes: 'OpenSpec change mouse-droid-alayaworld-memory-distill (archived under openspec/changes/;
-      repo-native artifacts authoritative). Default-OFF: keep world_model_memory.enabled
-      off on the live rover until a soak gate passes. Jetson spike run + on-rover drift
-      eval are prepared via docs/runbooks/jetson-alayaworld-spike.md, not executed.
-      implemented_in pins to the squash SHA post-merge (per the F-015..F-021 convention).'
-  - id: F-024
-    epic: Hygiene
-    name: Claude Code workforce governance and developer tooling modernization
-    description: 'The .claude/ surface gains config-driven, tested governance: a Pydantic
-      workforce config (.claude/workforce.yaml, extra=forbid) as the single source for
-      every threshold, glob and gate key; three hooks under tools/claude_hooks/ (edit-time
-      secret scan reusing .gitleaks.toml, a capability freeze gate keyed off F-008 that
-      self-disables when it lands, and advisory post-edit checks); an AQA regression
-      gate over the workforce assets; subagent roster (.claude/agents); skills; git
-      worktree runbook; secretless .mcp.json; CLAUDE.md docs consolidation under core_max_lines
-      budget; and dedicated tools coverage gate. Hooks never import the mousedroid runtime,
-      so an edit never pays the torch/faiss import cost.'
-    category: infrastructure
-    priority: high
-    status: done
-    tier: fast
+    implemented_in: "e730a0a3fd14f66f1d39520abc67f5d153e3ddc4"
+    depends_on: ["F-001"]
+    notes: >-
+      OpenSpec change mouse-droid-alayaworld-memory-distill (archived under
+      openspec/changes/; repo-native artifacts authoritative). Default-OFF:
+      keep world_model_memory.enabled off on the live rover until a soak gate
+      passes. Jetson spike run + on-rover drift eval are prepared via
+      docs/runbooks/jetson-alayaworld-spike.md, not executed. implemented_in
+      pins to the squash SHA post-merge (per the F-015..F-021 convention).
+
+  - id: "F-024"
+    epic: "Hygiene"
+    name: "Claude Code workforce governance and developer tooling modernization"
+    description: >-
+      The .claude/ surface gains config-driven, tested governance: a Pydantic
+      workforce config (.claude/workforce.yaml, extra=forbid) as the single
+      source for every threshold, glob and gate key; three hooks under
+      tools/claude_hooks/ (edit-time secret scan reusing .gitleaks.toml, a
+      capability freeze gate keyed off F-008 that self-disables when it lands,
+      and advisory post-edit checks); an AQA regression gate over the
+      workforce assets; subagent roster (.claude/agents); skills; git worktree
+      runbook; secretless .mcp.json; CLAUDE.md docs consolidation under
+      core_max_lines budget; and dedicated tools coverage gate. Hooks never
+      import the mousedroid runtime, so an edit never pays the torch/faiss import cost.
+    category: "infrastructure"
+    priority: "high"
+    status: "done"
+    tier: "fast"
     verification:
-    - tests/regression/test_claude_workforce_aqa.py passes
-    - tests/unit/tools/claude_hooks/ passes with >= 85% line coverage
-    - CLAUDE.md <= 250 lines enforced by tools/claude_hooks/docs_trimmer.py
-    validation_command: python -m pytest tests/regression/test_claude_workforce_aqa.py
+      - "tests/regression/test_claude_workforce_aqa.py passes"
+      - "tests/unit/tools/claude_hooks/ passes with >= 85% line coverage"
+      - "CLAUDE.md <= 250 lines enforced by tools/claude_hooks/docs_trimmer.py"
+    validation_command: >-
+      python -m pytest tests/regression/test_claude_workforce_aqa.py
       tests/unit/tools/claude_hooks -q
-    implemented_in: 6e89033b96f98ede6c77077345fd31b330ae16c9
-    depends_on:
-    - F-001
-    notes: OpenSpec change mouse-droid-claude-workforce (archived under openspec/changes/;
-      repo-native artifacts authoritative). Closed across Sprints 1-5 (Phases 1-6).
-  - id: F-025
-    epic: Rover bring-up
-    name: ESP32 driver speaks stock Waveshare firmware protocol
-    description: 'Retarget the ESP32 comms drivers at the stock Waveshare General_Driver
-      command set (waveshareteam/ugv_base_general). The private {"T":1,"vx","vy","omega"}
-      protocol has no firmware implementing it (firmware/ was never committed; scripts/flash_esp32.sh
-      references a nonexistent binary), so on stock firmware motion commands parse as
-      zeros, the {"T":2} battery poll is CMD_SET_MOTOR_PID (a write fired by assert_power_chain
-      immediately before motion), and the e-stop command is unhandled. Scope: CMD_ROS_CTRL
-      {"T":13,"X","Z"} velocity mapping (named constants sourced from json_cmd.h), chassis
-      heartbeat failsafe (CMD_HEART_BEAT_SET at connect, window keyed to keepalive_hz),
-      battery voltage from FEEDBACK_BASE_INFO (re-enables the 18650 undervoltage cutoff),
-      115200 default baud, and the encoder-less smoke re-scope (command ACKed + e-stop
-      within budget replaces the unsatisfiable encoder-velocity criterion - audit R3).
-      Backwards compatible via a protocol-selector config field so existing YAML loads
-      unchanged.'
-    category: functional
-    priority: critical
-    status: done
-    tier: fast
+    implemented_in: "6e89033b96f98ede6c77077345fd31b330ae16c9"
+    depends_on: ["F-001"]
+    notes: >-
+      OpenSpec change mouse-droid-claude-workforce (archived under
+      openspec/changes/; repo-native artifacts authoritative). Closed across
+      Sprints 1-5 (Phases 1-6).
+
+  - id: "F-025"
+    epic: "Rover bring-up"
+    name: "ESP32 driver speaks stock Waveshare firmware protocol"
+    description: >-
+      Retarget the ESP32 comms drivers at the stock Waveshare General_Driver
+      command set (waveshareteam/ugv_base_general). The private
+      {"T":1,"vx","vy","omega"} protocol has no firmware implementing it
+      (firmware/ was never committed; scripts/flash_esp32.sh references a
+      nonexistent binary), so on stock firmware motion commands parse as zeros,
+      the {"T":2} battery poll is CMD_SET_MOTOR_PID (a write fired by
+      assert_power_chain immediately before motion), and the e-stop command is
+      unhandled. Scope: CMD_ROS_CTRL {"T":13,"X","Z"} velocity mapping (named
+      constants sourced from json_cmd.h), chassis heartbeat failsafe
+      (CMD_HEART_BEAT_SET at connect, window keyed to keepalive_hz), battery
+      voltage from FEEDBACK_BASE_INFO (re-enables the 18650 undervoltage
+      cutoff), 115200 default baud, and the encoder-less smoke re-scope
+      (command ACKed + e-stop within budget replaces the unsatisfiable
+      encoder-velocity criterion - audit R3). Backwards compatible via a
+      protocol-selector config field so existing YAML loads unchanged.
+    category: "functional"
+    priority: "critical"
+    status: "done"
+    tier: "fast"
     verification:
-    - unit tests pin the stock command dicts (T=13 velocity, T=136 heartbeat, feedback
-      voltage parse)
-    - legacy protocol path stays byte-identical when the selector keeps its default
-    - power_chain probe no longer emits a PID-write on the battery step under the stock
-      selector
-    - selecting stock derives 115200 baud through the REAL load_settings over both shipped
-      overlays
-    - an unreadable frame parses to None, never a fabricated 0.0 that reads as a flat
-      pack
-    - the derived heartbeat window is strictly positive and never undercuts the driver's
-      blocking budgets
-    validation_command: python -m pytest tests/unit/comms/test_comms_utils.py tests/unit/comms/test_base_driver.py
-      tests/regression/test_f025_backwards_compat.py tests/regression/test_f025_aqa.py
-      -q
-    implemented_in: f884abe62d2a502476cfe6a32996b2a57055ca9c
-    depends_on:
-    - F-001
-    notes: Findings R1/R2/R3/R5/R6 of docs/analysis/rover-jetson-integration-gaps.md,
-      severities re-verified in docs/analysis/next-steps-peer-review-2026-08-07.md.
-      Pure software - does not wait on the F-008 bench work; F-008's live-rover verification
-      runs on top of this retarget.
-  - id: F-026
-    epic: Hygiene
-    name: Declared governance budgets have consumers
-    description: 'Two config knobs parse but enforce nothing: JetsonConfig.power_mode
-      (Literal 15W/7W) is read nowhere outside schema/config and cannot express JetPack
-      6.2''s 25W/MAXN_SUPER modes while jetson_system_setup.sh hardcodes nvpmodel -m
-      0 (audit J1); tools/claude_hooks DocsConfig.core_max_lines (250) has no hook consumer
-      while CLAUDE.md stands at 941 lines. Wire each knob to a real consumer or delete
-      it, and add an AQA test asserting every declared budget/mode field has at least
-      one consumer outside schema parsing so the class of defect cannot recur silently.'
-    category: infrastructure
-    priority: medium
-    status: done
-    tier: fast
+      - "unit tests pin the stock command dicts (T=13 velocity, T=136 heartbeat, feedback voltage parse)"
+      - "legacy protocol path stays byte-identical when the selector keeps its default"
+      - "power_chain probe no longer emits a PID-write on the battery step under the stock selector"
+      - "selecting stock derives 115200 baud through the REAL load_settings over both shipped overlays"
+      - "an unreadable frame parses to None, never a fabricated 0.0 that reads as a flat pack"
+      - "the derived heartbeat window is strictly positive and never undercuts the driver's blocking budgets"
+    validation_command: >-
+      python -m pytest tests/unit/comms/test_comms_utils.py
+      tests/unit/comms/test_base_driver.py
+      tests/regression/test_f025_backwards_compat.py
+      tests/regression/test_f025_aqa.py -q
+    implemented_in: "f884abe62d2a502476cfe6a32996b2a57055ca9c"
+    depends_on: ["F-001"]
+    notes: >-
+      Findings R1/R2/R3/R5/R6 of docs/analysis/rover-jetson-integration-gaps.md,
+      severities re-verified in
+      docs/analysis/next-steps-peer-review-2026-08-07.md. Pure software - does
+      not wait on the F-008 bench work; F-008's live-rover verification runs on
+      top of this retarget.
+
+  - id: "F-026"
+    epic: "Hygiene"
+    name: "Declared governance budgets have consumers"
+    description: >-
+      Two config knobs parse but enforce nothing: JetsonConfig.power_mode
+      (Literal 15W/7W) is read nowhere outside schema/config and cannot express
+      JetPack 6.2's 25W/MAXN_SUPER modes while jetson_system_setup.sh hardcodes
+      nvpmodel -m 0 (audit J1); tools/claude_hooks DocsConfig.core_max_lines
+      (250) has no hook consumer while CLAUDE.md stands at 941 lines. Wire each
+      knob to a real consumer or delete it, and add an AQA test asserting every
+      declared budget/mode field has at least one consumer outside schema
+      parsing so the class of defect cannot recur silently.
+    category: "infrastructure"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
     verification:
-    - grep finds a non-schema consumer for every surviving budget/mode field
-    - new AQA test fails when a budget field loses its last consumer
-    validation_command: python -m pytest tests/regression/test_f026_budget_consumers_aqa.py
-      -v
-    implemented_in: 6e89033b96f98ede6c77077345fd31b330ae16c9
-    depends_on:
-    - F-001
-    notes: power_mode wired to HealthMonitor.check_health (F-026 Sprint 3). DocsConfig.core_max_lines
-      consumer (docs_trimmer.py) wired and active in Sprint 5.
-  - id: F-027
-    epic: Agentic-Integration
-    name: NemoClaw Sandbox and OpenClaw MCP Integration
-    description: Integrates the NemoClaw sandbox (OpenShell) and Model Context Protocol
-      (MCP) into the MouseDroid ecosystem. Establishes a secure, observable, and strictly
-      governed agentic operations layer. Features include dual memory paths (episodic/semantic
-      over MCP), transport-parity gating across REST/MCP channels, and policy-driven
-      execution isolated by OpenShell. Config-gated (default False) to ensure backward
-      compatibility.
-    category: functional
-    priority: medium
-    status: done
-    tier: fast
+      - "grep finds a non-schema consumer for every surviving budget/mode field"
+      - "new AQA test fails when a budget field loses its last consumer"
+    validation_command: >-
+      python -m pytest tests/regression/test_f026_budget_consumers_aqa.py -v
+    implemented_in: "6e89033b96f98ede6c77077345fd31b330ae16c9"
+    depends_on: ["F-001"]
+    notes: >-
+      power_mode wired to HealthMonitor.check_health (F-026 Sprint 3).
+      DocsConfig.core_max_lines consumer (docs_trimmer.py) wired and active in Sprint 5.
+
+  - id: "F-027"
+    epic: "Agentic-Integration"
+    name: "NemoClaw Sandbox and OpenClaw MCP Integration"
+    description: >-
+      Integrates the NemoClaw sandbox (OpenShell) and Model Context Protocol (MCP)
+      into the MouseDroid ecosystem. Establishes a secure, observable, and strictly
+      governed agentic operations layer. Features include dual memory paths
+      (episodic/semantic over MCP), transport-parity gating across REST/MCP channels,
+      and policy-driven execution isolated by OpenShell. Config-gated (default False)
+      to ensure backward compatibility.
+    category: "functional"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
     verification:
-    - MCP resources expose cursor-based episodic memory and semantic index
-    - ApprovalGateProtocol yields identical decisions for REST and MCP invocations
-    - OpenShell policy drift from SkillSpec.tool_names fails generation
-    - baselines.yaml limits are enforced during live queries
-    - OpenClawConfig.enabled=False renders the system byte-identical to prior behavior
-    validation_command: python -m pytest tests/unit/mcp/ tests/unit/memory/ tests/unit/orchestrator/
-      -q
-    implemented_in: cb2d7246890c5246cf9f8ab721338b0e63d97c7f
-    depends_on:
-    - F-001
-    notes: OpenSpec change mouse-droid-nemoclaw-integration (archived under openspec/changes/;
-      repo-native artifacts authoritative).
-  - id: F-028
-    epic: Quality Gates
-    name: Functional, user-journey and security test tiers reach a CI path
-    description: "Three test tiers - tests/functional/, tests/user_journey/ and tests/security/\
-      \ - ran in ZERO CI paths: absent from scripts/ci.sh, from .github/workflows/ci.yml\
-      \ and from every Makefile target, so they executed only under a bare `pytest`\
-      \ and could rot invisibly. This is the same failure mode the smoke tier had before\
-      \ PR #178. tests/security/ holds the pre-egress path through the gateway seam\
-      \ for the RegexInjectionFilter that docs/CHARTER.md names as the control making\
-      \ the cloud-LLM egress carve-out (#107) acceptable. (The filter's unit coverage\
-      \ in tests/unit/security/test_injection_filter.py already ran - this closes a\
-      \ wiring gap, not a coverage hole.) All three tiers are wired into the blocking\
-      \ `test` job and into ci.sh, outside the MOUSEDROID_CI_SLIM skip (the whole set\
-      \ runs in ~2.5s), and pinned by TestOrphanTierWiring so the wiring cannot silently\
-      \ regress. They are deliberately NOT placed in the ci.yml job named `security`.\
-      \ That job was continue-on-error when F-028 landed and would have swallowed every\
-      \ failure; it is blocking since 2026-09-16, so the separation now rests on purpose\
-      \ instead \xE2\u20AC\u201D `security` audits the dependency tree (pip-audit) under\
-      \ a different extras set, not a Python test tier."
-    category: validation
-    priority: high
-    status: done
-    tier: fast
+      - "MCP resources expose cursor-based episodic memory and semantic index"
+      - "ApprovalGateProtocol yields identical decisions for REST and MCP invocations"
+      - "OpenShell policy drift from SkillSpec.tool_names fails generation"
+      - "baselines.yaml limits are enforced during live queries"
+      - "OpenClawConfig.enabled=False renders the system byte-identical to prior behavior"
+    validation_command: >-
+      python -m pytest tests/unit/mcp/ tests/unit/memory/ tests/unit/orchestrator/ -q
+    implemented_in: "cb2d7246890c5246cf9f8ab721338b0e63d97c7f"
+    depends_on: ["F-001"]
+    notes: >-
+      OpenSpec change mouse-droid-nemoclaw-integration (archived under
+      openspec/changes/; repo-native artifacts authoritative).
+
+  - id: "F-028"
+    epic: "Quality Gates"
+    name: "Functional, user-journey and security test tiers reach a CI path"
+    description: >-
+      Three test tiers - tests/functional/, tests/user_journey/ and
+      tests/security/ - ran in ZERO CI paths: absent from scripts/ci.sh, from
+      .github/workflows/ci.yml and from every Makefile target, so they executed
+      only under a bare `pytest` and could rot invisibly. This is the same
+      failure mode the smoke tier had before PR #178. tests/security/ holds the
+      pre-egress path through the gateway seam for the RegexInjectionFilter
+      that docs/CHARTER.md names as the control making the cloud-LLM egress
+      carve-out (#107) acceptable. (The filter's unit coverage in
+      tests/unit/security/test_injection_filter.py already ran - this closes a
+      wiring gap, not a coverage hole.) All
+      three tiers are wired into the blocking `test` job and into ci.sh, outside
+      the MOUSEDROID_CI_SLIM skip (the whole set runs in ~2.5s), and pinned by
+      TestOrphanTierWiring so the wiring cannot silently regress. They are
+      deliberately NOT placed in the ci.yml job named `security`. That job was
+      continue-on-error when F-028 landed and would have swallowed every
+      failure; it is blocking since 2026-09-16, so the separation now rests on
+      purpose instead — `security` audits the dependency tree (pip-audit) under
+      a different extras set, not a Python test tier.
+    category: "validation"
+    priority: "high"
+    status: "done"
+    tier: "fast"
     verification:
-    - all three tiers appear in the blocking ci.yml `test` job and in scripts/ci.sh
-    - tests/security does NOT appear in the `security` (pip-audit) job
-    - the ci.sh stage precedes the MOUSEDROID_CI_SLIM gate (runs outside the slim skip)
-    - TestOrphanTierWiring fails when the wiring is removed (verified by reverting)
-    validation_command: bash scripts/validations/F-028.sh
-    implemented_in: 9bd3dc7549b09c973e8ff5ce1a737e1076cdc5d2
-    depends_on:
-    - F-001
-    notes: 'implemented_in pins PR #201''s squash merge, the commit this feature actually
-      landed in - the catalog convention (F-015..F-020 pin a12c95b, PR #151''s squash;
-      F-021 pins 40a6399, PR #153''s). It previously pinned the branch commit df928d9,
-      which the squash did not preserve, leaving it reachable only from the feature
-      branch. The harness resolves this field with git rev-parse (harness/spec.py),
-      an EXISTENCE check - so it passed while that branch lived and would have started
-      failing --strict-git the moment it was deleted. Never a branch point either, which
-      would claim provenance for a commit where the feature does not exist.'
-  - id: F-029
-    epic: Quality Gates
-    name: GCP off-device egress channels default OFF
-    description: "GCPLoggingConfig.enabled and GCPMonitoringConfig.enabled defaulted\
-      \ True while GCPFirestoreConfig.enabled defaulted False, and GCPPubSubConfig /\
-      \ GCPStorageConfig had no enabled field at all - the latter two being the ones\
-      \ actually wired, since build_cloud_telemetry_sink and build_cloud_experience_exporter\
-      \ gated on `cfg.gcp is None` alone. Settings.gcp is Optional and defaults None,\
-      \ so nothing egressed on a stock config - but an operator adding a minimal `gcp:`\
-      \ block for one reason (Firestore, storage) silently enabled TWO off-device egress\
-      \ channels they never named. Both now default False, so every GCP egress channel\
-      \ is opt-in. CHARTER \xC2\xA76 requires new capabilities be additive and opt-in,\
-      \ never a silent behaviour change; this also removes the trap ahead of wiring\
-      \ the cloud components (F-032), which must not land while a default-ON egress\
-      \ path exists."
-    category: non-functional
-    priority: high
-    status: done
-    tier: fast
+      - "all three tiers appear in the blocking ci.yml `test` job and in scripts/ci.sh"
+      - "tests/security does NOT appear in the `security` (pip-audit) job"
+      - "the ci.sh stage precedes the MOUSEDROID_CI_SLIM gate (runs outside the slim skip)"
+      - "TestOrphanTierWiring fails when the wiring is removed (verified by reverting)"
+    validation_command: "bash scripts/validations/F-028.sh"
+    implemented_in: "9bd3dc7549b09c973e8ff5ce1a737e1076cdc5d2"
+    depends_on: ["F-001"]
+    notes: >-
+      implemented_in pins PR #201's squash merge, the commit this feature
+      actually landed in - the catalog convention (F-015..F-020 pin a12c95b,
+      PR #151's squash; F-021 pins 40a6399, PR #153's). It previously pinned
+      the branch commit df928d9, which the squash did not preserve, leaving it
+      reachable only from the feature branch. The harness resolves this field
+      with git rev-parse (harness/spec.py), an EXISTENCE check - so it passed
+      while that branch lived and would have started failing --strict-git the
+      moment it was deleted. Never a branch point either, which would claim
+      provenance for a commit where the feature does not exist.
+
+  - id: "F-029"
+    epic: "Quality Gates"
+    name: "GCP off-device egress channels default OFF"
+    description: >-
+      GCPLoggingConfig.enabled and GCPMonitoringConfig.enabled defaulted True
+      while GCPFirestoreConfig.enabled defaulted False, and GCPPubSubConfig /
+      GCPStorageConfig had no enabled field at all - the latter two being the
+      ones actually wired, since build_cloud_telemetry_sink and
+      build_cloud_experience_exporter gated on `cfg.gcp is None` alone. Settings.gcp is Optional
+      and defaults None, so nothing egressed on a stock config - but an operator
+      adding a minimal `gcp:` block for one reason (Firestore, storage) silently
+      enabled TWO off-device egress channels they never named. Both now default
+      False, so every GCP egress channel is opt-in. CHARTER §6 requires new
+      capabilities be additive and opt-in, never a silent behaviour change; this
+      also removes the trap ahead of wiring the cloud components (F-032), which
+      must not land while a default-ON egress path exists.
+    category: "non-functional"
+    priority: "high"
+    status: "done"
+    tier: "fast"
     verification:
-    - logging / monitoring / firestore / pubsub / storage all default enabled=False
-    - 'a partial gcp: block (project_id only) opens no egress channel'
-    - build_cloud_telemetry_sink and build_cloud_experience_exporter both return None
-      for a partial block
-    - "explicit enabled=true still works \xE2\u20AC\u201D the default is a default,\
-      \ not a pin"
-    - config/gcp_digital_twin.yaml resolves to the same effective state (it sets all
-      three explicitly)
-    validation_command: bash scripts/validations/F-029.sh
-    implemented_in: 9bd3dc7549b09c973e8ff5ce1a737e1076cdc5d2
-    depends_on:
-    - F-001
-    notes: 'Gates F-032 (cloud component wiring) - that bundle must not land while a
-      default-ON egress path exists. implemented_in pins PR #201''s squash merge, the
-      commit this feature actually landed in. It previously pinned the branch commit
-      5c2f044, which the squash did not preserve, leaving it reachable only from the
-      feature branch.'
-  - id: F-030
-    epic: Quality Gates
-    name: Documentation reconciliation across live governance surfaces
-    description: Six verified drifts between live doc surfaces and the actual tree,
-      plus two catalog-wide pins so the same drift class cannot re-open silently. CLAUDE.md
-      / docs/claude/surfaces/ci-gates.md / docs/claude/surfaces/README.md claimed a
-      "12-job" CI pipeline naming six jobs that do not exist (secret-scan, skills, test-fast,
-      validate, regression, package) while ci.yml defines 16 real jobs. orchestrator/CLAUDE.md
-      referenced RobotOrchestrator, state.py, factory.py:_build_orchestrator, and ConstitutionalSafetyMonitor
-      -- none exist in any .py file; the real symbols are MouseDroidOrchestrator, AutonomousOrchestrator
-      (zero production callers), and MouseDroidSafetyMonitor. HARNESS_SPEC.md, tests/agent.md,
-      and docs/architecture/c4-spec-harness.md stated an 85% coverage floor for src/mousedroid;
-      the real gate is 90% (85% is correct only for the separate tools/claude_hooks
-      gate). docs/CHARTER.md claimed growth/ was "not yet instantiated by factory.py";
-      build_growth_coordinator is called at factory.py:4308, default-OFF and metrics-wired,
-      same posture as M6 -- meta/ and scaling/ genuinely have no builder, so only growth/
-      needed correcting. Root NEXT_STEPS.md called Phase 5 (the MuJoCo physics simulator)
-      a deferred stretch goal; docs/CHARTER.md's M5 already marks it done, and src/mousedroid/sim/mujoco_rover_env.py
-      confirms a real, RoverEnvProtocol-conformant implementation. SKILLS.md's Subagent
-      skills table and AGENTS.md both named seven subagents from a plugin-namespaced
-      convention (security-auditor, feature-dev:code-reviewer, ...) matching none of
-      the seven real .claude/agents/ files, and 12 of 17 real .claude/skills/ directories
-      were entirely absent from SKILLS.md.
-    category: non-functional
-    priority: high
-    status: done
-    tier: fast
+      - "logging / monitoring / firestore / pubsub / storage all default enabled=False"
+      - "a partial gcp: block (project_id only) opens no egress channel"
+      - "build_cloud_telemetry_sink and build_cloud_experience_exporter both return None for a partial block"
+      - "explicit enabled=true still works — the default is a default, not a pin"
+      - "config/gcp_digital_twin.yaml resolves to the same effective state (it sets all three explicitly)"
+    validation_command: "bash scripts/validations/F-029.sh"
+    implemented_in: "9bd3dc7549b09c973e8ff5ce1a737e1076cdc5d2"
+    depends_on: ["F-001"]
+    notes: >-
+      Gates F-032 (cloud component wiring) - that bundle must not land while a
+      default-ON egress path exists. implemented_in pins PR #201's squash
+      merge, the commit this feature actually landed in. It previously pinned
+      the branch commit 5c2f044, which the squash did not preserve, leaving it
+      reachable only from the feature branch.
+
+  - id: "F-030"
+    epic: "Quality Gates"
+    name: "Documentation reconciliation across live governance surfaces"
+    description: >-
+      Six verified drifts between live doc surfaces and the actual tree, plus
+      two catalog-wide pins so the same drift class cannot re-open silently.
+      CLAUDE.md / docs/claude/surfaces/ci-gates.md / docs/claude/surfaces/README.md
+      claimed a "12-job" CI pipeline naming six jobs that do not exist
+      (secret-scan, skills, test-fast, validate, regression, package) while
+      ci.yml defines 16 real jobs. orchestrator/CLAUDE.md referenced
+      RobotOrchestrator, state.py, factory.py:_build_orchestrator, and
+      ConstitutionalSafetyMonitor -- none exist in any .py file; the real
+      symbols are MouseDroidOrchestrator, AutonomousOrchestrator (zero
+      production callers), and MouseDroidSafetyMonitor. HARNESS_SPEC.md,
+      tests/agent.md, and docs/architecture/c4-spec-harness.md stated an 85%
+      coverage floor for src/mousedroid; the real gate is 90% (85% is correct
+      only for the separate tools/claude_hooks gate). docs/CHARTER.md claimed
+      growth/ was "not yet instantiated by factory.py"; build_growth_coordinator
+      is called at factory.py:4308, default-OFF and metrics-wired, same posture
+      as M6 -- meta/ and scaling/ genuinely have no builder, so only growth/
+      needed correcting. Root NEXT_STEPS.md called Phase 5 (the MuJoCo physics
+      simulator) a deferred stretch goal; docs/CHARTER.md's M5 already marks it
+      done, and src/mousedroid/sim/mujoco_rover_env.py confirms a real,
+      RoverEnvProtocol-conformant implementation. SKILLS.md's Subagent skills
+      table and AGENTS.md both named seven subagents from a plugin-namespaced
+      convention (security-auditor, feature-dev:code-reviewer, ...) matching
+      none of the seven real .claude/agents/ files, and 12 of 17 real
+      .claude/skills/ directories were entirely absent from SKILLS.md.
+    category: "non-functional"
+    priority: "high"
+    status: "done"
+    tier: "fast"
     verification:
-    - every live doc stating the CI job count states 16, not 12
-    - no live doc states a src/mousedroid coverage floor of 85% (it is 90%)
-    - orchestrator/CLAUDE.md names only symbols that exist in src/
-    - every real .claude/skills/ directory is mentioned somewhere in SKILLS.md
-    - every real .claude/agents/ file is named in SKILLS.md's Subagent skills table
-    validation_command: bash scripts/validations/F-030.sh
-    implemented_in: 14b2b34abb57bcad679a05602cb1ae2dc25f37fa
-    depends_on:
-    - F-028
-    notes: 'Depends on F-028 landing so the job-count claim is checked against the final
-      ci.yml, not an intermediate state. implemented_in pins to done on closeout, per
-      the established convention (a commit on this branch that actually contains the
-      change, re-pinned to the squash SHA post-merge if this lands squashed). The sixth
-      original drift -- docs/CHARTER.md''s growth/ claim matching factory.py:build_growth_coordinator
-      -- was manually verified and corrected but is deliberately NOT listed above: scripts/validations/F-030.sh
-      does not execute an automated check for it. A sentence-scoped sweep across the
-      five files that claim recurred in was attempted and produced false positives on
-      legitimate text (a README.md code-fence listing, a genuine pre-existing NEXT_STEPS.md
-      sentence); see openspec/changes/mouse-droid-doc-reconciliation/tasks.md "Explicitly
-      deferred" for the full account. Caught by CodeRabbit on PR #202, which correctly
-      flagged that listing it under `verification` here would claim the validator checks
-      something it does not.'
-  - id: F-031
-    epic: Quality Gates
-    name: AutonomousOrchestrator production-path disposition
-    description: 'Records, in ADR-016, why AutonomousOrchestrator (an alternate sense-plan-act
-      loop with zero production callers) is deliberately kept off the production path:
-      its execute_mission_step calls the LLM gateway unconditionally inside a loop defaulting
-      to 30 Hz, and it has no safety-monitor machinery -- both in direct conflict with
-      docs/CHARTER.md Section 3 and invariant 10''s hot-loop-purity requirement. Two
-      regression tests in tests/regression/test_import_graph_freeze.py pin the disposition:
-      one that no production module grows a module-scope import of it (relative-import
-      and submodule-alias forms included, after a Copilot review found the first version
-      missed both), and one that no production entrypoint calls factory.py::build_autonomous_orchestrator
-      directly -- the narrower, Copilot-caught gap that the import check alone left
-      the ADR''s actual Decision unenforced. Closes the gap an earlier "see docs/architecture/adr/
-      once F-031 lands" forward reference in orchestrator/CLAUDE.md previously left
-      open.'
-    category: non-functional
-    priority: medium
-    status: done
-    tier: fast
+      - "every live doc stating the CI job count states 16, not 12"
+      - "no live doc states a src/mousedroid coverage floor of 85% (it is 90%)"
+      - "orchestrator/CLAUDE.md names only symbols that exist in src/"
+      - "every real .claude/skills/ directory is mentioned somewhere in SKILLS.md"
+      - "every real .claude/agents/ file is named in SKILLS.md's Subagent skills table"
+    validation_command: "bash scripts/validations/F-030.sh"
+    implemented_in: "14b2b34abb57bcad679a05602cb1ae2dc25f37fa"
+    depends_on: ["F-028"]
+    notes: >-
+      Depends on F-028 landing so the job-count claim is checked against the
+      final ci.yml, not an intermediate state. implemented_in pins to done on
+      closeout, per the established convention (a commit on this branch that
+      actually contains the change, re-pinned to the squash SHA post-merge if
+      this lands squashed). The sixth original drift -- docs/CHARTER.md's
+      growth/ claim matching factory.py:build_growth_coordinator -- was
+      manually verified and corrected but is deliberately NOT listed above:
+      scripts/validations/F-030.sh does not execute an automated check for
+      it. A sentence-scoped sweep across the five files that claim recurred
+      in was attempted and produced false positives on legitimate text (a
+      README.md code-fence listing, a genuine pre-existing NEXT_STEPS.md
+      sentence); see openspec/changes/mouse-droid-doc-reconciliation/tasks.md
+      "Explicitly deferred" for the full account. Caught by CodeRabbit on
+      PR #202, which correctly flagged that listing it under `verification`
+      here would claim the validator checks something it does not.
+
+  - id: "F-031"
+    epic: "Quality Gates"
+    name: "AutonomousOrchestrator production-path disposition"
+    description: >-
+      Records, in ADR-016, why AutonomousOrchestrator (an alternate sense-plan-act
+      loop with zero production callers) is deliberately kept off the production
+      path: its execute_mission_step calls the LLM gateway unconditionally inside
+      a loop defaulting to 30 Hz, and it has no safety-monitor machinery -- both
+      in direct conflict with docs/CHARTER.md Section 3 and invariant 10's
+      hot-loop-purity requirement. Two regression tests in
+      tests/regression/test_import_graph_freeze.py pin the disposition: one that
+      no production module grows a module-scope import of it (relative-import
+      and submodule-alias forms included, after a Copilot review found the
+      first version missed both), and one that no production entrypoint calls
+      factory.py::build_autonomous_orchestrator directly -- the narrower,
+      Copilot-caught gap that the import check alone left the ADR's actual
+      Decision unenforced. Closes the gap an earlier "see
+      docs/architecture/adr/ once F-031 lands" forward reference in
+      orchestrator/CLAUDE.md previously left open.
+    category: "non-functional"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
     verification:
-    - docs/architecture/ADR-016-autonomous-orchestrator-disposition.md exists and is
-      Accepted
-    - no active production module imports mousedroid.orchestrator.autonomous at module
-      scope, including relative and submodule-alias import forms
-    - no production entrypoint calls factory.py::build_autonomous_orchestrator
-    - orchestrator/CLAUDE.md's forward reference resolves to a real ADR filename
-    validation_command: bash scripts/validations/F-031.sh
-    implemented_in: 5d40ee45ecb485eaffdec366fd1da238bbc7aa62
+      - "docs/architecture/ADR-016-autonomous-orchestrator-disposition.md exists and is Accepted"
+      - "no active production module imports mousedroid.orchestrator.autonomous at module scope, including relative and submodule-alias import forms"
+      - "no production entrypoint calls factory.py::build_autonomous_orchestrator"
+      - "orchestrator/CLAUDE.md's forward reference resolves to a real ADR filename"
+    validation_command: "bash scripts/validations/F-031.sh"
+    implemented_in: "5d40ee45ecb485eaffdec366fd1da238bbc7aa62"
     depends_on: []
-    notes: 'No dependency on F-030 or anything else in this program -- pure docs plus
-      test-file extensions, zero runtime src/ code. implemented_in pins to the merge
-      SHA (PR #204''s squash) per the established convention. A Copilot review round
-      found real gaps in the pin itself (relative-import and submodule-alias blind spots
-      in the AST walker; the import check alone not enforcing the ADR''s call-site claim;
-      scripts/validations/F-031.sh checking only file existence where features.yaml''s
-      own verification: list claimed more) -- all fixed and proven before this closeout,
-      see the openspec bundle''s peer-review.md for the full verdict table.'
-  - id: F-032
-    epic: GCP Digital Twin
-    name: "GCP observability wiring \xE2\u20AC\u201D logging, monitoring, Firestore\
-      \ sync"
-    description: 'Wires three already-implemented, already-unit-tested cloud components
-      into the production path: CloudLoggingSink (structlog -> Cloud Logging), CloudMetricsExporter
-      (MetricsRegistry -> Cloud Monitoring), and CloudFirestoreSync (episodic memory
-      -> Firestore). All three existed fully built and tested but were never constructed
-      by factory.py or threaded through orchestrator.py/main.py, mirroring the gap build_cloud_telemetry_sink/build_cloud_experience_exporter
-      closed for Pub/Sub and GCS. New factory.py builders (build_cloud_logging_sink,
-      build_cloud_metrics_exporter, build_cloud_firestore_sync) follow the existing
-      two-builder idiom (cfg.gcp is None guard, per-block .enabled guard, function-scoped
-      try/except ImportError, construct, log, return) plus a fifth step the two precedent
-      builders never needed: an explicit null-collaborator guard, since CloudMetricsExporter.__init__''s
-      registry and CloudFirestoreSync.__init__''s episodic are both non-Optional while
-      build_metrics_registry/build_memory_tier can each independently return None --
-      an unvalidated but legal config combination (e.g. gcp.firestore.enabled=true +
-      the default memory.enabled=false) would otherwise crash build_orchestrator() outright.
-      A new CloudFirestoreSyncProtocol was authored in cloud/protocol.py matching CloudFirestoreSync''s
-      start/sync_once/close shape; CloudLoggingSinkProtocol was widened to also declare
-      start/close (previously only __call__), since main.py drives that lifecycle directly
-      rather than through the orchestrator. MouseDroidOrchestrator gained cloud_metrics_exporter/
-      cloud_firestore_sync constructor params with LIFO-ordered lifecycle wiring in
-      _start_cloud_subsystems/_stop_cloud_subsystems -- cloud_metrics_exporter exposes
-      stop(), not close(), unlike its three siblings. CloudLoggingSink''s lifecycle
-      deliberately stays OUTSIDE the orchestrator: configure_logging() runs synchronously
-      in main.py::cli_entry() before build_orchestrator() is ever called, so folding
-      it into the orchestrator would create two disconnected instances. main.py now
-      builds it once in cli_entry(), threads the same instance into configure_logging(cloud_logging_sink=...)
-      (whose processor-chain insertion was already implemented and tested) and into
-      new keyword params on _run()/_health_check() (default None), with start()/close()
-      independently wrapped in try/except Exception in both functions -- _health_check()
-      previously had no try/finally at all, so it gained one specifically to guarantee
-      the close-on-exit path runs even through its existing sys.exit(1) branch. This
-      keeps an unreachable Cloud Logging backend from blocking rover boot, mirroring
-      the existing OTA weight-update poller''s boot-resilience pattern one function
-      away in orchestrator.py.'
-    category: functional
-    priority: medium
-    status: done
-    tier: fast
+    notes: >-
+      No dependency on F-030 or anything else in this program -- pure docs plus
+      test-file extensions, zero runtime src/ code. implemented_in pins to the
+      merge SHA (PR #204's squash) per the established convention. A Copilot
+      review round found real gaps in the pin itself (relative-import and
+      submodule-alias blind spots in the AST walker; the import check alone
+      not enforcing the ADR's call-site claim; scripts/validations/F-031.sh
+      checking only file existence where features.yaml's own verification:
+      list claimed more) -- all fixed and proven before this closeout, see
+      the openspec bundle's peer-review.md for the full verdict table.
+
+  - id: "F-032"
+    epic: "GCP Digital Twin"
+    name: "GCP observability wiring — logging, monitoring, Firestore sync"
+    description: >-
+      Wires three already-implemented, already-unit-tested cloud components
+      into the production path: CloudLoggingSink (structlog -> Cloud
+      Logging), CloudMetricsExporter (MetricsRegistry -> Cloud Monitoring),
+      and CloudFirestoreSync (episodic memory -> Firestore). All three
+      existed fully built and tested but were never constructed by
+      factory.py or threaded through orchestrator.py/main.py, mirroring the
+      gap build_cloud_telemetry_sink/build_cloud_experience_exporter closed
+      for Pub/Sub and GCS. New factory.py builders
+      (build_cloud_logging_sink, build_cloud_metrics_exporter,
+      build_cloud_firestore_sync) follow the existing two-builder idiom
+      (cfg.gcp is None guard, per-block .enabled guard, function-scoped
+      try/except ImportError, construct, log, return) plus a fifth step the
+      two precedent builders never needed: an explicit null-collaborator
+      guard, since CloudMetricsExporter.__init__'s registry and
+      CloudFirestoreSync.__init__'s episodic are both non-Optional while
+      build_metrics_registry/build_memory_tier can each independently
+      return None -- an unvalidated but legal config combination
+      (e.g. gcp.firestore.enabled=true + the default memory.enabled=false)
+      would otherwise crash build_orchestrator() outright. A new
+      CloudFirestoreSyncProtocol was authored in cloud/protocol.py matching
+      CloudFirestoreSync's start/sync_once/close shape;
+      CloudLoggingSinkProtocol was widened to also declare start/close
+      (previously only __call__), since main.py drives that lifecycle
+      directly rather than through the orchestrator.
+      MouseDroidOrchestrator gained cloud_metrics_exporter/
+      cloud_firestore_sync constructor params with LIFO-ordered lifecycle
+      wiring in _start_cloud_subsystems/_stop_cloud_subsystems --
+      cloud_metrics_exporter exposes stop(), not close(), unlike its three
+      siblings. CloudLoggingSink's lifecycle deliberately stays OUTSIDE the
+      orchestrator: configure_logging() runs synchronously in
+      main.py::cli_entry() before build_orchestrator() is ever called, so
+      folding it into the orchestrator would create two disconnected
+      instances. main.py now builds it once in cli_entry(), threads the
+      same instance into configure_logging(cloud_logging_sink=...) (whose
+      processor-chain insertion was already implemented and tested) and
+      into new keyword params on _run()/_health_check() (default None),
+      with start()/close() independently wrapped in try/except Exception in
+      both functions -- _health_check() previously had no try/finally at
+      all, so it gained one specifically to guarantee the close-on-exit
+      path runs even through its existing sys.exit(1) branch. This keeps an
+      unreachable Cloud Logging backend from blocking rover boot, mirroring
+      the existing OTA weight-update poller's boot-resilience pattern one
+      function away in orchestrator.py.
+    category: "functional"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
     verification:
-    - build_cloud_logging_sink/build_cloud_metrics_exporter/build_cloud_firestore_sync
-      each return None when cfg.gcp is None, when their .enabled flag is false, and
-      (the latter two) when their required collaborator is None
-    - each new builder returns None and logs a warning when its underlying google-cloud-*
-      SDK is genuinely absent (module_available(...) probe), or when the lightweight
-      wrapper import fails
-    - MouseDroidOrchestrator starts/stops cloud_metrics_exporter and cloud_firestore_sync
-      only when wired, in LIFO order relative to cloud_sink/cloud_experience_exporter,
-      and calls .stop() (not .close()) on cloud_metrics_exporter
-    - main.py's _run and _health_check both complete without touching cloud_logging_sink
-      when it is None (the default), and both close it even when the guarded body raises
-      or calls sys.exit
-    - configure_logging(cloud_logging_sink=...) actually forwards a live log event,
-      not just object identity
-    - a start-time failure in any of the four _start_cloud_subsystems collaborators
-      (unreachable backend, missing SDK) logs a warning and does not prevent orchestrator
-      startup
-    validation_command: bash scripts/validations/F-032.sh
-    implemented_in: 69b9aa05096d469be7b79c57ea93ca90d76f637a
-    depends_on:
-    - F-029
-    notes: 'No dependency on F-030/F-031 -- disjoint files (factory.py, orchestrator/orchestrator.py,
-      main.py, cloud/protocol.py) from both. implemented_in was pinned in this dedicated
-      closeout PR, per the F-030/F-031 convention of a separate bookkeeping-only PR
-      after merge rather than self-pinning a branch-local SHA that dies on branch deletion.
-      No CHARTER.md Section 3 carve-out needed, per .claude/skills/charter-carveout/SKILL.md''s
-      three-question procedure: (1) zero actuator/motion involvement -- all three components
-      are read-side data egress (log/metric/episode forwarding), never a motor command;
-      (2) zero LLM inference or training work, in or out of the hot loop -- CloudLoggingSink/CloudMetricsExporter/CloudFirestoreSync
-      forward already-computed telemetry, they don''t compute anything; (3) every new
-      egress path is gated behind a schema field (gcp.logging.enabled / gcp.monitoring.enabled
-      / gcp.firestore.enabled) that defaults False -- F-029 is the compensating control
-      this depends on (recorded in depends_on above), per that change''s own design.md
-      D-5, so a bare `gcp:` block added for an unrelated reason still egresses nothing.
-      Same exempt shape as the pre-existing build_cloud_telemetry_sink / build_cloud_experience_exporter
+      - "build_cloud_logging_sink/build_cloud_metrics_exporter/build_cloud_firestore_sync each return None when cfg.gcp is None, when their .enabled flag is false, and (the latter two) when their required collaborator is None"
+      - "each new builder returns None and logs a warning when its underlying google-cloud-* SDK is genuinely absent (module_available(...) probe), or when the lightweight wrapper import fails"
+      - "MouseDroidOrchestrator starts/stops cloud_metrics_exporter and cloud_firestore_sync only when wired, in LIFO order relative to cloud_sink/cloud_experience_exporter, and calls .stop() (not .close()) on cloud_metrics_exporter"
+      - "main.py's _run and _health_check both complete without touching cloud_logging_sink when it is None (the default), and both close it even when the guarded body raises or calls sys.exit"
+      - "configure_logging(cloud_logging_sink=...) actually forwards a live log event, not just object identity"
+      - "a start-time failure in any of the four _start_cloud_subsystems collaborators (unreachable backend, missing SDK) logs a warning and does not prevent orchestrator startup"
+    validation_command: "bash scripts/validations/F-032.sh"
+    implemented_in: "69b9aa05096d469be7b79c57ea93ca90d76f637a"
+    depends_on: ["F-029"]
+    notes: >-
+      No dependency on F-030/F-031 -- disjoint files (factory.py,
+      orchestrator/orchestrator.py, main.py, cloud/protocol.py) from both.
+      implemented_in was pinned in this dedicated closeout PR, per the
+      F-030/F-031 convention of a separate bookkeeping-only PR after merge
+      rather than self-pinning a branch-local SHA that dies on branch
+      deletion. No CHARTER.md Section 3 carve-out needed, per
+      .claude/skills/charter-carveout/SKILL.md's three-question procedure:
+      (1) zero actuator/motion involvement -- all three components are
+      read-side data egress (log/metric/episode forwarding), never a motor
+      command; (2) zero LLM inference or training work, in or out of the
+      hot loop -- CloudLoggingSink/CloudMetricsExporter/CloudFirestoreSync
+      forward already-computed telemetry, they don't compute anything; (3)
+      every new egress path is gated behind a schema field
+      (gcp.logging.enabled / gcp.monitoring.enabled / gcp.firestore.enabled)
+      that defaults False -- F-029 is the compensating control this
+      depends on (recorded in depends_on above), per that change's own
+      design.md D-5, so a bare `gcp:` block added for an unrelated reason
+      still egresses nothing. Same exempt shape as the pre-existing
+      build_cloud_telemetry_sink / build_cloud_experience_exporter
       precedent this bundle extends.
 
-      Known, accepted risk in CloudLoggingSink (a pre-existing class this bundle wires
-      into production for the first time, not new code added here): CloudLoggingSink.__call__
-      (cloud/logging_sink.py) calls google.cloud.logging''s Logger.log_struct(...) synchronously
-      -- not through the SDK''s BackgroundThreadTransport, which only applies to the
-      stdlib-logging.Handler integration this class doesn''t use. Since the sink is
-      installed as a global structlog processor and the orchestrator''s tick() hot path
-      logs through structlog too, an operator who sets gcp.logging.enabled=true could
-      have a hot-loop log call (e.g. an emergency-stop event) block on outbound network
-      I/O -- touching CHARTER Section 4 invariants 1 (33.3ms cadence) and 10 (hot-loop
-      purity), reachable for the first time because nothing previously constructed CloudLoggingSink
-      in production. The same __call__ also forwards event_dict content with only a
-      primitive-type filter, no allow/deny list -- mission-command text already logged
-      elsewhere in the tree (llm_gateway/mission_parser.py, orchestrator.py) would reach
-      Cloud Logging verbatim once enabled. Both risks are dormant today: gcp.logging.enabled
-      defaults False, so they activate only if an operator explicitly opts in. Surfaced
-      to the operator directly (three independent review agents plus a self-directed
-      pass found this during F-032''s review) rather than fixed unilaterally, per CHARTER
-      Section 6 ("escalate, don''t unilaterally implement") -- redesigning CloudLoggingSink''s
-      I/O model is outside this bundle''s own file scope (cloud/protocol.py, factory.py,
-      orchestrator.py, main.py) and needs its own design/test cycle. Operator decision:
-      ship F-032 as scoped, document the risk (this note), fix CloudLoggingSink in a
-      separate future change -- not yet assigned an F-number.
+      Known, accepted risk in CloudLoggingSink (a pre-existing class this
+      bundle wires into production for the first time, not new code added
+      here): CloudLoggingSink.__call__ (cloud/logging_sink.py) calls
+      google.cloud.logging's Logger.log_struct(...) synchronously -- not
+      through the SDK's BackgroundThreadTransport, which only applies to
+      the stdlib-logging.Handler integration this class doesn't use. Since
+      the sink is installed as a global structlog processor and the
+      orchestrator's tick() hot path logs through structlog too, an
+      operator who sets gcp.logging.enabled=true could have a hot-loop log
+      call (e.g. an emergency-stop event) block on outbound network I/O --
+      touching CHARTER Section 4 invariants 1 (33.3ms cadence) and 10
+      (hot-loop purity), reachable for the first time because nothing
+      previously constructed CloudLoggingSink in production. The same
+      __call__ also forwards event_dict content with only a primitive-type
+      filter, no allow/deny list -- mission-command text already logged
+      elsewhere in the tree (llm_gateway/mission_parser.py,
+      orchestrator.py) would reach Cloud Logging verbatim once enabled.
+      Both risks are dormant today: gcp.logging.enabled defaults False, so
+      they activate only if an operator explicitly opts in. Surfaced to
+      the operator directly (three independent review agents plus a
+      self-directed pass found this during F-032's review) rather than
+      fixed unilaterally, per CHARTER Section 6 ("escalate, don't
+      unilaterally implement") -- redesigning CloudLoggingSink's I/O model
+      is outside this bundle's own file scope (cloud/protocol.py,
+      factory.py, orchestrator.py, main.py) and needs its own design/test
+      cycle. Operator decision: ship F-032 as scoped, document the risk
+      (this note), fix CloudLoggingSink in a separate future change --
+      not yet assigned an F-number.
 
-      Post-merge hotfix (this PR): the first F-032 PR (#206) was merged by the operator
-      before a Copilot review round could be acted on, so the findings landed as a fresh
-      hotfix on a restarted branch rather than a reopened PR, per this repo''s own merged-branch
-      convention. Two real, confirmed bugs, both traced to the same root cause: none
-      of cloud/logging_sink.py, cloud/monitoring_exporter.py, cloud/firestore_sync.py
-      (nor the two pre-existing siblings, cloud/pubsub_sink.py, cloud/experience_exporter.py)
-      imports google.cloud.* at module scope -- every one defers that import into its
-      own start() method -- so every builder''s `except ImportError` around the lightweight
-      mousedroid.cloud.<x> wrapper import never fired for a genuinely-missing SDK, and
-      _start_cloud_subsystems''s four cloud-collaborator .start() calls were unwrapped.
-      An operator enabling gcp.monitoring.enabled/gcp.firestore.enabled (or, latently,
-      the two pre-existing pubsub/storage toggles) without installing the [gcp] extra
-      got a rover that failed to boot entirely, not a graceful degrade. Fixed in all
-      five builders uniformly (not just the three new ones) via a genuine mousedroid.common.imports.module_available(...)
-      probe against each builder''s actual google.cloud.* submodule, plus wrapping all
-      four _start_cloud_subsystems .start() calls in try/except Exception -- matching
-      the pre-existing OTA-poller boot-resilience pattern three lines below. Fixing
-      SDK-detection correctly flips tests/integration/test_factory_integration.py''s
-      GCP wiring test and three tests/unit/factory/test_factory_cloud_observability.py
-      "enabled" cases to see None in this repo''s own [gcp]-less CI, so all four gained
-      pytest.importorskip guards in this same commit -- shipped together, never as a
-      follow-up, since there is no intermediate state where both the fix and the unguarded
-      tests are individually correct. Also in this hotfix: MouseDroidOrchestrator.__init__
-      gained a bare `*,` immediately before tool_registry, making the whole optional-param
-      tail keyword-only (zero existing call sites were exploiting the gap, confirmed
-      via an AST sweep of every call site in the tree -- latent hardening, not a live-bug
-      fix); a third stale docs/architecture.md classDiagram (the `class Factory` block)
-      gained the three missing builders; the Level 3d intro''s blanket "protected by
-      CircuitBreaker" claim was qualified to match the per-component Resilience table
-      a few lines below (only the two pre-existing components use the real CircuitBreaker
-      class); the two arity-check tests (test_logging_sink.py, test_firestore_sync.py)
-      now actually assert parameter counts instead of calling inspect.signature() and
-      discarding the result; and tests/unit/test_main.py''s _FakeLoggingSink now mirrors
-      the real CloudLoggingSink''s _started gate so its cli_entry() test proves a live-forwarded
-      event rather than one fired before start() was ever awaited.
+      Post-merge hotfix (this PR): the first F-032 PR (#206) was merged by
+      the operator before a Copilot review round could be acted on, so the
+      findings landed as a fresh hotfix on a restarted branch rather than a
+      reopened PR, per this repo's own merged-branch convention. Two real,
+      confirmed bugs, both traced to the same root cause: none of
+      cloud/logging_sink.py, cloud/monitoring_exporter.py,
+      cloud/firestore_sync.py (nor the two pre-existing siblings,
+      cloud/pubsub_sink.py, cloud/experience_exporter.py) imports
+      google.cloud.* at module scope -- every one defers that import into
+      its own start() method -- so every builder's `except ImportError`
+      around the lightweight mousedroid.cloud.<x> wrapper import never
+      fired for a genuinely-missing SDK, and _start_cloud_subsystems's four
+      cloud-collaborator .start() calls were unwrapped. An operator
+      enabling gcp.monitoring.enabled/gcp.firestore.enabled (or, latently,
+      the two pre-existing pubsub/storage toggles) without installing the
+      [gcp] extra got a rover that failed to boot entirely, not a graceful
+      degrade. Fixed in all five builders uniformly (not just the three new
+      ones) via a genuine mousedroid.common.imports.module_available(...)
+      probe against each builder's actual google.cloud.* submodule, plus
+      wrapping all four _start_cloud_subsystems .start() calls in
+      try/except Exception -- matching the pre-existing OTA-poller
+      boot-resilience pattern three lines below. Fixing SDK-detection
+      correctly flips tests/integration/test_factory_integration.py's GCP
+      wiring test and three tests/unit/factory/test_factory_cloud_observability.py
+      "enabled" cases to see None in this repo's own [gcp]-less CI, so all
+      four gained pytest.importorskip guards in this same commit -- shipped
+      together, never as a follow-up, since there is no intermediate state
+      where both the fix and the unguarded tests are individually correct.
+      Also in this hotfix: MouseDroidOrchestrator.__init__ gained a bare
+      `*,` immediately before tool_registry, making the whole optional-param
+      tail keyword-only (zero existing call sites were exploiting the gap,
+      confirmed via an AST sweep of every call site in the tree -- latent
+      hardening, not a live-bug fix); a third stale docs/architecture.md
+      classDiagram (the `class Factory` block) gained the three missing
+      builders; the Level 3d intro's blanket "protected by CircuitBreaker"
+      claim was qualified to match the per-component Resilience table a few
+      lines below (only the two pre-existing components use the real
+      CircuitBreaker class); the two arity-check tests
+      (test_logging_sink.py, test_firestore_sync.py) now actually assert
+      parameter counts instead of calling inspect.signature() and
+      discarding the result; and tests/unit/test_main.py's
+      _FakeLoggingSink now mirrors the real CloudLoggingSink's _started
+      gate so its cli_entry() test proves a live-forwarded event rather
+      than one fired before start() was ever awaited.
 
-      Closeout: the hotfix merged as PR #208 (69b9aa0), CI green (49/49 checks) with
-      zero unresolved review threads (one Copilot finding about the new try/except wrappers
-      swallowing asyncio.CancelledError was investigated and confirmed a false positive
-      -- CancelledError is a BaseException subclass since Python 3.8, not caught by
-      except Exception, matching this file''s own orchestrator/CLAUDE.md invariant and
-      the pre-existing OTA-poller pattern the new wrappers mirror). implemented_in now
-      pins 69b9aa0 rather than 94aa8d3 (PR #206''s own merge) since that commit alone
-      shipped the boot-crash bug this hotfix fixed -- 69b9aa0 is the first commit where
-      F-032 is both wired AND correctly degrades when the [gcp] extra is absent.'
-  - id: F-035
-    epic: Deploy hygiene
-    name: Gate-critical SHAs are tag-protected, not branch-protected
-    description: 'Adds scripts/repin_tags.sh, the mirror image of scripts/archive_stale_branches.sh:
-      where that script REFUSES to delete a branch while it is the last thing keeping
-      a pinned SHA reachable, this one removes the need for that refusal by tagging
-      the SHA directly. Two pin families, both derived rather than hardcoded -- deployments/jetson-image.json''s
-      deploy pin (tag prefix DEPLOY_NS) and every features.yaml implemented_in pin (namespace
-      FEATURE_NS) -- named by full 40-char SHA so one tag covers features that share
-      a pin (F-028/F-029 do). Dry-run by default; --push is an explicit operator action.
-      Also corrects deployments/jetson-image.json''s own notes, which asserted the SHA
-      was "kept reachable by the annotated tag ... NOT by any branch" while zero tags
-      existed on the remote and the SHA was in fact reachable only from stale feature
-      branches.'
-    category: infrastructure
-    priority: medium
-    status: done
-    tier: fast
+      Closeout: the hotfix merged as PR #208 (69b9aa0), CI green (49/49
+      checks) with zero unresolved review threads (one Copilot finding
+      about the new try/except wrappers swallowing asyncio.CancelledError
+      was investigated and confirmed a false positive -- CancelledError is
+      a BaseException subclass since Python 3.8, not caught by except
+      Exception, matching this file's own orchestrator/CLAUDE.md invariant
+      and the pre-existing OTA-poller pattern the new wrappers mirror).
+      implemented_in now pins 69b9aa0 rather than 94aa8d3 (PR #206's own
+      merge) since that commit alone shipped the boot-crash bug this
+      hotfix fixed -- 69b9aa0 is the first commit where F-032 is both
+      wired AND correctly degrades when the [gcp] extra is absent.
+
+  - id: "F-035"
+    epic: "Deploy hygiene"
+    name: "Gate-critical SHAs are tag-protected, not branch-protected"
+    description: >-
+      Adds scripts/repin_tags.sh, the mirror image of
+      scripts/archive_stale_branches.sh: where that script REFUSES to delete a
+      branch while it is the last thing keeping a pinned SHA reachable, this
+      one removes the need for that refusal by tagging the SHA directly. Two
+      pin families, both derived rather than hardcoded --
+      deployments/jetson-image.json's deploy pin (tag prefix DEPLOY_NS) and
+      every features.yaml implemented_in pin (namespace FEATURE_NS) -- named
+      by full 40-char SHA so one tag covers features that share a pin
+      (F-028/F-029 do). Dry-run by default; --push is an explicit operator
+      action. Also corrects deployments/jetson-image.json's own notes, which
+      asserted the SHA was "kept reachable by the annotated tag ... NOT by any
+      branch" while zero tags existed on the remote and the SHA was in fact
+      reachable only from stale feature branches.
+    category: "infrastructure"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
     verification:
-    - a dry run names every tag it would create and leaves both the remote and the local
-      tag list untouched
-    - --push creates ANNOTATED tags (not lightweight) on the remote for both pin families,
-      named by full 40-char SHA
-    - 'a re-run is idempotent: both pins report as already covered and no second tag
-      is created'
-    - a SHA already reachable from a differently-named REMOTE tag counts as covered
-      -- coverage is reachability, not naming
-    - a deploy pin that is not 40 lowercase hex chars is rejected by the FORMAT check
-      specifically, with a nonzero exit and no remote mutation -- asserted on the format-check
-      message, because these values also fail the later resolve check and a bare nonzero-exit
-      assertion passed with the format check deleted
-    - a deploy pin naming a branch is rejected even though git cat-file resolves it
-      -- the case format validation exists for, which a reachability check alone silently
-      mis-tags
-    - a well-formed but unresolvable pin exits nonzero rather than reporting a partial
-      plan as success
-    - REMOTE env override selects a different remote and leaves origin untouched
-    - 'cross-script: after repin_tags.sh --push, archive_stale_branches.sh reports the
-      same pin as ''carriers not needed'' instead of protecting its branch'
-    validation_command: bash scripts/validations/F-035.sh
-    implemented_in: 24e34542b9ad98af03a020a005e916220dd28075
+      - "a dry run names every tag it would create and leaves both the remote and the local tag list untouched"
+      - "--push creates ANNOTATED tags (not lightweight) on the remote for both pin families, named by full 40-char SHA"
+      - "a re-run is idempotent: both pins report as already covered and no second tag is created"
+      - "a SHA already reachable from a differently-named REMOTE tag counts as covered -- coverage is reachability, not naming"
+      - "a deploy pin that is not 40 lowercase hex chars is rejected by the FORMAT check specifically, with a nonzero exit and no remote mutation -- asserted on the format-check message, because these values also fail the later resolve check and a bare nonzero-exit assertion passed with the format check deleted"
+      - "a deploy pin naming a branch is rejected even though git cat-file resolves it -- the case format validation exists for, which a reachability check alone silently mis-tags"
+      - "a well-formed but unresolvable pin exits nonzero rather than reporting a partial plan as success"
+      - "REMOTE env override selects a different remote and leaves origin untouched"
+      - "cross-script: after repin_tags.sh --push, archive_stale_branches.sh reports the same pin as 'carriers not needed' instead of protecting its branch"
+    validation_command: "bash scripts/validations/F-035.sh"
+    implemented_in: "24e34542b9ad98af03a020a005e916220dd28075"
     depends_on: []
-    notes: 'Ships with the deploy-repin skill (the skill half that backtick-references
-      scripts/repin_tags.sh, so the two must land together or the skill-command validator
-      fails on a dead path reference). No dependency on F-034: disjoint files. A real
-      --push run is an operator action requiring separate explicit confirmation -- this
-      feature covers building and dry-running the script only, so the tags it would
-      create do not exist yet. implemented_in stays null until the dedicated closeout
-      PR, per the F-030/F-031/F-032/F-034 convention. Catalog id F-036 is reserved for
-      stock IMU parse, not this skill.'
-  - id: F-034
-    epic: Training Observability
-    name: MLflow sqlite tracking default
-    description: 'Flips ExperimentLoggerConfig.tracking_uri''s default from the legacy
-      file-store URI (file:./mlruns) to sqlite:///mlflow.db, mlflow''s own recommended
-      local backend. mlflow 3.x hard-rejects the plain file-store backend without an
-      explicit MLFLOW_ALLOW_FILE_STORE=true opt-in (already set unconditionally in mlflow_logger.py
-      since PR #198); the sqlite default removes the dependency on that env-var workaround
-      going forward and matches mlflow''s documented production guidance. Adds sqlalchemy>=2.0,<3
-      and alembic>=1.13,<2 to the [mlflow] extra -- mlflow-skinny alone raises UnsupportedModelRegistryStoreURIException
-      for any sqlite:/// URI without them, confirmed by constructing a real MlflowClient
-      against one with only mlflow-skinny installed. Adds a new advisory mlflow-extras
-      CI job (mirrors onnx-world-model-extras'' shape) since no prior CI job installed
-      the [mlflow] extra at all -- its "green" status never actually exercised mlflow.
-      _resolve_tracking_uri (factory.py) is widened to pin relative sqlite:/// paths
-      as well as file: ones, so the new default is not left as the only unpinned local
-      store; in-memory sqlite and remote URIs still pass through unchanged. Every log
-      site carrying a tracking_uri redacts its userinfo component first (mousedroid.logging.redaction),
-      because the field is a plain str and a remote store may be spelled http://user:password@host.'
-    category: functional
-    priority: medium
-    status: done
-    tier: fast
+    notes: >-
+      Ships with the deploy-repin skill (the skill half that backtick-references
+      scripts/repin_tags.sh, so the two must land together or the skill-command
+      validator fails on a dead path reference). No dependency on F-034: disjoint
+      files. A real --push run is an operator action requiring separate explicit
+      confirmation -- this feature covers building and dry-running the script
+      only, so the tags it would create do not exist yet. implemented_in stays
+      null until the dedicated closeout PR, per the F-030/F-031/F-032/F-034
+      convention. Catalog id F-036 is reserved for stock IMU parse, not this skill.
+
+  - id: "F-034"
+    epic: "Training Observability"
+    name: "MLflow sqlite tracking default"
+    description: >-
+      Flips ExperimentLoggerConfig.tracking_uri's default from the legacy
+      file-store URI (file:./mlruns) to sqlite:///mlflow.db, mlflow's own
+      recommended local backend. mlflow 3.x hard-rejects the plain
+      file-store backend without an explicit MLFLOW_ALLOW_FILE_STORE=true
+      opt-in (already set unconditionally in mlflow_logger.py since PR
+      #198); the sqlite default removes the dependency on that env-var
+      workaround going forward and matches mlflow's documented production
+      guidance. Adds sqlalchemy>=2.0,<3 and alembic>=1.13,<2 to the
+      [mlflow] extra -- mlflow-skinny alone raises
+      UnsupportedModelRegistryStoreURIException for any sqlite:/// URI
+      without them, confirmed by constructing a real MlflowClient against
+      one with only mlflow-skinny installed. Adds a new advisory
+      mlflow-extras CI job (mirrors onnx-world-model-extras' shape) since
+      no prior CI job installed the [mlflow] extra at all -- its "green"
+      status never actually exercised mlflow. _resolve_tracking_uri
+      (factory.py) is widened to pin relative sqlite:/// paths as well as
+      file: ones, so the new default is not left as the only unpinned local
+      store; in-memory sqlite and remote URIs still pass through unchanged.
+      Every log site carrying a tracking_uri redacts its userinfo component
+      first (mousedroid.logging.redaction), because the field is a plain str
+      and a remote store may be spelled http://user:password@host.
+    category: "functional"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
     verification:
-    - ExperimentLoggerConfig().tracking_uri defaults to sqlite:///mlflow.db, not file:./mlruns
-    - the [mlflow] extra's parsed requirement names include mlflow-skinny, sqlalchemy,
-      and alembic
-    - '_resolve_tracking_uri pins relative file: AND sqlite:/// paths to absolute, is
-      idempotent, matches schemes case-insensitively, and leaves remote and in-memory
-      (sqlite://, sqlite:///:memory:) URIs unchanged'
-    - 'tracking_uri rejects every silently-discarding value at schema validation: empty/whitespace-only,
-      and BOTH bare sqlite forms -- sqlite:// (two slashes) and sqlite:/// (three, no
-      filename), each an in-memory store per PRAGMA database_list; sqlite:///:memory:
-      stays allowed as the explicit spelling, and the value is normalised to its stripped
-      form because a leading space would defeat the resolver''s scheme match'
-    - no config/** file (yaml, yml, subdirectories, and .example templates) references
-      observability/experiment_logger, so no shipped config FILE is affected by the
-      default flip
-    - the documented env-var opt-in (MOUSEDROID_OBSERVABILITY__EXPERIMENT_LOGGER__BACKEND=mlflow)
-      DOES materialize the new sqlite default -- pinned deliberately, since it is the
-      change's real blast radius rather than something to gloss
-    - a real SQLite store round-trips runs, params, metrics, and nested phase runs through
-      build_experiment_logger, so the mlflow-extras job actually exercises the sqlalchemy/alembic
-      it installs
-    - the full mlflow-touching test surface (unit/factory/integration) passes with the
-      [mlflow] extra installed against a real mlflow 3.x install
-    - 'no tracking_uri credential reaches a log event: every site logging the URI (and
-      the exception text alongside it, which mlflow echoes the URI into) redacts the
-      userinfo component first, asserted over the whole captured event stream so a future
-      log site cannot silently reintroduce the leak'
-    validation_command: bash scripts/validations/F-034.sh
-    implemented_in: fb40f5c238b4fee32487cc3b3a84b5bf4fd21ce0
+      - "ExperimentLoggerConfig().tracking_uri defaults to sqlite:///mlflow.db, not file:./mlruns"
+      - "the [mlflow] extra's parsed requirement names include mlflow-skinny, sqlalchemy, and alembic"
+      - "_resolve_tracking_uri pins relative file: AND sqlite:/// paths to absolute, is idempotent, matches schemes case-insensitively, and leaves remote and in-memory (sqlite://, sqlite:///:memory:) URIs unchanged"
+      - "tracking_uri rejects every silently-discarding value at schema validation: empty/whitespace-only, and BOTH bare sqlite forms -- sqlite:// (two slashes) and sqlite:/// (three, no filename), each an in-memory store per PRAGMA database_list; sqlite:///:memory: stays allowed as the explicit spelling, and the value is normalised to its stripped form because a leading space would defeat the resolver's scheme match"
+      - "no config/** file (yaml, yml, subdirectories, and .example templates) references observability/experiment_logger, so no shipped config FILE is affected by the default flip"
+      - "the documented env-var opt-in (MOUSEDROID_OBSERVABILITY__EXPERIMENT_LOGGER__BACKEND=mlflow) DOES materialize the new sqlite default -- pinned deliberately, since it is the change's real blast radius rather than something to gloss"
+      - "a real SQLite store round-trips runs, params, metrics, and nested phase runs through build_experiment_logger, so the mlflow-extras job actually exercises the sqlalchemy/alembic it installs"
+      - "the full mlflow-touching test surface (unit/factory/integration) passes with the [mlflow] extra installed against a real mlflow 3.x install"
+      - "no tracking_uri credential reaches a log event: every site logging the URI (and the exception text alongside it, which mlflow echoes the URI into) redacts the userinfo component first, asserted over the whole captured event stream so a future log site cannot silently reintroduce the leak"
+    validation_command: "bash scripts/validations/F-034.sh"
+    implemented_in: "fb40f5c238b4fee32487cc3b3a84b5bf4fd21ce0"
     depends_on: []
-    notes: 'No dependency on F-028 through F-032. The one file shared with any of them
-      is src/mousedroid/factory.py, which F-032 also touched, but the overlap is textually
-      disjoint: F-032 added the build_cloud_* builders, F-034 touches only build_experiment_logger
-      and _resolve_tracking_uri. (An earlier revision of this note claimed the file
-      sets were entirely disjoint; that stopped being true when the hardening round
-      widened _resolve_tracking_uri.) implemented_in stays null until the dedicated
-      closeout PR, per the F-030/F-031/F-032 convention of a separate bookkeeping-only
-      PR after merge.
+    notes: >-
+      No dependency on F-028 through F-032. The one file shared with any of
+      them is src/mousedroid/factory.py, which F-032 also touched, but the
+      overlap is textually disjoint: F-032 added the build_cloud_* builders,
+      F-034 touches only build_experiment_logger and _resolve_tracking_uri.
+      (An earlier revision of this note claimed the file sets were entirely
+      disjoint; that stopped being true when the hardening round widened
+      _resolve_tracking_uri.) implemented_in stays null until the dedicated
+      closeout PR, per the F-030/F-031/F-032 convention of a separate
+      bookkeeping-only PR after merge.
 
-      Verified empirically before implementing, not trusted from NEXT_STEPS.md item
-      0''s own diagnosis (written 2026-08-20, predating this change): installed mlflow
-      3.15.2 + the current tree''s MLFLOW_ALLOW_FILE_STORE=true workaround and ran the
-      full mlflow-touching test surface (88 tests across tests/unit/training/observability/test_mlflow_logger.py,
-      tests/unit/factory/test_factory_observability.py, tests/integration/test_offline_rl_observability.py,
-      tests/integration/test_pipeline_orchestrator_observability.py, tests/regression/test_runbooks_structure.py,
-      tests/regression/test_observability_backwards_compat.py, tests/regression/test_optional_extra_import_gates.py)
-      against the OLD file:./mlruns default -- all 88 passed, not the 29-failed/ 17-errored
-      NEXT_STEPS.md diagnosed. Root cause: PR #198 (three days after the diagnosis-motivating
-      PR #145) already added os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
-      to mlflow_logger.py, which resolved the acute hard-rejection blocker without anyone
-      updating NEXT_STEPS.md item 0 to say so. This change is therefore reframed from
-      "unblock a currently-broken path" to "complete the fix mlflow''s own docs recommend,
-      removing the dependency on an env-var workaround for a rejection future mlflow
-      versions could tighten further" -- still worth doing, but not the urgent fix NEXT_STEPS.md''s
-      stale wording implied. Confirmed via a second empirical test that sqlite:/// tracking
-      genuinely fails without sqlalchemy+alembic (UnsupportedModelRegistryStoreURIException)
-      and genuinely works once they''re installed (full run lifecycle: create_experiment/create_run/log_metric/set_terminated
-      all succeeded). NEXT_STEPS.md item 0 removed (resolved), not merely reworded --
-      its "Open dependabot PR #145" framing was independently already stale too (verified
-      via git log: #145 merged 2026-08-17, three days before the diagnosis commit that
-      still called it "open").
+      Verified empirically before implementing, not trusted from
+      NEXT_STEPS.md item 0's own diagnosis (written 2026-08-20, predating
+      this change): installed mlflow 3.15.2 + the current tree's
+      MLFLOW_ALLOW_FILE_STORE=true workaround and ran the full
+      mlflow-touching test surface (88 tests across
+      tests/unit/training/observability/test_mlflow_logger.py,
+      tests/unit/factory/test_factory_observability.py,
+      tests/integration/test_offline_rl_observability.py,
+      tests/integration/test_pipeline_orchestrator_observability.py,
+      tests/regression/test_runbooks_structure.py,
+      tests/regression/test_observability_backwards_compat.py,
+      tests/regression/test_optional_extra_import_gates.py) against the
+      OLD file:./mlruns default -- all 88 passed, not the 29-failed/
+      17-errored NEXT_STEPS.md diagnosed. Root cause: PR #198 (three days
+      after the diagnosis-motivating PR #145) already added
+      os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true") to
+      mlflow_logger.py, which resolved the acute hard-rejection blocker
+      without anyone updating NEXT_STEPS.md item 0 to say so. This change
+      is therefore reframed from "unblock a currently-broken path" to
+      "complete the fix mlflow's own docs recommend, removing the
+      dependency on an env-var workaround for a rejection future mlflow
+      versions could tighten further" -- still worth doing, but not the
+      urgent fix NEXT_STEPS.md's stale wording implied. Confirmed via a
+      second empirical test that sqlite:/// tracking genuinely fails
+      without sqlalchemy+alembic (UnsupportedModelRegistryStoreURIException)
+      and genuinely works once they're installed (full run lifecycle:
+      create_experiment/create_run/log_metric/set_terminated all succeeded).
+      NEXT_STEPS.md item 0 removed (resolved), not merely reworded -- its
+      "Open dependabot PR #145" framing was independently already stale
+      too (verified via git log: #145 merged 2026-08-17, three days before
+      the diagnosis commit that still called it "open").
 
-      Known, accepted, pre-existing gap surfaced by security-scanner during this bundle''s
-      review round (not introduced by this bundle -- neither the field''s type nor the
-      log line it flags are touched here): ExperimentLoggerConfig.tracking_uri stays
-      a plain str, not SecretStr, unlike the sibling TelemetryConfig.api_key field in
-      the same module. MlflowExperimentLogger.__init__ logs it raw via mlflow_logger_initialised.
-      The schema default this bundle ships (sqlite:///mlflow.db) carries no credentials,
-      so this is dormant today -- but the field''s own docstring already documents remote
-      http://host:port URIs, and this bundle''s own framing points further toward database-backed
-      stores generally, which can carry embedded credentials (e.g. postgresql://user:pass@host/db)
-      if an operator overlay ever sets one. Not fixed here: SecretStr would need .get_secret_value()
-      threaded through _resolve_tracking_uri and MlflowExperimentLogger.__init__, a
-      real API-shape change outside this bundle''s stated scope (a default-value flip
-      + CI job + docs), not a proportionate widening of the one field/docstring already
-      being touched. Surfaced rather than silently fixed or silently dropped, per CHARTER
-      Section 6 -- deferred to a separate, not-yet-numbered future change if an operator
-      ever needs a credentialed tracking_uri in practice.
+      Known, accepted, pre-existing gap surfaced by security-scanner
+      during this bundle's review round (not introduced by this bundle --
+      neither the field's type nor the log line it flags are touched
+      here): ExperimentLoggerConfig.tracking_uri stays a plain str, not
+      SecretStr, unlike the sibling TelemetryConfig.api_key field in the
+      same module. MlflowExperimentLogger.__init__ logs it raw via
+      mlflow_logger_initialised. The schema default this bundle ships
+      (sqlite:///mlflow.db) carries no credentials, so this is dormant
+      today -- but the field's own docstring already documents remote
+      http://host:port URIs, and this bundle's own framing points further
+      toward database-backed stores generally, which can carry embedded
+      credentials (e.g. postgresql://user:pass@host/db) if an operator
+      overlay ever sets one. Not fixed here: SecretStr would need
+      .get_secret_value() threaded through _resolve_tracking_uri and
+      MlflowExperimentLogger.__init__, a real API-shape change outside
+      this bundle's stated scope (a default-value flip + CI job + docs),
+      not a proportionate widening of the one field/docstring already
+      being touched. Surfaced rather than silently fixed or silently
+      dropped, per CHARTER Section 6 -- deferred to a separate,
+      not-yet-numbered future change if an operator ever needs a
+      credentialed tracking_uri in practice.
 
-      Six-agent review round (peer-review, config, logging, tests, docs, automation)
-      returned REQUEST_CHANGES; full record in the bundle''s peer-review.md. Three findings
-      reversed earlier decisions in this same bundle, so they are recorded here rather
-      than only in the commit log: (1) an earlier revision left _resolve_tracking_uri
-      untouched and framed that as a win -- it made the new default the ONLY unpinned
-      local store, contradicting the function''s own chdir-survival contract; sqlite:///
-      is now pinned like file:. (2) The first test for that pin asserted "a chdir cannot
-      strand the database" and PASSED WITH THE FIX REVERTED -- a tautology, caught only
-      by running the revert. mlflow caches its store per URI string per process, and
-      two processes launched from different directories split regardless, both verified
-      directly; the pin''s real benefit is that the effective path is absolute and therefore
-      reportable via the new experiment_logger_tracking_uri_resolved event. The test
-      was rewritten to assert only what goes red without the pin. (3) The residual-risk
-      statement understated the blast radius: it named mlflow-skinny 2.x pins, but this
-      bundle''s own 88/88-green verification proves the file backend works on 3.x, and
-      the real affected population is anyone using the documented env-var opt-in, which
-      materializes the whole config block from defaults. Corrected in proposal.md and
-      CHANGELOG.md and pinned by a test.
+      Six-agent review round (peer-review, config, logging, tests, docs,
+      automation) returned REQUEST_CHANGES; full record in the bundle's
+      peer-review.md. Three findings reversed earlier decisions in this
+      same bundle, so they are recorded here rather than only in the
+      commit log: (1) an earlier revision left _resolve_tracking_uri
+      untouched and framed that as a win -- it made the new default the
+      ONLY unpinned local store, contradicting the function's own
+      chdir-survival contract; sqlite:/// is now pinned like file:.
+      (2) The first test for that pin asserted "a chdir cannot strand
+      the database" and PASSED WITH THE FIX REVERTED -- a tautology,
+      caught only by running the revert. mlflow caches its store per URI
+      string per process, and two processes launched from different
+      directories split regardless, both verified directly; the pin's
+      real benefit is that the effective path is absolute and therefore
+      reportable via the new experiment_logger_tracking_uri_resolved
+      event. The test was rewritten to assert only what goes red without
+      the pin. (3) The residual-risk statement understated the blast
+      radius: it named mlflow-skinny 2.x pins, but this bundle's own
+      88/88-green verification proves the file backend works on 3.x, and
+      the real affected population is anyone using the documented env-var
+      opt-in, which materializes the whole config block from defaults.
+      Corrected in proposal.md and CHANGELOG.md and pinned by a test.
 
-      Also fixed during that round: the mlflow-extras job installed sqlalchemy/alembic
-      without ever opening a sqlite store (every other mlflow test drives a file: URI),
-      closed by tests/integration/test_mlflow_sqlite_backend.py; a pre-existing cross-test
-      pollution where test_backend_mlflow_degrades_to_noop_ when_extras_missing used
-      a raw sys.modules.pop and evicted the wrapper module, permanently corrupting mlflow
-      for any later test that opened a real store; a tracking_uri validator for two
-      silently-discarding values; .dockerignore missing the mlflow.db* entries .gitignore
-      got; and the runbook''s POSIX-only "4 slashes" sqlite guidance plus a missing
-      file-backend migration section.'
-  - id: F-036
-    epic: Rover bring-up
-    name: Stock FEEDBACK_BASE_INFO IMU parse without RSSM slot widen
-    description: Consume Waveshare FEEDBACK_BASE_INFO keys r/p/y into EncoderReading
-      attitude fields (roll_rad/pitch_rad/yaw_rad, imu_valid). Sensing copies yaw into
-      the existing 4-float motor observation via heading_for_motor(). Default command_set=legacy
-      stays IMU-inert. Does NOT add SENSOR_SLOT_MAP["imu"] (that is F-040).
-    category: functional
-    priority: high
-    status: done
-    tier: fast
+      Also fixed during that round: the mlflow-extras job installed
+      sqlalchemy/alembic without ever opening a sqlite store (every other
+      mlflow test drives a file: URI), closed by
+      tests/integration/test_mlflow_sqlite_backend.py; a pre-existing
+      cross-test pollution where test_backend_mlflow_degrades_to_noop_
+      when_extras_missing used a raw sys.modules.pop and evicted the
+      wrapper module, permanently corrupting mlflow for any later test
+      that opened a real store; a tracking_uri validator for two
+      silently-discarding values; .dockerignore missing the mlflow.db*
+      entries .gitignore got; and the runbook's POSIX-only "4 slashes"
+      sqlite guidance plus a missing file-backend migration section.
+
+  # F-033 is intentionally SKIPPED: progress.md used that id informally for
+  # "chassis safety sensors" and it was never catalogued. Reusing it would
+  # collide the same way F-009..F-014 collided with SMOKE_REPORT findings
+  # (ADR-013). The catalog continues at F-036 (F-034 and F-035 already landed).
+  - id: "F-036"
+    epic: "Rover bring-up"
+    name: "Stock FEEDBACK_BASE_INFO IMU parse without RSSM slot widen"
+    description: >-
+      Consume Waveshare FEEDBACK_BASE_INFO keys r/p/y into EncoderReading
+      attitude fields (roll_rad/pitch_rad/yaw_rad, imu_valid). Sensing
+      copies yaw into the existing 4-float motor observation via
+      heading_for_motor(). Default command_set=legacy stays IMU-inert.
+      Does NOT add SENSOR_SLOT_MAP["imu"] (that is F-040).
+    category: "functional"
+    priority: "high"
+    status: "done"
+    tier: "fast"
     verification:
-    - stock T=1001 r/p/y parse into attitude fields; heading_rad stays 0
-    - heading_for_motor returns yaw when imu_valid else heading_rad
-    - legacy codec and parse_encoder_reading leave imu_valid False
-    - motor_state_dim stays 4; IMU fusion slot is F-040 not this parse
-    validation_command: bash scripts/validations/F-036.sh
-    implemented_in: 85a726da7235cb7b154c2561269f62d02a49ef11
-    depends_on:
-    - F-025
-    notes: "Audit R4 software half. No CHARTER \xC2\xA73 carve-out: (1) no actuation;\
-      \ (2) no LLM/training in the hot loop; (3) default command_set remains legacy\
-      \ so existing YAML loads unchanged. Hardware validation of the chassis IMU still\
-      \ waits on F-008; this feature does not close F-008."
-  - id: F-037
-    epic: Security
-    name: HTTP gateway + CLI probes always sanitise before LLM egress
-    description: OpenAICompatibleLLMGateway self-builds RegexInjectionFilter from cfg.injection_patterns
-      when injection_filter is None (same constructor symmetry as Anthropic / llama_cpp).
-      scripts/translate_mission.py and scripts/ask_rover.py pass build_injection_filter
-      so they share the orchestrator envelope. Parked arm/.../anthropic_backend.py is
-      frozen until F-008 is done.
-    category: functional
-    priority: high
-    status: done
-    tier: fast
+      - "stock T=1001 r/p/y parse into attitude fields; heading_rad stays 0"
+      - "heading_for_motor returns yaw when imu_valid else heading_rad"
+      - "legacy codec and parse_encoder_reading leave imu_valid False"
+      - "motor_state_dim stays 4; IMU fusion slot is F-040 not this parse"
+    validation_command: "bash scripts/validations/F-036.sh"
+    implemented_in: "85a726da7235cb7b154c2561269f62d02a49ef11"
+    depends_on: ["F-025"]
+    notes: >-
+      Audit R4 software half. No CHARTER §3 carve-out: (1) no actuation;
+      (2) no LLM/training in the hot loop; (3) default command_set remains
+      legacy so existing YAML loads unchanged. Hardware validation of the
+      chassis IMU still waits on F-008; this feature does not close F-008.
+
+  - id: "F-037"
+    epic: "Security"
+    name: "HTTP gateway + CLI probes always sanitise before LLM egress"
+    description: >-
+      OpenAICompatibleLLMGateway self-builds RegexInjectionFilter from
+      cfg.injection_patterns when injection_filter is None (same constructor
+      symmetry as Anthropic / llama_cpp). scripts/translate_mission.py and
+      scripts/ask_rover.py pass build_injection_filter so they share the
+      orchestrator envelope. Parked arm/.../anthropic_backend.py is frozen
+      until F-008 is done.
+    category: "functional"
+    priority: "high"
+    status: "done"
+    tier: "fast"
     verification:
-    - no-arg OpenAICompatibleLLMGateway constructor stores RegexInjectionFilter
-    - default patterns reject ignore-previous without an HTTP call
-    - CLIs pass build_injection_filter into build_llm_gateway
-    - explicit factory filter instance is still stored unchanged
-    validation_command: bash scripts/validations/F-037.sh
-    implemented_in: a0519cccb2faa48630c06d480ed63ebb62a4c119
-    depends_on:
-    - F-005
-    notes: "No CHARTER \xC2\xA73 carve-out: restoring the pre-egress filter the orchestrator\
-      \ already uses on the CLI probe path. The documented None-skip was a unit-test\
-      \ seam that operator CLIs actually hit."
-  - id: F-038
-    epic: Hygiene
-    name: CI/docs honesty for parked journeys and Current Next Steps
-    description: "Relabel the CI step and tests/functional + tests/user_journey as parked\
-      \ AutonomousOrchestrator (ADR-016), not production operator-path coverage. Pin\
-      \ that NEXT_STEPS Current Next Steps contains no LANDED token and that done catalog\
-      \ ids there are operator leftovers. Invoke doc_hygiene.py --strict in ci.sh and\
-      \ the local-gates job. Point CHARTER \xC2\xA75 at root NEXT_STEPS.md, not the\
-      \ May-16 IMPLEMENTATION_PLAN.md. Catalog F-008 vs smoke-report F-008 is named\
-      \ once (ADR-013)."
-    category: validation
-    priority: high
-    status: done
-    tier: fast
+      - "no-arg OpenAICompatibleLLMGateway constructor stores RegexInjectionFilter"
+      - "default patterns reject ignore-previous without an HTTP call"
+      - "CLIs pass build_injection_filter into build_llm_gateway"
+      - "explicit factory filter instance is still stored unchanged"
+    validation_command: "bash scripts/validations/F-037.sh"
+    implemented_in: "a0519cccb2faa48630c06d480ed63ebb62a4c119"
+    depends_on: ["F-005"]
+    notes: >-
+      No CHARTER §3 carve-out: restoring the pre-egress filter the
+      orchestrator already uses on the CLI probe path. The documented
+      None-skip was a unit-test seam that operator CLIs actually hit.
+
+  - id: "F-038"
+    epic: "Hygiene"
+    name: "CI/docs honesty for parked journeys and Current Next Steps"
+    description: >-
+      Relabel the CI step and tests/functional + tests/user_journey as parked
+      AutonomousOrchestrator (ADR-016), not production operator-path coverage.
+      Pin that NEXT_STEPS Current Next Steps contains no LANDED token and that
+      done catalog ids there are operator leftovers. Invoke doc_hygiene.py
+      --strict in ci.sh and the local-gates job. Point CHARTER §5 at root
+      NEXT_STEPS.md, not the May-16 IMPLEMENTATION_PLAN.md. Catalog F-008 vs
+      smoke-report F-008 is named once (ADR-013).
+    category: "validation"
+    priority: "high"
+    status: "done"
+    tier: "fast"
     verification:
-    - CI step name contains parked-autonomous
-    - functional/user_journey import build_autonomous_orchestrator only
-    - Current Next Steps has no LANDED; done F-ids are leftover-labelled
-    - ci.yml and ci.sh invoke doc_hygiene.py --strict
-    validation_command: bash scripts/validations/F-038.sh
-    implemented_in: fe1842a08e89b21c3dd204af21ebcd9b73dd00b8
-    depends_on:
-    - F-016
-    - F-028
-    notes: "No CHARTER \xC2\xA73 carve-out: docs + CI labels only. Do not twin parked\
-      \ journeys onto MouseDroidOrchestrator under mock_hardware."
-  - id: F-039
-    epic: GCP Digital Twin
-    name: Cloud Logging queue + allowlist (dormant footgun, not a default stall)
-    description: CloudLoggingSink.__call__ no longer calls the SDK. It allowlists operational
-      keys, redacts mission/NL fields, and put_nowait-drops onto a bounded queue (GCPLoggingConfig.queue_maxsize,
-      default 256). Drain is an asyncio task started in start(); the SDK runs in asyncio.to_thread.
-      Tests prove tick_complete is dropped at default INFO and only reaches the sink
-      when LoggingConfig.level and GCPLoggingConfig.min_level are both DEBUG. Do not
-      claim a 30 Hz stall on default overlays.
-    category: infrastructure
-    priority: medium
-    status: done
-    tier: fast
+      - "CI step name contains parked-autonomous"
+      - "functional/user_journey import build_autonomous_orchestrator only"
+      - "Current Next Steps has no LANDED; done F-ids are leftover-labelled"
+      - "ci.yml and ci.sh invoke doc_hygiene.py --strict"
+    validation_command: "bash scripts/validations/F-038.sh"
+    implemented_in: "fe1842a08e89b21c3dd204af21ebcd9b73dd00b8"
+    depends_on: ["F-016", "F-028"]
+    notes: >-
+      No CHARTER §3 carve-out: docs + CI labels only. Do not twin parked
+      journeys onto MouseDroidOrchestrator under mock_hardware.
+
+  - id: "F-039"
+    epic: "GCP Digital Twin"
+    name: "Cloud Logging queue + allowlist (dormant footgun, not a default stall)"
+    description: >-
+      CloudLoggingSink.__call__ no longer calls the SDK. It allowlists
+      operational keys, redacts mission/NL fields, and put_nowait-drops onto
+      a bounded queue (GCPLoggingConfig.queue_maxsize, default 256). Drain
+      is an asyncio task started in start(); the SDK runs in asyncio.to_thread.
+      Tests prove tick_complete is dropped at default INFO and only reaches
+      the sink when LoggingConfig.level and GCPLoggingConfig.min_level are
+      both DEBUG. Do not claim a 30 Hz stall on default overlays.
+    category: "infrastructure"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
     verification:
-    - default INFO levels drop debug tick_complete before log_struct
-    - both-DEBUG overlay forwards tick_complete after flush
-    - __call__ does not block when log_struct sleeps
-    - nl_command/mission/query never appear in the Cloud Logging payload
-    - queue_maxsize defaults 256 and existing YAML still loads
-    validation_command: bash scripts/validations/F-039.sh
-    implemented_in: 28991843c2e58595bfd6b1a9ab24d34bbe58c71a
-    depends_on:
-    - F-032
-    notes: "No CHARTER \xC2\xA73 carve-out: default gcp.logging.enabled is False; this\
-      \ restores the fire-and-forget contract F-032 documented as accepted risk. Allowlist\
-      \ is a module frozenset, not YAML-widenable."
-  - id: F-040
-    epic: World model
-    name: Optional IMU fusion slot 5, packer width 6, default imu_dim=0
-    description: 'Lidar-shaped IMU modality: SENSOR_SLOT_MAP["imu"]=5, imu_dim and imu_proj_dim
-      default 0/32, packer valid_mask width 6. Default path does not change fused_dim
-      or motor_state_dim. Enable with imu_dim=3 after F-036 parse exists. Does not close
-      F-008.'
-    category: functional
-    priority: medium
-    status: done
-    tier: fast
+      - "default INFO levels drop debug tick_complete before log_struct"
+      - "both-DEBUG overlay forwards tick_complete after flush"
+      - "__call__ does not block when log_struct sleeps"
+      - "nl_command/mission/query never appear in the Cloud Logging payload"
+      - "queue_maxsize defaults 256 and existing YAML still loads"
+    validation_command: "bash scripts/validations/F-039.sh"
+    implemented_in: "28991843c2e58595bfd6b1a9ab24d34bbe58c71a"
+    depends_on: ["F-032"]
+    notes: >-
+      No CHARTER §3 carve-out: default gcp.logging.enabled is False; this
+      restores the fire-and-forget contract F-032 documented as accepted
+      risk. Allowlist is a module frozenset, not YAML-widenable.
+
+  - id: "F-040"
+    epic: "World model"
+    name: "Optional IMU fusion slot 5, packer width 6, default imu_dim=0"
+    description: >-
+      Lidar-shaped IMU modality: SENSOR_SLOT_MAP["imu"]=5, imu_dim and
+      imu_proj_dim default 0/32, packer valid_mask width 6. Default path does
+      not change fused_dim or motor_state_dim. Enable with imu_dim=3 after
+      F-036 parse exists. Does not close F-008.
+    category: "functional"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
     verification:
-    - imu_dim FieldInfo default is 0; motor_state_dim stays 4
-    - SENSOR_SLOT_MAP imu is 5; packed mask width is 6
-    - default MultimodalEncoder has no imu_proj; fused_dim unchanged
-    - imu_dim=3 adds imu_proj and packer emits (1, 3) imu tensor
-    validation_command: bash scripts/validations/F-040.sh
-    implemented_in: 4c1fe970ab62967ae14825aedfdc49e14ae01213
-    depends_on:
-    - F-036
-    notes: "No CHARTER \xC2\xA73 carve-out: imu_dim defaults 0 so existing YAML and\
-      \ checkpoints stay byte-identical on the fusion weights. Hardware frames still\
-      \ wait on F-008."
-  - id: F-041
-    epic: Cognitive pillars
-    name: BDI Adam trainer + causal intention features (portfolio, no HF publish)
-    description: Belief autoencoder uses Adam instead of plain SGD. collect_annotations
-      stores intention_features aligned with label_intention (action, range, battery,
-      Law 1/2 flags) so the 10-class claim has a causal X. Publish stays blocked until
-      belief MSE beats PCA-128 and intention accuracy beats majority class. Runtime
-      WEIGHT_INIT_SCALE and NeuralBDI random fallback are unchanged. OTA poller remains
-      ianshank/mousedroid-policy-v2.
-    category: functional
-    priority: medium
-    status: done
-    tier: fast
+      - "imu_dim FieldInfo default is 0; motor_state_dim stays 4"
+      - "SENSOR_SLOT_MAP imu is 5; packed mask width is 6"
+      - "default MultimodalEncoder has no imu_proj; fused_dim unchanged"
+      - "imu_dim=3 adds imu_proj and packer emits (1, 3) imu tensor"
+    validation_command: "bash scripts/validations/F-040.sh"
+    implemented_in: "4c1fe970ab62967ae14825aedfdc49e14ae01213"
+    depends_on: ["F-036"]
+    notes: >-
+      No CHARTER §3 carve-out: imu_dim defaults 0 so existing YAML and
+      checkpoints stay byte-identical on the fusion weights. Hardware
+      frames still wait on F-008.
+
+  - id: "F-041"
+    epic: "Cognitive pillars"
+    name: "BDI Adam trainer + causal intention features (portfolio, no HF publish)"
+    description: >-
+      Belief autoencoder uses Adam instead of plain SGD. collect_annotations
+      stores intention_features aligned with label_intention (action, range,
+      battery, Law 1/2 flags) so the 10-class claim has a causal X. Publish
+      stays blocked until belief MSE beats PCA-128 and intention accuracy
+      beats majority class. Runtime WEIGHT_INIT_SCALE and NeuralBDI random
+      fallback are unchanged. OTA poller remains ianshank/mousedroid-policy-v2.
+    category: "functional"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
     verification:
-    - He init is sqrt(2/fan_in) and does not import WEIGHT_INIT_SCALE
-    - train_belief_encoder uses AdamOptimizer, not w -= lr * grad
-    - intention_features columns match label_intention inputs
-    - causal MLP head beats majority class; train_bdi does not upload
-    validation_command: bash scripts/validations/F-041.sh
-    implemented_in: c6a779e47273d5710cda587d069eba6b92f8cc63
+      - "He init is sqrt(2/fan_in) and does not import WEIGHT_INIT_SCALE"
+      - "train_belief_encoder uses AdamOptimizer, not w -= lr * grad"
+      - "intention_features columns match label_intention inputs"
+      - "causal MLP head beats majority class; train_bdi does not upload"
+    validation_command: "bash scripts/validations/F-041.sh"
+    implemented_in: "c6a779e47273d5710cda587d069eba6b92f8cc63"
     depends_on: []
-    notes: "Portfolio, not rover-blocking. No CHARTER \xC2\xA73 carve-out: training\
-      \ laptop only. Do not publish to HuggingFace until passes_bdi_publish_bars is\
-      \ true on the operator dataset."
-  - id: F-042
-    epic: Hygiene
-    name: Enumerate factory/orchestrator branch-coverage exemptions
-    description: Replace unbounded factory/ and orchestrator/_ prefixes in check_branch_coverage.py
-      with an enumerated file allowlist. Keep gating factory/on_device_learning.py,
-      mcp_harness.py, and _replay_batch_helpers.py (algorithmic, not pure DI). Schema,
+    notes: >-
+      Portfolio, not rover-blocking. No CHARTER §3 carve-out: training
+      laptop only. Do not publish to HuggingFace until
+      passes_bdi_publish_bars is true on the operator dataset.
+
+  - id: "F-042"
+    epic: "Hygiene"
+    name: "Enumerate factory/orchestrator branch-coverage exemptions"
+    description: >-
+      Replace unbounded factory/ and orchestrator/_ prefixes in
+      check_branch_coverage.py with an enumerated file allowlist. Keep
+      gating factory/on_device_learning.py, mcp_harness.py, and
+      _replay_batch_helpers.py (algorithmic, not pure DI). Schema,
       telemetry, and validation/runtime prefixes stay.
-    category: infrastructure
-    priority: medium
-    status: done
-    tier: fast
+    category: "infrastructure"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
     verification:
-    - factory/ and orchestrator/_ are not directory prefixes
-    - enumerated DI factory files and orchestrator mixins stay exempt
-    - on_device_learning, mcp_harness, _replay_batch_helpers are gated
-    - a hypothetical factory/new_builder.py is not exempt
-    validation_command: bash scripts/validations/F-042.sh
-    implemented_in: 32e4f1ec1449e378ffc0845a39f2c2958aa1e1f1
+      - "factory/ and orchestrator/_ are not directory prefixes"
+      - "enumerated DI factory files and orchestrator mixins stay exempt"
+      - "on_device_learning, mcp_harness, _replay_batch_helpers are gated"
+      - "a hypothetical factory/new_builder.py is not exempt"
+    validation_command: "bash scripts/validations/F-042.sh"
+    implemented_in: "32e4f1ec1449e378ffc0845a39f2c2958aa1e1f1"
     depends_on: []
-    notes: "No CHARTER \xC2\xA73 carve-out: CI gate honesty only. Does not lower the\
-      \ coverage threshold. Do not re-open factory/ as a prefix."
-  - id: F-043
-    epic: Isaac Lab workstation
-    name: Nested Isaac schema + de-hardcode + factory docstring
-    description: Nested RoverIsaacSimConfig preserves today's headless/device branch
-      (cuda:0 vs cpu). Shared battery_voltage_const_v. Wire num_envs into SimulationCfg
-      when the API accepts it. Factory docstring no longer claims mujoco raises NotImplementedError.
-      Always-on AQA/compat. validation_command asserts pytest passed>0 (skip-all is
-      not done).
-    category: infrastructure
-    priority: high
-    status: done
-    tier: fast
+    notes: >-
+      No CHARTER §3 carve-out: CI gate honesty only. Does not lower the
+      coverage threshold. Do not re-open factory/ as a prefix.
+
+  - id: "F-043"
+    epic: "Isaac Lab workstation"
+    name: "Nested Isaac schema + de-hardcode + factory docstring"
+    description: >-
+      Nested RoverIsaacSimConfig preserves today's headless/device branch
+      (cuda:0 vs cpu). Shared battery_voltage_const_v. Wire num_envs into
+      SimulationCfg when the API accepts it. Factory docstring no longer
+      claims mujoco raises NotImplementedError. Always-on AQA/compat.
+      validation_command asserts pytest passed>0 (skip-all is not done).
+    category: "infrastructure"
+    priority: "high"
+    status: "done"
+    tier: "fast"
     verification:
-    - RoverIsaacSimConfig FieldInfo defaults match pre-F-043 literals
-    - 'Omitting isaac: keys still loads Settings'
-    - build_rover_env docstring does not mention NotImplementedError
-    - scripts/validations/F-043.sh reports passed>0
-    validation_command: bash scripts/validations/F-043.sh
-    implemented_in: 3b5278925169701cca6f1d7cb6116481608c85cc
-    depends_on:
-    - F-002
-    notes: "No CHARTER \xC2\xA73 carve-out. Do not add isaac keys to config/default.yaml.\
-      \ Runtime Settings.harness stays None. F-008 remains the hardware next feature.\
-      \ Isaac coding sessions resumed this id while it was in_progress."
-  - id: F-044
-    epic: Isaac Lab workstation
-    name: Fake-injectable IMU/pose/lidar readers + training seams
-    description: Isaac _read_pose/_read_imu/_read_lidar run on duck-typed _sensors fakes.
-      to_body_action uses shared kinematics. step/reset info includes vx_body_mps and
-      omega_rads. LiDAR bins come from RoverObservationConfig, not hardware LidarConfig.
-      Does not map 6-DoF IMU into RSSM imu_dim.
-    category: functional
-    priority: high
-    status: done
-    tier: fast
+      - "RoverIsaacSimConfig FieldInfo defaults match pre-F-043 literals"
+      - "Omitting isaac: keys still loads Settings"
+      - "build_rover_env docstring does not mention NotImplementedError"
+      - "scripts/validations/F-043.sh reports passed>0"
+    validation_command: "bash scripts/validations/F-043.sh"
+    implemented_in: "3b5278925169701cca6f1d7cb6116481608c85cc"
+    depends_on: ["F-002"]
+    notes: >-
+      No CHARTER §3 carve-out. Do not add isaac keys to config/default.yaml.
+      Runtime Settings.harness stays None. F-008 remains the hardware next
+      feature. Isaac coding sessions resumed this id while it was in_progress.
+
+  - id: "F-044"
+    epic: "Isaac Lab workstation"
+    name: "Fake-injectable IMU/pose/lidar readers + training seams"
+    description: >-
+      Isaac _read_pose/_read_imu/_read_lidar run on duck-typed _sensors
+      fakes. to_body_action uses shared kinematics. step/reset info includes
+      vx_body_mps and omega_rads. LiDAR bins come from
+      RoverObservationConfig, not hardware LidarConfig. Does not map
+      6-DoF IMU into RSSM imu_dim.
+    category: "functional"
+    priority: "high"
+    status: "done"
+    tier: "fast"
     verification:
-    - Fake IMU/pose/lidar readers produce configured shapes
-    - to_body_action returns length-3 body velocity
-    - info contains vx_body_mps and omega_rads
-    - RoverObsAdapter still zeros SENSOR_SLOT_MAP imu
-    validation_command: bash scripts/validations/F-044.sh
-    implemented_in: 3b5278925169701cca6f1d7cb6116481608c85cc
-    depends_on:
-    - F-043
-    notes: Live Isaac Sim stays skip-gated inside methods, not the Golden Rule command.
-      Camera/render_rgb is out of slice.
-  - id: F-045
-    epic: Isaac Lab workstation
-    name: Isaac apply_domain_params (Replicator behind the method)
-    description: RoverIsaacLabEnv.apply_domain_params matches the MuJoCo/generator four-float
-      chassis contract. DR disabled is a no-op. Replicator is imported only inside the
-      translator when isaaclab is present.
-    category: functional
-    priority: high
-    status: done
-    tier: fast
+      - "Fake IMU/pose/lidar readers produce configured shapes"
+      - "to_body_action returns length-3 body velocity"
+      - "info contains vx_body_mps and omega_rads"
+      - "RoverObsAdapter still zeros SENSOR_SLOT_MAP imu"
+    validation_command: "bash scripts/validations/F-044.sh"
+    implemented_in: "3b5278925169701cca6f1d7cb6116481608c85cc"
+    depends_on: ["F-043"]
+    notes: >-
+      Live Isaac Sim stays skip-gated inside methods, not the Golden Rule
+      command. Camera/render_rgb is out of slice.
+
+  - id: "F-045"
+    epic: "Isaac Lab workstation"
+    name: "Isaac apply_domain_params (Replicator behind the method)"
+    description: >-
+      RoverIsaacLabEnv.apply_domain_params matches the MuJoCo/generator
+      four-float chassis contract. DR disabled is a no-op. Replicator is
+      imported only inside the translator when isaaclab is present.
+    category: "functional"
+    priority: "high"
+    status: "done"
+    tier: "fast"
     verification:
-    - apply_domain_params no-ops when domain_randomization.enabled is False
-    - duck-typed articulation writer is invoked when DR is on
-    - SimEpisodeGenerator + MockRoverEnv still rolls without mujoco
-    validation_command: bash scripts/validations/F-045.sh
-    implemented_in: 3b5278925169701cca6f1d7cb6116481608c85cc
-    depends_on:
-    - F-043
-    notes: "Do not invent a second DR schema. Replicator is a present-check; this slice\
-      \ does not write Omniverse attributes. Do not parallel this with F-044 on two\
-      \ worktrees \xE2\u20AC\u201D both land in rover_env.py."
-  - id: F-046
-    epic: Isaac Lab workstation
-    name: Lift mujoco-only RSSM gates to mujoco and isaac_lab
-    description: PipelineOrchestrator._train_rssm trains when backend is mujoco or isaac_lab
-      and rssm_pretrain_enabled. Default mock still skips. build_rssm_trainable sizes
-      lidar_dim from RoverObservationConfig.lidar_num_sectors. Vision fine-tune stays
-      mujoco-only until Isaac render_rgb exists. Battery from rover.sim.battery_voltage_const_v.
-    category: functional
-    priority: medium
-    status: done
-    tier: slow
+      - "apply_domain_params no-ops when domain_randomization.enabled is False"
+      - "duck-typed articulation writer is invoked when DR is on"
+      - "SimEpisodeGenerator + MockRoverEnv still rolls without mujoco"
+    validation_command: "bash scripts/validations/F-045.sh"
+    implemented_in: "3b5278925169701cca6f1d7cb6116481608c85cc"
+    depends_on: ["F-043"]
+    notes: >-
+      Do not invent a second DR schema. Replicator is a present-check;
+      this slice does not write Omniverse attributes. Do not parallel
+      this with F-044 on two worktrees — both land in rover_env.py.
+
+  - id: "F-046"
+    epic: "Isaac Lab workstation"
+    name: "Lift mujoco-only RSSM gates to mujoco and isaac_lab"
+    description: >-
+      PipelineOrchestrator._train_rssm trains when backend is mujoco or
+      isaac_lab and rssm_pretrain_enabled. Default mock still skips.
+      build_rssm_trainable sizes lidar_dim from
+      RoverObservationConfig.lidar_num_sectors. Vision fine-tune stays
+      mujoco-only until Isaac render_rgb exists. Battery from
+      rover.sim.battery_voltage_const_v.
+    category: "functional"
+    priority: "medium"
+    status: "done"
+    tier: "slow"
     verification:
-    - mock + rssm_pretrain_enabled still skips
-    - isaac_lab + enabled + reward invokes the training runner (factory env, no live
-      Sim)
-    - isaac_lab without rover.reward skips (isaac_reward_block_required)
-    - lidar_dim follows observation.lidar_num_sectors for isaac_lab
-    - vision fine-tune still skips for isaac_lab
-    validation_command: bash scripts/validations/F-046.sh
-    implemented_in: 3b5278925169701cca6f1d7cb6116481608c85cc
-    depends_on:
-    - F-044
-    - F-045
-    notes: Default-OFF flags unchanged. Isaac without rover.reward skips. env.build()
-      runs inside asyncio.to_thread. Do not hot-load PPO into the 30 Hz loop.
-  - id: F-047
-    epic: Isaac Lab workstation
-    name: Workstation PPO ONNX artifact (deferred)
-    description: Workstation PPO + ONNX artifact only. Never vla/policy.py, never DistilledVLAOnnx,
-      never RSSM TensorRT, never 3-DoF action_dim in the 30 Hz loop. Deferred until
-      an explicit CHARTER discussion.
-    category: functional
-    priority: low
-    status: deferred
-    tier: slow
+      - "mock + rssm_pretrain_enabled still skips"
+      - "isaac_lab + enabled + reward invokes the training runner (factory env, no live Sim)"
+      - "isaac_lab without rover.reward skips (isaac_reward_block_required)"
+      - "lidar_dim follows observation.lidar_num_sectors for isaac_lab"
+      - "vision fine-tune still skips for isaac_lab"
+    validation_command: "bash scripts/validations/F-046.sh"
+    implemented_in: "3b5278925169701cca6f1d7cb6116481608c85cc"
+    depends_on: ["F-044", "F-045"]
+    notes: >-
+      Default-OFF flags unchanged. Isaac without rover.reward skips.
+      env.build() runs inside asyncio.to_thread. Do not hot-load PPO
+      into the 30 Hz loop.
+
+  - id: "F-047"
+    epic: "Isaac Lab workstation"
+    name: "Workstation PPO ONNX artifact (deferred)"
+    description: >-
+      Workstation PPO + ONNX artifact only. Never vla/policy.py, never
+      DistilledVLAOnnx, never RSSM TensorRT, never 3-DoF action_dim in the
+      30 Hz loop. Deferred until an explicit CHARTER discussion.
+    category: "functional"
+    priority: "low"
+    status: "deferred"
+    tier: "slow"
     verification:
-    - Catalog status remains deferred until a CHARTER carve-out exists
+      - "Catalog status remains deferred until a CHARTER carve-out exists"
     validation_command: null
     implemented_in: null
-    depends_on:
-    - F-044
-    notes: "Loading a PPO graph through vla/policy.py would change 30 Hz actuation (CHARTER\
-      \ \xC2\xA73 Q1/Q3). That is why this feature is deferred."
-  - id: F-048
-    epic: Isaac Lab workstation
-    name: HARNESS_SPEC C4 ADR-009 Isaac addenda
-    description: HARNESS_SPEC Isaac Lab workstation section, C4 RSSM pretraining no
-      longer MuJoCo-only, ADR-009 addendum. No MetricsConfig.track_isaac_sim. Training
-      metrics stay on existing MLflow. CHANGELOG/NEXT_STEPS. Closeout SHAs are hex,
-      not branch names.
-    category: infrastructure
-    priority: high
-    status: done
-    tier: fast
+    depends_on: ["F-044"]
+    notes: >-
+      Loading a PPO graph through vla/policy.py would change 30 Hz actuation
+      (CHARTER §3 Q1/Q3). That is why this feature is deferred.
+
+  - id: "F-048"
+    epic: "Isaac Lab workstation"
+    name: "HARNESS_SPEC C4 ADR-009 Isaac addenda"
+    description: >-
+      HARNESS_SPEC Isaac Lab workstation section, C4 RSSM pretraining no
+      longer MuJoCo-only, ADR-009 addendum. No MetricsConfig.track_isaac_sim.
+      Training metrics stay on existing MLflow. CHANGELOG/NEXT_STEPS.
+      Closeout SHAs are hex, not branch names.
+    category: "infrastructure"
+    priority: "high"
+    status: "done"
+    tier: "fast"
     verification:
-    - HARNESS_SPEC documents F-043+ workstation Isaac
-    - MetricsConfig has no track_isaac_sim field
-    - Settings.harness is None
-    - /metrics unused render has no isaac family
-    validation_command: bash scripts/validations/F-048.sh
-    implemented_in: 3b5278925169701cca6f1d7cb6116481608c85cc
-    depends_on:
-    - F-043
-    notes: Do not add LANDED rows to Current Next Steps (doc_hygiene --strict).
-  - id: F-049
-    epic: Isaac Lab workstation
-    name: Cosmos / MobilityGen (deferred)
-    description: NVIDIA Cosmos / MobilityGen photoreal data is deferred. Not in the
+      - "HARNESS_SPEC documents F-043+ workstation Isaac"
+      - "MetricsConfig has no track_isaac_sim field"
+      - "Settings.harness is None"
+      - "/metrics unused render has no isaac family"
+    validation_command: "bash scripts/validations/F-048.sh"
+    implemented_in: "3b5278925169701cca6f1d7cb6116481608c85cc"
+    depends_on: ["F-043"]
+    notes: >-
+      Do not add LANDED rows to Current Next Steps (doc_hygiene --strict).
+
+  - id: "F-049"
+    epic: "Isaac Lab workstation"
+    name: "Cosmos / MobilityGen (deferred)"
+    description: >-
+      NVIDIA Cosmos / MobilityGen photoreal data is deferred. Not in the
       first Isaac Lab sensor-parity slice. Depends on RSSM Isaac rollouts.
-    category: functional
-    priority: low
-    status: deferred
-    tier: slow
+    category: "functional"
+    priority: "low"
+    status: "deferred"
+    tier: "slow"
     verification:
-    - Catalog status remains deferred
+      - "Catalog status remains deferred"
     validation_command: null
     implemented_in: null
-    depends_on:
-    - F-046
-    notes: No CHARTER carve-out in this slice. Do not enable on Jetson.
-  - id: F-050
-    epic: Jetson deployment
-    name: World-model observe-step instrumentation + ONNX provider proof
-    description: 'Landed: give the observe-step histogram a production writer by threading
-      a MetricsRegistry through build_world_model to every call site, and emit it from
-      both PyTorch engines (RSSM and DualStreamRSSM) as well as the ONNX runtime so
-      the engines are comparable; gate the ONNX artifact on a SHA-256 digest before
-      it is loaded; correct the live surfaces that tell operators to flip engine=''onnx_trt''
-      in an overlay where it raises. NOT BUILT, gated by the task 2.1 ceiling decision
-      (end-to-end ceiling 1.0016x-1.0039x): the onnx_copy_seconds spans that would make
-      the histogram family sum to wall-clock, observing the active execution provider
-      after session construction instead of predicting it, carrying provider options
-      through provider resolution, and validating the graph''s input set against the
-      loading config at warmup. The observe-step histogram is the one metric family
-      this change adds a writer for; no onnx_copy_seconds family exists.'
-    category: infrastructure
-    priority: high
-    status: in_progress
-    tier: fast
+    depends_on: ["F-046"]
+    notes: >-
+      No CHARTER carve-out in this slice. Do not enable on Jetson.
+
+
+  - id: "F-050"
+    epic: "Jetson deployment"
+    name: "World-model observe-step instrumentation + ONNX provider proof"
+    description: >-
+      Landed: give the observe-step histogram a production writer by threading a
+      MetricsRegistry through build_world_model to every call site, and emit it
+      from both PyTorch engines (RSSM and DualStreamRSSM) as well as the ONNX
+      runtime so the engines are comparable; gate the ONNX artifact on a SHA-256
+      digest before it is loaded; correct the live surfaces that tell operators
+      to flip engine='onnx_trt' in an overlay where it raises. NOT BUILT, gated
+      by the task 2.1 ceiling decision (end-to-end ceiling 1.0016x-1.0039x): the
+      onnx_copy_seconds spans that would make the histogram family sum to
+      wall-clock, observing the active execution provider after session
+      construction instead of predicting it, carrying provider options through
+      provider resolution, and validating the graph's input set against the
+      loading config at warmup. The observe-step histogram is the one metric
+      family this change adds a writer for; no onnx_copy_seconds family exists.
+    category: "infrastructure"
+    priority: "high"
+    status: "in_progress"
+    tier: "fast"
     verification:
-    - build_world_model accepts metrics= and threads it to the ONNX runtime
-    - Every build_world_model call site passes or defaults the registry
-    - Both PyTorch engines and the ONNX runtime emit the observe-step histogram
-    - The ONNX artifact is refused on a SHA-256 mismatch before the session is built
-    - 'NOT BUILT (task 2.1 gate): observed providers from session.get_providers() --
-      warmup_session still returns the pre-session intersection'
-    - 'NOT BUILT (task 2.1 gate): resolve_providers carrying (name, options) pairs --
-      it still takes bare provider-name tuples'
-    - 'NOT BUILT (task 2.1 gate): graph input set compared against all_input_names_for_cfg
-      at warmup'
-    - No live surface tells operators to enable onnx_trt from jetson_production.yaml
-    - 'Existing config/*.yaml load unchanged; no new world_model: YAML key'
-    validation_command: bash scripts/validations/F-050.sh
+      - "build_world_model accepts metrics= and threads it to the ONNX runtime"
+      - "Every build_world_model call site passes or defaults the registry"
+      - "Both PyTorch engines and the ONNX runtime emit the observe-step histogram"
+      - "The ONNX artifact is refused on a SHA-256 mismatch before the session is built"
+      - "NOT BUILT (task 2.1 gate): observed providers from session.get_providers() -- warmup_session still returns the pre-session intersection"
+      - "NOT BUILT (task 2.1 gate): resolve_providers carrying (name, options) pairs -- it still takes bare provider-name tuples"
+      - "NOT BUILT (task 2.1 gate): graph input set compared against all_input_names_for_cfg at warmup"
+      - "No live surface tells operators to enable onnx_trt from jetson_production.yaml"
+      - "Existing config/*.yaml load unchanged; no new world_model: YAML key"
+    validation_command: "bash scripts/validations/F-050.sh"
     implemented_in: null
-    depends_on:
-    - F-002
-    notes: 'Preconditions recorded in openspec/changes/mouse-droid-jetson-onnx-delivery:
+    depends_on: ["F-002"]
+    notes: >-
+      Preconditions recorded in openspec/changes/mouse-droid-jetson-onnx-delivery:
       the production world model loads no trained weights and jetson_production.yaml
-      builds plain RSSM (cfc_hidden_dim 0), so latency A/B and parity gates are blocked
-      until a trained DualStream checkpoint exists. Optimization work (I/O binding,
-      FP16) is gated on the consumer-ceiling calculation in scripts/analyze_observe_step_ceiling.py
-      and the three-part rubric in docs/analysis/alayaworld-distillation-spike.md. CUDA
-      Graph is out of scope.'
-  - id: F-051
-    epic: Jetson deployment
-    name: PC-to-rover delivery hardening + offline rollback drill
-    description: 'Harden the existing PC-side delivery path rather than adding a sixteenth
-      deploy script: refuse a dirty target and preserve rover-local work before any
-      destructive sync, make the promotion health check prove telemetry, provider and
-      digest instead of warning, persist the TensorRT cache in a named volume outside
-      the promotion boundary, and pin the GitHub trust boundary that is already satisfied
-      so it stays that way.'
-    category: infrastructure
-    priority: medium
-    status: in_progress
-    tier: fast
+      builds plain RSSM (cfc_hidden_dim 0), so latency A/B and parity gates are
+      blocked until a trained DualStream checkpoint exists. Optimization work
+      (I/O binding, FP16) is gated on the consumer-ceiling calculation in
+      scripts/analyze_observe_step_ceiling.py and the three-part rubric in
+      docs/analysis/alayaworld-distillation-spike.md. CUDA Graph is out of scope.
+
+  - id: "F-051"
+    epic: "Jetson deployment"
+    name: "PC-to-rover delivery hardening + offline rollback drill"
+    description: >-
+      Harden the existing PC-side delivery path rather than adding a sixteenth
+      deploy script: refuse a dirty target and preserve rover-local work before
+      any destructive sync, make the promotion health check prove telemetry,
+      provider and digest instead of warning, persist the TensorRT cache in a
+      named volume outside the promotion boundary, and pin the GitHub trust
+      boundary that is already satisfied so it stays that way.
+    category: "infrastructure"
+    priority: "medium"
+    status: "in_progress"
+    tier: "fast"
     verification:
-    - deploy_remote.sh refuses a dirty target and preserves work before rsync --delete
-    - Promotion health check fails on dead telemetry, wrong provider or digest mismatch
-    - TensorRT cache persists across container recreation via a named volume
-    - All workflows keep contents:read, no secrets.* and no pull_request_target
-    - Rollback restores the prior image tag and commit without network access
-    validation_command: bash scripts/validations/F-051.sh
+      - "deploy_remote.sh refuses a dirty target and preserves work before rsync --delete"
+      - "Promotion health check fails on dead telemetry, wrong provider or digest mismatch"
+      - "TensorRT cache persists across container recreation via a named volume"
+      - "All workflows keep contents:read, no secrets.* and no pull_request_target"
+      - "Rollback restores the prior image tag and commit without network access"
+    validation_command: "bash scripts/validations/F-051.sh"
     implemented_in: null
-    depends_on:
-    - F-008
-    - F-050
-    notes: Sequenced behind F-008 per the F-024 rule that hardware readiness preempts
-      in-flight software streams; the on-rover promotion and rollback drill are operator
-      steps. Evidence closes out as a declared local-only chain because reports/endurance
-      is gitignored by policy.
-  - id: F-053
-    epic: Quality Gates
-    name: Per-directory CLAUDE.md surfaces + package import map (WS-8d)
-    description: 'Execute docs/planning/TECH_DEBT_REMEDIATION_PLAN.md WS-8d: one nested
-      format (CLAUDE.md), index all 17 in-package surfaces from the root Surface Map,
-      retire the 16 agent.md persona stubs, gate Key Files / named paths / config Literals,
-      and ship a generated package import map (not a dataflow map). Root AGENTS.md loads
-      via a bare @AGENTS.md import; wheel excludes remain defence-in-depth. Declines
-      fence validation, .claude/rules/ migration, a full AGENTS.md audit, and the arm
-      Key Files fix pending F-008. Does not implement F-052.'
-    category: non-functional
-    priority: high
-    status: done
-    tier: fast
+    depends_on: ["F-008", "F-050"]
+    notes: >-
+      Sequenced behind F-008 per the F-024 rule that hardware readiness preempts
+      in-flight software streams; the on-rover promotion and rollback drill are
+      operator steps. Evidence closes out as a declared local-only chain because
+      reports/endurance is gitignored by policy.
+
+  - id: "F-053"
+    epic: "Quality Gates"
+    name: "Per-directory CLAUDE.md surfaces + package import map (WS-8d)"
+    description: >-
+      Execute docs/planning/TECH_DEBT_REMEDIATION_PLAN.md WS-8d: one nested
+      format (CLAUDE.md), index all 17 in-package surfaces from the root Surface
+      Map, retire the 16 agent.md persona stubs, gate Key Files / named paths /
+      config Literals, and ship a generated package import map (not a dataflow
+      map). Root AGENTS.md loads via a bare @AGENTS.md import; wheel excludes
+      remain defence-in-depth. Declines fence validation, .claude/rules/
+      migration, a full AGENTS.md audit, and the arm Key Files fix pending F-008.
+      Does not implement F-052.
+    category: "non-functional"
+    priority: "high"
+    status: "done"
+    tier: "fast"
     verification:
-    - root CLAUDE.md Surface Map indexes all 17 in-package CLAUDE.md surfaces
-    - zero tracked agent.md remain; **/agent.md wheel exclude is retained
-    - every nested CLAUDE.md Key Files / named path resolves (arm exempt until F-008)
-    - docs/architecture/package-map.md matches a fresh generate_package_map.py run
-    - the eight pre-F-053 contracts keep their purpose blockquotes and invariant titles
-    validation_command: bash scripts/validations/F-053.sh
-    implemented_in: 22ec000ead8949a11776fa50660186a05c609655
-    depends_on:
-    - F-030
-    notes: "implemented_in pins to PR #240's squash SHA per the F-030/F-031 convention\
-      \ (bookkeeping closeout after the implementation merge). Cloud Agents were blocked\
-      \ for this account; work stayed on gh + local clone. Package-map remains in _CI_EXEMPT_GATES\
-      \ with the regenerate-and-diff regression as the blocking gate (Phase 5 pattern).\
-      \ Does not implement F-052. No openspec/changes/archive/ layout exists \xE2\u20AC\
-      \u201D the change folder stays in place with status flipped to implemented in\
-      \ openspec/project.md."
-  - id: F-054
-    epic: External Agent Integration
-    name: External Agent ADK Adapter (MD-E1)
-    description: Define MissionIntent boundary and implement Google ADK lazy adapter for off-loop mission decomposition.
-    category: functional
-    priority: medium
-    status: done
-    tier: fast
+      - "root CLAUDE.md Surface Map indexes all 17 in-package CLAUDE.md surfaces"
+      - "zero tracked agent.md remain; **/agent.md wheel exclude is retained"
+      - "every nested CLAUDE.md Key Files / named path resolves (arm exempt until F-008)"
+      - "docs/architecture/package-map.md matches a fresh generate_package_map.py run"
+      - "the eight pre-F-053 contracts keep their purpose blockquotes and invariant titles"
+    validation_command: "bash scripts/validations/F-053.sh"
+    implemented_in: "22ec000ead8949a11776fa50660186a05c609655"
+    depends_on: ["F-030"]
+    notes: >-
+      implemented_in pins to PR #240's squash SHA per the F-030/F-031 convention
+      (bookkeeping closeout after the implementation merge). Cloud Agents were
+      blocked for this account; work stayed on gh + local clone. Package-map
+      remains in _CI_EXEMPT_GATES with the regenerate-and-diff regression as the
+      blocking gate (Phase 5 pattern). Does not implement F-052. No
+      openspec/changes/archive/ layout exists — the change folder stays in place
+      with status flipped to implemented in openspec/project.md.
+  - id: "F-054"
+    epic: "External Agent Integration"
+    name: "Mission-Agent Boundary and Protocol Definitions (MD-E1)"
+    description: >-
+      Define typed MissionIntent, MissionDecomposerProtocol, MemoryMirrorProtocol,
+      and CloudToolAdapterProtocol. Configure ADK, Honcho, and Composio schema in
+      src/mousedroid/config/schema/agents.py defaulting to disabled.
+    category: "infrastructure"
+    priority: "high"
+    status: "done"
+    tier: "fast"
     verification:
-    - MissionIntent carries sub_tasks and agent_source
-    - ADKMissionAdapter passes dry-run and injection tests
-    validation_command: python -m pytest tests/unit/agents/test_adk_adapter.py -q
-    implemented_in: 2e5a8a52ae52f5220b5d97b49d4cf0f24e535218
+      - "External agent protocols defined and runtime checkable"
+      - "ADKConfig, HonchoConfig, ComposioConfig default to disabled"
+    validation_command: "python -m pytest tests/unit/agents/test_adk_adapter.py -q"
+    implemented_in: "71f986fe86284f7076fe5465807e13b1ce7ae4bd"
     depends_on: []
-  - id: F-055
-    epic: External Agent Integration
-    name: Authoritative Append-Only Journal (MD-E2)
-    description: Extend JournalEntry with category and severity; create SafetyJournalWriter.
-    category: infrastructure
-    priority: high
-    status: done
-    tier: fast
+    notes: >-
+      Integrates external agent frameworks strictly off-loop. Never inside the
+      30 Hz safety-critical control loop.
+
+  - id: "F-055"
+    epic: "External Agent Integration"
+    name: "Authoritative Append-Only Journal (MD-E2)"
+    description: >-
+      Extend JournalEntry with category and severity; create SafetyJournalWriter
+      for structured safety events and mission transitions.
+    category: "infrastructure"
+    priority: "high"
+    status: "done"
+    tier: "fast"
     verification:
-    - JournalEntry backwards compat loads
-    - SafetyJournalWriter records events correctly
-    validation_command: python -m pytest tests/unit/harness/test_safety_journal.py -q
-    implemented_in: 2e5a8a52ae52f5220b5d97b49d4cf0f24e535218
+      - "JournalEntry backwards compatibility preserved"
+      - "SafetyJournalWriter records events correctly"
+    validation_command: "python -m pytest tests/unit/harness/test_safety_journal.py -q"
+    implemented_in: "71f986fe86284f7076fe5465807e13b1ce7ae4bd"
     depends_on: []
-  - id: F-056
-    epic: External Agent Integration
-    name: Honcho Memory Mirror (MD-E3)
-    description: Implement MemoryMirrorProtocol with Honcho backend for long-horizon operator memory sync.
-    category: functional
-    priority: medium
-    status: done
-    tier: fast
+    notes: >-
+      Authoritative local journal with safety_state entries kept local-only.
+
+  - id: "F-056"
+    epic: "External Agent Integration"
+    name: "Honcho Memory Mirror (MD-E3)"
+    description: >-
+      Implement MemoryMirrorProtocol with Honcho backend for long-horizon
+      operator memory sync with injection sanitization on recall.
+    category: "functional"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
     verification:
-    - HonchoMemoryMirror correctly filters safety_state entries
-    - Mirror strips injected prompts on recall
-    validation_command: python -m pytest tests/unit/memory/test_honcho_mirror.py -q
-    implemented_in: 2e5a8a52ae52f5220b5d97b49d4cf0f24e535218
-    depends_on:
-    - F-055
-  - id: F-057
-    epic: External Agent Integration
-    name: Composio Cloud Tool Adapter (MD-E4)
-    description: Implement CloudToolAdapterProtocol with Composio backend for operator-approved cloud actions.
-    category: functional
-    priority: medium
-    status: done
-    tier: fast
+      - "HonchoMemoryMirror correctly filters safety_state entries"
+      - "Mirror strips injected prompts on recall"
+    validation_command: "python -m pytest tests/unit/memory/test_honcho_mirror.py -q"
+    implemented_in: "71f986fe86284f7076fe5465807e13b1ce7ae4bd"
+    depends_on: ["F-055"]
+    notes: >-
+      Safe category filtering (mission, operator_preference only) prevents
+      safety state egress.
+
+  - id: "F-057"
+    epic: "External Agent Integration"
+    name: "Composio Cloud Tool Adapter (MD-E4)"
+    description: >-
+      Implement CloudToolAdapterProtocol with Composio backend for
+      operator-approved cloud actions with dry-run support.
+    category: "functional"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
     verification:
-    - ComposioToolAdapter enforces allowed_tools scoping
-    - Dry run mode correctly logs instead of executing
-    validation_command: python -m pytest tests/unit/agents/test_composio_adapter.py -q
-    implemented_in: 2e5a8a52ae52f5220b5d97b49d4cf0f24e535218
+      - "ComposioToolAdapter enforces allowed_tools scoping"
+      - "Dry run mode correctly logs instead of executing"
+    validation_command: "python -m pytest tests/unit/agents/test_composio_adapter.py -q"
+    implemented_in: "71f986fe86284f7076fe5465807e13b1ce7ae4bd"
     depends_on: []
-  - id: F-058
-    epic: External Agent Integration
-    name: External Agent Factory Wiring
-    description: Add build_mission_decomposer, build_memory_mirror, and build_cloud_tool_adapter to factory builders and orchestrator safety interlocks.
-    category: infrastructure
-    priority: medium
-    status: done
-    tier: fast
+    notes: >-
+      Operator-scoped cloud actions with dry-run default.
+
+  - id: "F-058"
+    epic: "External Agent Integration"
+    name: "External Agent Factory Wiring"
+    description: >-
+      Add build_mission_decomposer, build_memory_mirror, and
+      build_cloud_tool_adapter to factory builders and orchestrator.
+    category: "infrastructure"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
     verification:
-    - Agents dynamically wired based on config.agents payload
-    validation_command: python -m pytest tests/unit/factory/ -q
-    implemented_in: 2e5a8a52ae52f5220b5d97b49d4cf0f24e535218
-    depends_on:
-    - F-054
-    - F-055
-    - F-056
-    - F-057
+      - "Agents dynamically wired based on config.agents payload"
+      - "Defensive degradation when disabled or SDK missing"
+    validation_command: "python -m pytest tests/unit/agents/ -q"
+    implemented_in: "71f986fe86284f7076fe5465807e13b1ce7ae4bd"
+    depends_on: ["F-054", "F-055", "F-056", "F-057"]
+    notes: >-
+      Factory-first DI wiring for external agent adapters.

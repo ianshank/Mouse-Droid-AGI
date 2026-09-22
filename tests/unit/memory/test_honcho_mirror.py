@@ -204,6 +204,7 @@ async def test_start_success_and_mirror_functions() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
 async def test_recall_honors_limit_and_optional_sanitization(
     mock_injection_filter: MagicMock,
 ) -> None:
@@ -229,3 +230,108 @@ async def test_recall_honors_limit_and_optional_sanitization(
     mock_client.query.assert_called_once_with(query="query", k=2)
     mock_injection_filter.sanitize.assert_not_called()
     assert recalled == ["ignore previous instructions"]
+
+
+@pytest.mark.asyncio
+async def test_honcho_start_exception_degrades() -> None:
+    """Exception during Honcho client instantiation degrades mirror."""
+    from unittest.mock import MagicMock, patch
+
+    from pydantic import SecretStr
+
+    from mousedroid.config.schema.agents import HonchoConfig
+    from mousedroid.memory.honcho_mirror import HonchoMemoryMirror
+
+    mock_honcho = MagicMock()
+    mock_honcho.Client.side_effect = RuntimeError("network unreachable")
+
+    with patch.dict("sys.modules", {"honcho": mock_honcho}):
+        cfg = HonchoConfig(enabled=True, api_key=SecretStr("key"))
+        mirror = HonchoMemoryMirror(cfg)
+        await mirror.start()
+        assert mirror.is_degraded is True
+
+
+@pytest.mark.asyncio
+async def test_sync_degraded_or_missing_returns_zero() -> None:
+    """sync_to_remote returns 0 if degraded, without client, or without journal."""
+    from mousedroid.config.schema.agents import HonchoConfig
+    from mousedroid.memory.honcho_mirror import HonchoMemoryMirror
+
+    cfg = HonchoConfig(enabled=True)
+    mirror = HonchoMemoryMirror(cfg, journal=None)
+    assert await mirror.sync_to_remote() == 0
+
+    mirror._degraded = True
+    assert await mirror.sync_to_remote() == 0
+
+
+@pytest.mark.asyncio
+async def test_sync_exception_handled_gracefully() -> None:
+    """Exception in add_memory logs warning and returns partial count."""
+    from unittest.mock import MagicMock, patch
+
+    from mousedroid.config.schema.agents import HonchoConfig
+    from mousedroid.harness.journal.protocol import JournalEntry
+    from mousedroid.memory.honcho_mirror import HonchoMemoryMirror
+
+    mock_honcho = MagicMock()
+    mock_client = MagicMock()
+    mock_client.add_memory.side_effect = RuntimeError("disk quota exceeded")
+    mock_honcho.Client.return_value = mock_client
+
+    mock_journal = MagicMock()
+
+    async def mock_read():
+        yield JournalEntry(category="mission", severity="INFO", event="test", ts_ns=10)
+
+    mock_journal.read_all.return_value = mock_read()
+
+    with patch.dict("sys.modules", {"honcho": mock_honcho}):
+        cfg = HonchoConfig(enabled=True)
+        mirror = HonchoMemoryMirror(cfg, journal=mock_journal)
+        await mirror.start()
+
+        count = await mirror.sync_to_remote()
+        assert count == 0
+        await mirror.stop()
+
+
+@pytest.mark.asyncio
+async def test_recall_exception_returns_empty_list() -> None:
+    """Exception during query in recall logs warning and returns empty list."""
+    from unittest.mock import MagicMock, patch
+
+    from mousedroid.config.schema.agents import HonchoConfig
+    from mousedroid.memory.honcho_mirror import HonchoMemoryMirror
+
+    mock_honcho = MagicMock()
+    mock_client = MagicMock()
+    mock_client.query.side_effect = RuntimeError("remote server error")
+    mock_honcho.Client.return_value = mock_client
+
+    with patch.dict("sys.modules", {"honcho": mock_honcho}):
+        cfg = HonchoConfig(enabled=True)
+        mirror = HonchoMemoryMirror(cfg)
+        await mirror.start()
+
+        results = await mirror.recall("query")
+        assert results == []
+        await mirror.stop()
+
+
+def test_entry_to_summary_scalar_payload_filtering() -> None:
+    """_entry_to_summary only includes scalar values in payload."""
+    from mousedroid.harness.journal.protocol import JournalEntry
+    from mousedroid.memory.honcho_mirror import _entry_to_summary
+
+    entry = JournalEntry(
+        category="mission",
+        event="waypoint_reached",
+        payload={"wp_id": 1, "name": "wp_a", "active": True, "nested_obj": {"a": 1}},
+    )
+    summary = _entry_to_summary(entry)
+    assert "[mission]" in summary
+    assert "waypoint_reached" in summary
+    assert "wp_id" in summary
+    assert "nested_obj" not in summary

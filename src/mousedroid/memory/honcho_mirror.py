@@ -63,15 +63,17 @@ class HonchoMemoryMirror:
     async def start(self) -> None:
         """Start the mirror and lazily import Honcho SDK."""
         try:
-            import honcho
+            import importlib
 
+            honcho = importlib.import_module("honcho")
             self._honcho = honcho
             api_key = self._cfg.api_key.get_secret_value()
+            app_name = self._cfg.app_name
             if api_key:
-                self._client = honcho.Client(api_key=api_key)
+                self._client = honcho.Client(api_key=api_key, app_name=app_name)
             else:
-                self._client = honcho.Client()
-            _log.info("honcho_mirror_started")
+                self._client = honcho.Client(app_name=app_name)
+            _log.info("honcho_mirror_started", app_name=app_name)
         except ImportError:
             self._degraded = True
             _log.warning("honcho_sdk_missing_degraded", degraded=True)

@@ -107,6 +107,7 @@ async def test_start_success_and_execute_tool() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
 async def test_execute_tool_dry_run_logs_param_keys_only() -> None:
     from unittest.mock import patch
 
@@ -135,3 +136,58 @@ async def test_execute_tool_dry_run_logs_param_keys_only() -> None:
         tool="send_email",
         param_keys=("to", "token"),
     )
+
+
+@pytest.mark.asyncio
+async def test_start_exception_degrades(composio_config: ComposioConfig) -> None:
+    """Exception during Composio client instantiation degrades adapter."""
+    from unittest.mock import MagicMock, patch
+
+    from mousedroid.agents.composio_adapter import ComposioToolAdapter
+
+    mock_composio = MagicMock()
+    mock_composio.Composio.side_effect = RuntimeError("network error")
+
+    with patch.dict("sys.modules", {"composio": mock_composio}):
+        adapter = ComposioToolAdapter(composio_config)
+        await adapter.start()
+        assert adapter.is_degraded is True
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_degraded_returns_error() -> None:
+    """Executing tool when degraded returns adapter_degraded error."""
+    from mousedroid.agents.composio_adapter import ComposioToolAdapter
+    from mousedroid.config.schema.agents import ComposioConfig
+
+    cfg = ComposioConfig(enabled=True, dry_run=False, allowed_tools=["send_email"])
+    adapter = ComposioToolAdapter(cfg)
+    adapter._degraded = True
+
+    res = await adapter.execute_tool("send_email", {"to": "test"})
+    assert res == {"error": "adapter_degraded"}
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_exception_degrades_and_returns_error() -> None:
+    """Exception during tool execution sets degraded and returns execution_failed."""
+    from unittest.mock import MagicMock, patch
+
+    from mousedroid.agents.composio_adapter import ComposioToolAdapter
+    from mousedroid.config.schema.agents import ComposioConfig
+
+    mock_composio = MagicMock()
+    mock_client = MagicMock()
+    mock_client.execute_action.side_effect = RuntimeError("API timeout")
+    mock_composio.Composio.return_value = mock_client
+
+    with patch.dict("sys.modules", {"composio": mock_composio}):
+        cfg = ComposioConfig(enabled=True, dry_run=False, allowed_tools=["send_email"])
+        adapter = ComposioToolAdapter(cfg)
+        await adapter.start()
+
+        res = await adapter.execute_tool("send_email", {"to": "test"})
+        assert adapter.is_degraded is True
+        assert res.get("error") == "execution_failed"
+        assert "API timeout" in str(res.get("details"))
+        await adapter.stop()

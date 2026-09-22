@@ -7,7 +7,6 @@ start(); degrade-not-crash when SDK is absent.
 from __future__ import annotations
 
 import asyncio
-import importlib
 import inspect
 from typing import TYPE_CHECKING, Any
 
@@ -43,11 +42,19 @@ class ADKMissionAdapter:
     async def start(self) -> None:
         """Start the adapter and initialize the ADK agent lazily."""
         try:
+            import importlib
+
             adk = importlib.import_module("google.adk")
             self._adk = adk
-            self._agent = await asyncio.to_thread(lambda: adk.Agent(name="mousedroid"))
+            # Initialize ADK Agent dynamically using model_name from configuration
+            model_name = self._cfg.model_name
+            self._agent = await asyncio.to_thread(
+                lambda: adk.Agent(name="mousedroid", model=model_name)
+                if hasattr(adk, "Agent")
+                else None
+            )
             self._ready = True
-            _log.info("adk_adapter_started")
+            _log.info("adk_adapter_started", model=model_name)
         except ImportError:
             self._degraded = True
             _log.warning("adk_sdk_missing_degraded", degraded=True)
