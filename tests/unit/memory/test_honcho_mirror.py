@@ -151,12 +151,14 @@ async def test_local_journal_authoritative(
 
 @pytest.mark.asyncio
 async def test_start_success_and_mirror_functions() -> None:
-    from mousedroid.config.schema.agents import HonchoConfig
-    from mousedroid.memory.honcho_mirror import HonchoMemoryMirror
-    from mousedroid.harness.journal.protocol import JournalEntry
     import sys
-    from unittest.mock import MagicMock, AsyncMock
+    from unittest.mock import AsyncMock, MagicMock
+
     from pydantic import SecretStr
+
+    from mousedroid.config.schema.agents import HonchoConfig
+    from mousedroid.harness.journal.protocol import JournalEntry
+    from mousedroid.memory.honcho_mirror import HonchoMemoryMirror
 
     mock_honcho = MagicMock()
     mock_client = MagicMock()
@@ -184,11 +186,15 @@ async def test_start_success_and_mirror_functions() -> None:
 
         # Mock journal
         mock_journal = MagicMock()
-        
+
         async def mock_read_all():
-            yield JournalEntry(category="operator_preference", severity="INFO", event="fast mode", ts_ns=2)
-            yield JournalEntry(category="telemetry", severity="INFO", event="ignored", ts_ns=3)
-            
+            yield JournalEntry(
+                category="operator_preference", severity="INFO", event="fast mode", ts_ns=2
+            )
+            yield JournalEntry(
+                category="telemetry", severity="INFO", event="ignored", ts_ns=3
+            )
+
         mock_journal.read_all.return_value = mock_read_all()
 
         mirror = HonchoMemoryMirror(cfg, journal=mock_journal)

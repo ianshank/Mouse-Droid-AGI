@@ -58,6 +58,11 @@ from mousedroid.factory._replay_batch_helpers import (
 from mousedroid.factory._replay_batch_helpers import (
     _run_coro_blocking as _run_coro_blocking,
 )
+from mousedroid.factory.agents import (
+    build_cloud_tool_adapter,
+    build_memory_mirror,
+    build_mission_decomposer,
+)
 from mousedroid.factory.arm import (
     build_arm_controller,
     build_arm_driver,
@@ -73,11 +78,6 @@ from mousedroid.factory.autonomous import (
     build_autonomous_metrics_registry,
     build_autonomous_orchestrator,
     build_motor_controller,
-)
-from mousedroid.factory.agents import (
-    build_cloud_tool_adapter,
-    build_memory_mirror,
-    build_mission_decomposer,
 )
 from mousedroid.factory.cloud import (
     build_cloud_experience_exporter,
