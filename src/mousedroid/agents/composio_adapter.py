@@ -7,6 +7,7 @@ Strictly off-loop. Lazy SDK import.
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import TYPE_CHECKING, Any
 
 from mousedroid.logging.setup import get_logger
@@ -15,6 +16,8 @@ if TYPE_CHECKING:
     from mousedroid.config.schema.agents import ComposioConfig
 
 _log = get_logger(__name__)
+
+_TOOL_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
 class ComposioToolAdapter:
@@ -37,6 +40,13 @@ class ComposioToolAdapter:
             import importlib
 
             composio = importlib.import_module("composio")
+            if composio is None or not hasattr(composio, "Composio"):
+                self._composio = None
+                self._client = None
+                self._degraded = True
+                _log.warning("composio_sdk_missing_degraded", degraded=True)
+                return
+
             self._composio = composio
             api_key = self._cfg.api_key.get_secret_value()
             if api_key:
@@ -45,10 +55,14 @@ class ComposioToolAdapter:
                 self._client = composio.Composio()
             self._degraded = False
             _log.info("composio_adapter_started")
-        except ImportError:
+        except (ImportError, ModuleNotFoundError):
+            self._composio = None
+            self._client = None
             self._degraded = True
             _log.warning("composio_sdk_missing_degraded", degraded=True)
         except Exception as e:
+            self._composio = None
+            self._client = None
             self._degraded = True
             _log.warning("composio_adapter_start_failed", error=str(e), degraded=True)
 
@@ -68,6 +82,16 @@ class ComposioToolAdapter:
         Returns:
             A dictionary containing the result or error.
         """
+        if (
+            not tool_name
+            or not _TOOL_NAME_RE.match(tool_name)
+            or ".." in tool_name
+            or "/" in tool_name
+            or "\\" in tool_name
+        ):
+            _log.warning("composio_tool_invalid_name", tool=tool_name)
+            return {"error": "invalid_tool_name", "tool": tool_name}
+
         if tool_name not in self._cfg.allowed_tools:
             _log.warning("composio_tool_not_allowed", tool=tool_name)
             return {"error": "tool_not_allowed", "tool": tool_name}

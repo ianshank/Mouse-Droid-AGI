@@ -57,7 +57,6 @@ Wired by `factory/` (the builder is called, metrics-registered) but gated behind
 (M6). Byte-identical to pre-feature behaviour when the config block is absent.
 
 | Pillar | Module | What it does |
-| ------ | ------ | ------------ |
 | External Mission Decomposition | `agents.adk_adapter` | Google ADK off-loop integration for converting complex NL commands into `MissionIntent` outputs with decomposed `sub_tasks` |
 | Long-Horizon Memory | `memory.honcho_mirror` | Honcho API integration for syncing only non-sensitive `mission` and `operator_preference` journal summaries |
 | Operator Cloud Actions | `agents.composio_adapter` | Composio API integration allowing safe, dry-run-supported execution of external workflows |

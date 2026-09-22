@@ -320,7 +320,9 @@ async def test_recall_exception_returns_empty_list() -> None:
 
 
 def test_entry_to_summary_scalar_payload_filtering() -> None:
-    """_entry_to_summary only includes scalar values in payload."""
+    """_entry_to_summary only includes scalar values in serialized JSON payload."""
+    import json
+
     from mousedroid.harness.journal.protocol import JournalEntry
     from mousedroid.memory.honcho_mirror import _entry_to_summary
 
@@ -332,5 +334,6 @@ def test_entry_to_summary_scalar_payload_filtering() -> None:
     summary = _entry_to_summary(entry)
     assert "[mission]" in summary
     assert "waypoint_reached" in summary
-    assert "wp_id" in summary
     assert "nested_obj" not in summary
+    expected_payload = json.dumps({"active": True, "name": "wp_a", "wp_id": 1}, sort_keys=True)
+    assert expected_payload in summary

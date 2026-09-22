@@ -55,11 +55,10 @@ Rel(mousedroid, composio, "Cloud tools (dry-run supported)")
 ```
 
 > The **Anthropic Claude API**, **Google ADK**, **Honcho**, and **Composio** are the *deliberative* tier only:
-> Anthropic translates natural-language missions into a normalised `GoalVector`; ADK handles off-loop decomposition,
-> Honcho mirrors safe journal summaries, and Composio executes operator-approved cloud tools.
-> They are deliberately outside the 30 Hz reactive control loop, which stays
+> the LLM gateway translates natural-language missions into normalised `GoalVector`s, Google ADK decomposes complex missions into structured sub-tasks, Honcho mirrors safe journal entries for long-horizon recall, and Composio executes operator-scoped cloud tools.
+> All deliberative components run strictly outside the 30 Hz reactive control loop, which stays
 > LLM-free and deterministic. When the rover is off-network, a local
-> Phi-3-mini (llama_cpp) fallback serves the same translation. See
+> Phi-3-mini (llama_cpp) fallback serves mission translation. See
 > Level 2 and [`c4-llm-gateway.md`](./c4-llm-gateway.md) for detail.
 
 ---

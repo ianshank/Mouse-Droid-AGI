@@ -47,6 +47,30 @@ async def test_execute_tool_rejects_unlisted(adapter: Any) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid_name",
+    [
+        "../path_traversal",
+        "bad/name",
+        "bad\\name",
+        "",
+        "tool with spaces",
+        "tool;rm -rf",
+        "null\x00byte",
+    ],
+)
+async def test_execute_tool_rejects_invalid_tool_names(
+    composio_config: ComposioConfig, invalid_name: str
+) -> None:
+    """Unsafe or malformed tool names are rejected before allowlist checks."""
+    from mousedroid.agents.composio_adapter import ComposioToolAdapter
+
+    adapter = ComposioToolAdapter(composio_config)
+    result = await adapter.execute_tool(invalid_name, {})
+    assert result == {"error": "invalid_tool_name", "tool": invalid_name}
+
+
+@pytest.mark.asyncio
 async def test_list_available_tools(adapter: Any) -> None:
     """list_available_tools returns the configured allowed_tools."""
     tools = adapter.list_available_tools()

@@ -27,8 +27,7 @@ def test_orchestrator_autonomous_does_not_import_external_agents() -> None:
 
     for mod in _FORBIDDEN_MODULES:
         assert mod not in sys.modules, (
-            f"{mod!r} found in sys.modules after importing "
-            "mousedroid.orchestrator.autonomous"
+            f"{mod!r} found in sys.modules after importing mousedroid.orchestrator.autonomous"
         )
 
 
@@ -41,6 +40,5 @@ def test_factory_mission_does_not_import_external_agents() -> None:
 
     for mod in _FORBIDDEN_MODULES:
         assert mod not in sys.modules, (
-            f"{mod!r} found in sys.modules after importing "
-            "mousedroid.factory.mission"
+            f"{mod!r} found in sys.modules after importing mousedroid.factory.mission"
         )

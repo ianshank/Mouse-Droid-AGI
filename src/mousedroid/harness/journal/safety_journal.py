@@ -26,8 +26,8 @@ class SafetyJournalWriter:
 
     Args:
         journal: The backing ``JournalProtocol`` instance. When ``None``,
-            journal writes are skipped, but the structured log events are
-            still emitted.
+            journal writes are skipped, but structured log events are
+            still emitted for observability.
     """
 
     def __init__(self, *, journal: JournalProtocol | None = None) -> None:

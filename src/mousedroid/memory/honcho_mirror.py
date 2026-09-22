@@ -7,6 +7,7 @@ Recalled text is treated as prompt-injection-capable and sanitized.
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import TYPE_CHECKING, Any
 
 from mousedroid.logging.setup import get_logger
@@ -66,6 +67,13 @@ class HonchoMemoryMirror:
             import importlib
 
             honcho = importlib.import_module("honcho")
+            if honcho is None or not hasattr(honcho, "Client"):
+                self._honcho = None
+                self._client = None
+                self._degraded = True
+                _log.warning("honcho_sdk_missing_degraded", degraded=True)
+                return
+
             self._honcho = honcho
             api_key = self._cfg.api_key.get_secret_value()
             app_name = self._cfg.app_name
@@ -73,11 +81,16 @@ class HonchoMemoryMirror:
                 self._client = honcho.Client(api_key=api_key, app_name=app_name)
             else:
                 self._client = honcho.Client(app_name=app_name)
+            self._degraded = False
             _log.info("honcho_mirror_started", app_name=app_name)
-        except ImportError:
+        except (ImportError, ModuleNotFoundError):
+            self._honcho = None
+            self._client = None
             self._degraded = True
             _log.warning("honcho_sdk_missing_degraded", degraded=True)
         except Exception as exc:
+            self._honcho = None
+            self._client = None
             self._degraded = True
             _log.warning(
                 "honcho_mirror_start_failed",
@@ -89,6 +102,7 @@ class HonchoMemoryMirror:
         """Stop the mirror and release resources."""
         self._honcho = None
         self._client = None
+        self._degraded = False
         _log.info("honcho_mirror_stopped")
 
     async def sync_to_remote(self) -> int:
@@ -115,7 +129,7 @@ class HonchoMemoryMirror:
                 if entry.category not in _SAFE_SYNC_CATEGORIES:
                     continue
 
-                # Mirror entry payload as a human-readable summary string
+                # Mirror entry payload as a serialized summary
                 summary = _entry_to_summary(entry)
                 await asyncio.to_thread(
                     self._client.add_memory,
@@ -203,7 +217,7 @@ def _entry_to_summary(entry: JournalEntry) -> str:
             k: v for k, v in entry.payload.items() if isinstance(v, (str, int, float, bool))
         }
         if safe_payload:
-            parts.append(str(safe_payload))
+            parts.append(json.dumps(safe_payload, sort_keys=True))
     return " ".join(parts)
 
 
