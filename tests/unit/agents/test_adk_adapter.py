@@ -42,6 +42,7 @@ def adapter(adk_config: ADKConfig, mock_injection_filter: MagicMock) -> Any:
 async def test_start_missing_sdk_degrades(adk_config: ADKConfig) -> None:
     """When google.adk is not installed, start() degrades without crash."""
     from unittest.mock import patch
+
     from mousedroid.agents.adk_adapter import ADKMissionAdapter
 
     with patch.dict("sys.modules", {"google.adk": None}):  # type: ignore[dict-item]

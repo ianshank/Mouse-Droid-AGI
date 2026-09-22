@@ -151,7 +151,6 @@ async def test_local_journal_authoritative(
 
 @pytest.mark.asyncio
 async def test_start_success_and_mirror_functions() -> None:
-    import sys
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from pydantic import SecretStr

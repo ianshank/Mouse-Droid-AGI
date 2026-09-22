@@ -57,6 +57,7 @@ async def test_list_available_tools(adapter: Any) -> None:
 async def test_degraded_when_sdk_missing(composio_config: ComposioConfig) -> None:
     """start() without composio SDK sets _degraded=True."""
     from unittest.mock import patch
+
     from mousedroid.agents.composio_adapter import ComposioToolAdapter
 
     with patch.dict("sys.modules", {"composio": None}):  # type: ignore[dict-item]
