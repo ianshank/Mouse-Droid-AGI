@@ -59,12 +59,6 @@ class HonchoConfig(StrictBaseModel):
         default="mousedroid",
         description="Application name to use for Honcho."
     )
-    sync_interval_s: float = Field(
-        default=60.0,
-        ge=5.0,
-        le=600.0,
-        description="Interval in seconds between background memory syncs."
-    )
     sanitize_recalled: bool = Field(
         default=True,
         description="Whether to sanitize recalled text before use."

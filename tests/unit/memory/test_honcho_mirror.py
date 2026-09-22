@@ -204,7 +204,6 @@ async def test_start_success_and_mirror_functions() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.asyncio
 async def test_recall_honors_limit_and_optional_sanitization(
     mock_injection_filter: MagicMock,
 ) -> None:

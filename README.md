@@ -58,8 +58,8 @@ Wired by `factory/` (the builder is called, metrics-registered) but gated behind
 
 | Pillar | Module | What it does |
 | ------ | ------ | ------------ |
-| External Mission Decomposition | `agents.adk_adapter` | Google ADK off-loop integration for converting complex NL commands into multi-step GoalVectors |
-| Long-Horizon Memory | `memory.honcho_mirror` | Honcho API integration for syncing safety-critical operator memory and past mission failures |
+| External Mission Decomposition | `agents.adk_adapter` | Google ADK off-loop integration for converting complex NL commands into `MissionIntent` outputs with decomposed `sub_tasks` |
+| Long-Horizon Memory | `memory.honcho_mirror` | Honcho API integration for syncing only non-sensitive `mission` and `operator_preference` journal summaries |
 | Operator Cloud Actions | `agents.composio_adapter` | Composio API integration allowing safe, dry-run-supported execution of external workflows |
 | Growth & Distillation | `growth/` | Regression-objective (MSE) knowledge distillation to a compact student policy (~0.1k LOC); `factory/growth.py::build_growth_coordinator`. `KnowledgeDistiller` also supports a legacy KL+CE `"classification"` objective, but the wired call site passes `objective="regression"`. |
 

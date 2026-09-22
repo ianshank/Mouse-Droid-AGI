@@ -115,7 +115,7 @@ class HonchoMemoryMirror:
                 if entry.category not in _SAFE_SYNC_CATEGORIES:
                     continue
 
-                # Mirror entry payload as a stringified JSON summary
+                # Mirror entry payload as a human-readable summary string
                 summary = _entry_to_summary(entry)
                 await asyncio.to_thread(
                     self._client.add_memory,

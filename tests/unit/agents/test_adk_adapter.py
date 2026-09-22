@@ -54,6 +54,20 @@ async def test_start_missing_sdk_degrades(adk_config: ADKConfig) -> None:
 
 
 @pytest.mark.asyncio
+async def test_start_missing_agent_class_degrades(adk_config: ADKConfig) -> None:
+    """When google.adk.Agent is unavailable, start() degrades without crash."""
+    from unittest.mock import patch
+
+    from mousedroid.agents.adk_adapter import ADKMissionAdapter
+
+    with patch("importlib.import_module", return_value=object()):
+        adapter = ADKMissionAdapter(adk_config)
+        await adapter.start()
+        assert adapter.is_degraded is True
+        assert adapter.is_ready is False
+
+
+@pytest.mark.asyncio
 async def test_decompose_degraded_returns_neutral(
     adk_config: ADKConfig,
 ) -> None:

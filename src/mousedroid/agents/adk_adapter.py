@@ -41,24 +41,34 @@ class ADKMissionAdapter:
 
     async def start(self) -> None:
         """Start the adapter and initialize the ADK agent lazily."""
+        self._adk = None
+        self._agent = None
+        self._ready = False
+        self._degraded = False
         try:
             import importlib
 
             adk = importlib.import_module("google.adk")
+            agent_factory = getattr(adk, "Agent", None)
+            if adk is None or agent_factory is None:
+                raise ImportError("google.adk.Agent unavailable")
             self._adk = adk
-            # Initialize ADK Agent dynamically using model_name from configuration
             model_name = self._cfg.model_name
             self._agent = await asyncio.to_thread(
-                lambda: adk.Agent(name="mousedroid", model=model_name)
-                if hasattr(adk, "Agent")
-                else None
+                lambda: agent_factory(name="mousedroid", model=model_name)
             )
+            if self._agent is None:
+                raise RuntimeError("google.adk.Agent returned no agent")
             self._ready = True
             _log.info("adk_adapter_started", model=model_name)
         except ImportError:
+            self._adk = None
+            self._agent = None
             self._degraded = True
             _log.warning("adk_sdk_missing_degraded", degraded=True)
         except Exception as e:
+            self._adk = None
+            self._agent = None
             self._degraded = True
             _log.warning("adk_adapter_start_failed", error=str(e), degraded=True)
 

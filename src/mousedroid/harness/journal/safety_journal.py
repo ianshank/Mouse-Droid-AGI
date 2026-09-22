@@ -26,8 +26,8 @@ class SafetyJournalWriter:
 
     Args:
         journal: The backing ``JournalProtocol`` instance. When ``None``,
-            all write calls are no-ops (the writer degrades silently —
-            matching the harness's null-journal pattern).
+            journal writes are skipped, but the structured log events are
+            still emitted.
     """
 
     def __init__(self, *, journal: JournalProtocol | None = None) -> None:

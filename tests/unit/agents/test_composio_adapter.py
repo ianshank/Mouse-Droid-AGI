@@ -107,7 +107,6 @@ async def test_start_success_and_execute_tool() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.asyncio
 async def test_execute_tool_dry_run_logs_param_keys_only() -> None:
     from unittest.mock import patch
 
