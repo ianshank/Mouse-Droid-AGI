@@ -129,7 +129,7 @@ async def test_start_success_and_decompose() -> None:
     mock_agent_instance.decompose.return_value = [{"intent": "navigate", "parameters": {}}]
     mock_adk.Agent.return_value = mock_agent_instance
 
-    with patch.dict("sys.modules", {"google.adk": mock_adk}):
+    with patch.dict("sys.modules", {"google": MagicMock(), "google.adk": mock_adk}):
         cfg = ADKConfig(enabled=True, model_name="test")
         adapter = ADKMissionAdapter(cfg)
 
@@ -141,6 +141,11 @@ async def test_start_success_and_decompose() -> None:
         intents = await adapter.decompose("test command")
         assert len(intents) == 1
         assert intents[0].agent_source == "adk"
+        mock_agent_instance.decompose.assert_called_once_with(
+            "test command",
+            max_sub_tasks=cfg.max_sub_tasks,
+            model_name=cfg.model_name,
+        )
 
         # Test stop
         await adapter.stop()

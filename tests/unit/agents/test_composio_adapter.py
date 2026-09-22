@@ -75,6 +75,8 @@ def test_is_dry_run_property(adapter: Any) -> None:
 async def test_start_success_and_execute_tool() -> None:
     from unittest.mock import MagicMock, patch
 
+    from pydantic import SecretStr
+
     from mousedroid.agents.composio_adapter import ComposioToolAdapter
     from mousedroid.config.schema.agents import ComposioConfig
 
@@ -84,11 +86,17 @@ async def test_start_success_and_execute_tool() -> None:
     mock_composio.Composio.return_value = mock_client
 
     with patch.dict("sys.modules", {"composio": mock_composio}):
-        cfg = ComposioConfig(enabled=True, dry_run=False, allowed_tools=["send_email"])
+        cfg = ComposioConfig(
+            enabled=True,
+            api_key=SecretStr("composio-key"),
+            dry_run=False,
+            allowed_tools=["send_email"],
+        )
         adapter = ComposioToolAdapter(cfg)
 
         await adapter.start()
         assert adapter.is_degraded is False
+        mock_composio.Composio.assert_called_once_with(api_key="composio-key")
 
         # Test execute tool success path
         res = await adapter.execute_tool("send_email", {"to": "test"})
@@ -96,3 +104,34 @@ async def test_start_success_and_execute_tool() -> None:
 
         # Test stop
         await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_dry_run_logs_param_keys_only() -> None:
+    from unittest.mock import patch
+
+    from pydantic import SecretStr
+
+    from mousedroid.agents.composio_adapter import ComposioToolAdapter
+    from mousedroid.config.schema.agents import ComposioConfig
+
+    cfg = ComposioConfig(
+        enabled=True,
+        api_key=SecretStr("composio-key"),
+        dry_run=True,
+        allowed_tools=["send_email"],
+    )
+    adapter = ComposioToolAdapter(cfg)
+
+    with patch("mousedroid.agents.composio_adapter._log.info") as log_info:
+        result = await adapter.execute_tool(
+            "send_email",
+            {"to": "user@example.com", "token": "secret"},
+        )
+
+    assert result == {"dry_run": True, "tool": "send_email"}
+    log_info.assert_called_once_with(
+        "composio_tool_dry_run",
+        tool="send_email",
+        param_keys=("to", "token"),
+    )

@@ -3,9 +3,12 @@
 Off-loop NL command decomposition via Google ADK. Lazy SDK import in
 start(); degrade-not-crash when SDK is absent.
 """
+
 from __future__ import annotations
 
 import asyncio
+import importlib
+import inspect
 from typing import TYPE_CHECKING, Any
 
 from mousedroid.logging.setup import get_logger
@@ -22,10 +25,7 @@ class ADKMissionAdapter:
     """Google ADK mission decomposer adapter."""
 
     def __init__(
-        self,
-        cfg: ADKConfig,
-        *,
-        injection_filter: PromptInjectionFilterProtocol | None = None
+        self, cfg: ADKConfig, *, injection_filter: PromptInjectionFilterProtocol | None = None
     ) -> None:
         """Initialize the ADK adapter.
 
@@ -43,9 +43,8 @@ class ADKMissionAdapter:
     async def start(self) -> None:
         """Start the adapter and initialize the ADK agent lazily."""
         try:
-            import google.adk as adk
+            adk = importlib.import_module("google.adk")
             self._adk = adk
-            # Assuming agent creation looks something like this
             self._agent = await asyncio.to_thread(lambda: adk.Agent(name="mousedroid"))
             self._ready = True
             _log.info("adk_adapter_started")
@@ -76,32 +75,33 @@ class ADKMissionAdapter:
 
         if not command:
             _log.warning("adk_adapter_empty_command")
-            return [MissionIntent(agent_source='adk')]
+            return [MissionIntent(agent_source="adk")]
 
         if self._degraded or not self._ready:
             _log.warning("adk_adapter_degraded_or_not_ready")
-            return [MissionIntent(agent_source='adk')]
+            return [MissionIntent(agent_source="adk")]
 
         sanitized_command = command
         if self._injection_filter:
             sanitized_command = self._injection_filter.sanitize(command)
 
         try:
-            # Assuming agent.decompose or similar method
             response = await asyncio.wait_for(
-                asyncio.to_thread(self._agent.decompose, sanitized_command),
-                timeout=self._cfg.timeout_s
+                asyncio.to_thread(
+                    self._decompose_with_config,
+                    sanitized_command,
+                ),
+                timeout=self._cfg.timeout_s,
             )
-            # Assuming response is an iterable of intent data
             intents = []
-            for item in response:
-                intents.append(MissionIntent(agent_source='adk', **item))
+            for item in list(response)[: self._cfg.max_sub_tasks]:
+                intents.append(MissionIntent(agent_source="adk", **item))
             return intents
         except asyncio.CancelledError:
             raise
         except Exception as e:
             _log.warning("adk_adapter_decompose_failed", error=str(e))
-            return [MissionIntent(agent_source='adk')]
+            return [MissionIntent(agent_source="adk")]
 
     @property
     def is_ready(self) -> bool:
@@ -112,3 +112,27 @@ class ADKMissionAdapter:
     def is_degraded(self) -> bool:
         """Check if the adapter is in a degraded state."""
         return self._degraded
+
+    def _decompose_with_config(self, command: str) -> Any:
+        """Call the ADK agent with supported configuration kwargs."""
+        if self._agent is None:
+            raise RuntimeError("ADK agent is not initialized")
+
+        decompose = self._agent.decompose
+        kwargs: dict[str, Any] = {"max_sub_tasks": self._cfg.max_sub_tasks}
+
+        try:
+            params = inspect.signature(decompose).parameters
+        except (TypeError, ValueError):
+            params = {}
+
+        supports_var_kwargs = any(
+            param.kind is inspect.Parameter.VAR_KEYWORD for param in params.values()
+        )
+
+        if supports_var_kwargs or "model_name" in params:
+            kwargs["model_name"] = self._cfg.model_name
+        elif "model" in params:
+            kwargs["model"] = self._cfg.model_name
+
+        return decompose(command, **kwargs)

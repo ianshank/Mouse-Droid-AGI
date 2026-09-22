@@ -53,7 +53,7 @@ Built by `factory/` and driven by the 30 Hz sense-plan-act orchestrator.
 #### Factory-instantiated, default-OFF pending a soak decision
 
 Wired by `factory/` (the builder is called, metrics-registered) but gated behind an
-`Optional` config block that defaults `None` ?" same posture as on-device incremental learning
+`Optional` config block that defaults `None` — same posture as on-device incremental learning
 (M6). Byte-identical to pre-feature behaviour when the config block is absent.
 
 | Pillar | Module | What it does |

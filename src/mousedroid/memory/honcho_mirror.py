@@ -20,9 +20,7 @@ _log = get_logger(__name__)
 
 # Categories safe to mirror to an external service.
 # NEVER include 'safety_state' — those are local-authoritative only.
-_SAFE_SYNC_CATEGORIES: frozenset[str] = frozenset(
-    {"mission", "operator_preference"}
-)
+_SAFE_SYNC_CATEGORIES: frozenset[str] = frozenset({"mission", "operator_preference"})
 
 
 class HonchoMemoryMirror:
@@ -140,9 +138,7 @@ class HonchoMemoryMirror:
             )
             return synced_count
 
-    async def recall(
-        self, query: str, *, k: int = 5
-    ) -> list[str]:
+    async def recall(self, query: str, *, k: int = 5) -> list[str]:
         """Recall memories from Honcho based on a query.
 
         Args:
@@ -155,17 +151,19 @@ class HonchoMemoryMirror:
         if not query or self._degraded or not self._client:
             return []
 
+        recall_limit = min(k, self._cfg.max_recall_results)
+
         try:
             results = await asyncio.to_thread(
                 self._client.query,
                 query=query,
-                k=k,
+                k=recall_limit,
             )
 
             recalled: list[str] = []
             for res in results:
                 text: str = str(getattr(res, "content", res))
-                if self._injection_filter:
+                if self._cfg.sanitize_recalled and self._injection_filter:
                     text = self._injection_filter.sanitize(text)
                 recalled.append(text)
 
@@ -200,9 +198,7 @@ def _entry_to_summary(entry: JournalEntry) -> str:
     if entry.payload:
         # Only include scalar values for safety
         safe_payload = {
-            k: v
-            for k, v in entry.payload.items()
-            if isinstance(v, (str, int, float, bool))
+            k: v for k, v in entry.payload.items() if isinstance(v, (str, int, float, bool))
         }
         if safe_payload:
             parts.append(str(safe_payload))

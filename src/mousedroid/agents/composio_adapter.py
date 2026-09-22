@@ -3,6 +3,7 @@
 Provides operator-approved cloud tool execution with dry-run mode.
 Strictly off-loop. Lazy SDK import.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -34,8 +35,11 @@ class ComposioToolAdapter:
         """Start the adapter and lazily import Composio SDK."""
         try:
             import composio
+
             self._composio = composio
-            self._client = composio.Composio()
+            api_key = self._cfg.api_key.get_secret_value() or None
+            self._client = composio.Composio(api_key=api_key)
+            self._degraded = False
             _log.info("composio_adapter_started")
         except ImportError:
             self._degraded = True
@@ -62,22 +66,24 @@ class ComposioToolAdapter:
         """
         if tool_name not in self._cfg.allowed_tools:
             _log.warning("composio_tool_not_allowed", tool=tool_name)
-            return {'error': 'tool_not_allowed', 'tool': tool_name}
+            return {"error": "tool_not_allowed", "tool": tool_name}
 
         if self.is_dry_run:
-            _log.info("composio_tool_dry_run", tool=tool_name, params=params)
-            return {'dry_run': True, 'tool': tool_name}
+            _log.info(
+                "composio_tool_dry_run",
+                tool=tool_name,
+                param_keys=tuple(sorted(params)),
+            )
+            return {"dry_run": True, "tool": tool_name}
 
         if self._degraded or not self._client:
-            return {'error': 'adapter_degraded'}
+            return {"error": "adapter_degraded"}
 
         try:
             result = await asyncio.to_thread(
-                self._client.execute_action,
-                action_name=tool_name,
-                params=params
+                self._client.execute_action, action_name=tool_name, params=params
             )
-            return {'result': result}
+            return {"result": result}
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -88,7 +94,7 @@ class ComposioToolAdapter:
                 error=str(e),
                 degraded=True,
             )
-            return {'error': 'execution_failed', 'details': str(e)}
+            return {"error": "execution_failed", "details": str(e)}
 
     def list_available_tools(self) -> list[str]:
         """List all available (allowed) tools.
