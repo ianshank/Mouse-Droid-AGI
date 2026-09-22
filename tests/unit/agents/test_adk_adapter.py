@@ -41,13 +41,15 @@ def adapter(adk_config: ADKConfig, mock_injection_filter: MagicMock) -> Any:
 @pytest.mark.asyncio
 async def test_start_missing_sdk_degrades(adk_config: ADKConfig) -> None:
     """When google.adk is not installed, start() degrades without crash."""
+    from unittest.mock import patch
     from mousedroid.agents.adk_adapter import ADKMissionAdapter
 
-    adapter = ADKMissionAdapter(adk_config)
-    # The SDK is not installed in test env, so start() should degrade
-    await adapter.start()
-    assert adapter.is_degraded is True
-    assert adapter.is_ready is False
+    with patch.dict("sys.modules", {"google.adk": None}):  # type: ignore[dict-item]
+        adapter = ADKMissionAdapter(adk_config)
+        # The SDK is not installed in test env, so start() should degrade
+        await adapter.start()
+        assert adapter.is_degraded is True
+        assert adapter.is_ready is False
 
 
 @pytest.mark.asyncio
@@ -115,8 +117,7 @@ async def test_agent_source_field(adapter: Any) -> None:
 
 @pytest.mark.asyncio
 async def test_start_success_and_decompose() -> None:
-    import sys
-    from unittest.mock import MagicMock
+    from unittest.mock import MagicMock, patch
 
     from mousedroid.agents.adk_adapter import ADKMissionAdapter
     from mousedroid.config.schema.agents import ADKConfig
@@ -127,11 +128,7 @@ async def test_start_success_and_decompose() -> None:
     mock_agent_instance.decompose.return_value = [{"intent": "navigate", "parameters": {}}]
     mock_adk.Agent.return_value = mock_agent_instance
 
-    # Store old module
-    old_google_adk = sys.modules.get("google.adk")
-    sys.modules["google.adk"] = mock_adk
-
-    try:
+    with patch.dict("sys.modules", {"google.adk": mock_adk}):
         cfg = ADKConfig(enabled=True, model_name="test")
         adapter = ADKMissionAdapter(cfg)
 
@@ -147,8 +144,3 @@ async def test_start_success_and_decompose() -> None:
         # Test stop
         await adapter.stop()
         assert adapter.is_ready is False
-    finally:
-        if old_google_adk is not None:
-            sys.modules["google.adk"] = old_google_adk
-        else:
-            del sys.modules["google.adk"]

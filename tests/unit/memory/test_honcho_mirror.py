@@ -152,7 +152,7 @@ async def test_local_journal_authoritative(
 @pytest.mark.asyncio
 async def test_start_success_and_mirror_functions() -> None:
     import sys
-    from unittest.mock import AsyncMock, MagicMock
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     from pydantic import SecretStr
 
@@ -178,10 +178,7 @@ async def test_start_success_and_mirror_functions() -> None:
 
     mock_honcho.Client = MagicMock(return_value=mock_client)
 
-    old_honcho = sys.modules.get("honcho")
-    sys.modules["honcho"] = mock_honcho
-
-    try:
+    with patch.dict("sys.modules", {"honcho": mock_honcho}):
         cfg = HonchoConfig(enabled=True, api_key=SecretStr("test_key"))
 
         # Mock journal
@@ -213,8 +210,3 @@ async def test_start_success_and_mirror_functions() -> None:
 
         # Stop
         await mirror.stop()
-    finally:
-        if old_honcho is not None:
-            sys.modules["honcho"] = old_honcho
-        else:
-            del sys.modules["honcho"]

@@ -56,12 +56,13 @@ async def test_list_available_tools(adapter: Any) -> None:
 @pytest.mark.asyncio
 async def test_degraded_when_sdk_missing(composio_config: ComposioConfig) -> None:
     """start() without composio SDK sets _degraded=True."""
+    from unittest.mock import patch
     from mousedroid.agents.composio_adapter import ComposioToolAdapter
 
-    adapter = ComposioToolAdapter(composio_config)
-    # The SDK is not installed in test env, so start() should degrade
-    await adapter.start()
-    assert adapter.is_degraded is True
+    with patch.dict("sys.modules", {"composio": None}):  # type: ignore[dict-item]
+        adapter = ComposioToolAdapter(composio_config)
+        await adapter.start()
+        assert adapter.is_degraded is True
 
 
 def test_is_dry_run_property(adapter: Any) -> None:
@@ -71,8 +72,7 @@ def test_is_dry_run_property(adapter: Any) -> None:
 
 @pytest.mark.asyncio
 async def test_start_success_and_execute_tool() -> None:
-    import sys
-    from unittest.mock import MagicMock
+    from unittest.mock import MagicMock, patch
 
     from mousedroid.agents.composio_adapter import ComposioToolAdapter
     from mousedroid.config.schema.agents import ComposioConfig
@@ -82,10 +82,7 @@ async def test_start_success_and_execute_tool() -> None:
     mock_client.execute_action.return_value = {"status": "success"}
     mock_composio.Composio.return_value = mock_client
 
-    old_composio = sys.modules.get("composio")
-    sys.modules["composio"] = mock_composio
-
-    try:
+    with patch.dict("sys.modules", {"composio": mock_composio}):
         cfg = ComposioConfig(enabled=True, dry_run=False, allowed_tools=["send_email"])
         adapter = ComposioToolAdapter(cfg)
 
@@ -98,8 +95,3 @@ async def test_start_success_and_execute_tool() -> None:
 
         # Test stop
         await adapter.stop()
-    finally:
-        if old_composio is not None:
-            sys.modules["composio"] = old_composio
-        else:
-            del sys.modules["composio"]

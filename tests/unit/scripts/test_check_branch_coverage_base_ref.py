@@ -457,6 +457,7 @@ def test_branch_coverage_file_exemptions_are_pinned() -> None:
     mod = _load_coverage_script_module()
     assert sorted(mod._ALLOWED_FILES) == [  # type: ignore[attr-defined]
         "src/mousedroid/factory/__init__.py",
+        "src/mousedroid/factory/agents.py",
         "src/mousedroid/factory/arm.py",
         "src/mousedroid/factory/autonomous.py",
         "src/mousedroid/factory/cloud.py",
