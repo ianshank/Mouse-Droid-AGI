@@ -28,12 +28,13 @@ class MemoryMirrorProtocol(Protocol):
         """
         ...
 
-    async def recall(self, query: str, *, k: int = 5) -> list[str]:
+    async def recall(self, query: str, *, k: int | None = None) -> list[str]:
         """Recalls memories based on a query.
 
         Args:
             query: The search query.
-            k: The maximum number of results to return.
+            k: The maximum number of results to return. If None, defaults
+                to the adapter's configured maximum.
 
         Returns:
             list[str]: The recalled pre-sanitized text memories.

@@ -154,12 +154,13 @@ class HonchoMemoryMirror:
             )
             return synced_count
 
-    async def recall(self, query: str, *, k: int = 5) -> list[str]:
+    async def recall(self, query: str, *, k: int | None = None) -> list[str]:
         """Recall memories from Honcho based on a query.
 
         Args:
             query: The search query.
-            k: The number of results to return.
+            k: The number of results to return. If None, defaults to the
+                configured ``max_recall_results``.
 
         Returns:
             A list of sanitized recalled text snippets.
@@ -167,7 +168,9 @@ class HonchoMemoryMirror:
         if not query or self._degraded or not self._client:
             return []
 
-        recall_limit = min(k, self._cfg.max_recall_results)
+        recall_limit = (
+            self._cfg.max_recall_results if k is None else min(k, self._cfg.max_recall_results)
+        )
 
         try:
             results = await asyncio.to_thread(

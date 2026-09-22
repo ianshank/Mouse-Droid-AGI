@@ -232,6 +232,30 @@ async def test_recall_honors_limit_and_optional_sanitization(
 
 
 @pytest.mark.asyncio
+async def test_recall_defaults_to_config_max_results_when_k_is_none() -> None:
+    """When k is None, recall defaults to cfg.max_recall_results."""
+    from pydantic import SecretStr
+
+    from mousedroid.config.schema.agents import HonchoConfig
+    from mousedroid.memory.honcho_mirror import HonchoMemoryMirror
+
+    mock_client = MagicMock()
+    mock_client.query.return_value = [MagicMock(content="result 1")]
+
+    cfg = HonchoConfig(
+        enabled=True,
+        api_key=SecretStr("test_key"),
+        max_recall_results=4,
+    )
+    mirror = HonchoMemoryMirror(cfg)
+    mirror._client = mock_client
+
+    results = await mirror.recall("query")
+    mock_client.query.assert_called_once_with(query="query", k=4)
+    assert results == ["result 1"]
+
+
+@pytest.mark.asyncio
 async def test_honcho_start_exception_degrades() -> None:
     """Exception during Honcho client instantiation degrades mirror."""
     from unittest.mock import MagicMock, patch
