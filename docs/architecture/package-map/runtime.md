@@ -46,13 +46,14 @@ graph LR
 
 **Purpose:** MouseDroid navigation agents.
 
-**Imports:** `logging`, `safety`
+**Imports:** `llm_gateway`, `logging`, `safety`
 
 **Dependents:** `factory`
 
 ```mermaid
 graph LR
   agents[agents]
+  agents --> llm_gateway
   agents --> logging
   agents --> safety
   factory --> agents

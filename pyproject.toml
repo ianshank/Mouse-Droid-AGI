@@ -155,6 +155,17 @@ cfc = [
 anthropic = [
     "anthropic>=0.40",
 ]
+# External agent frameworks — strictly off-loop, workstation/cloud only.
+# Never installed on the Jetson; the factory returns None when disabled.
+adk = [
+    "google-adk>=0.5",
+]
+honcho = [
+    "honcho-ai>=0.1",
+]
+composio = [
+    "composio-core>=0.5",
+]
 gcp = [
     "google-cloud-pubsub>=2.18",
     "google-cloud-storage>=2.10",

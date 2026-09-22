@@ -36,6 +36,9 @@ System_Ext(cloud, "Cloud weights bucket", "Periodic OTA model updates.")
 System_Ext(hf, "HuggingFace Hub", "Model + dataset registry\n(ianshank/* repos).")
 System_Ext(wandb, "Weights & Biases", "Experiment tracking for\ntraining runs.")
 System_Ext(anthropic, "Anthropic Claude API", "Cloud deliberative brain —\ntranslates NL missions to a GoalVector.\nLocal Phi-3 fallback when off-network.")
+System_Ext(adk, "Google ADK", "Off-loop mission decomposition.")
+System_Ext(honcho, "Honcho API", "Long-horizon operator memory sync.")
+System_Ext(composio, "Composio API", "Operator-approved cloud actions.")
 
 Rel(operator, mousedroid, "Edits YAML, dispatches missions,\nbrowses dashboard")
 Rel(passenger, mousedroid, "Watches live camera + LiDAR")
@@ -46,13 +49,16 @@ Rel(mousedroid, cloud, "Weight OTA")
 Rel(mousedroid, hf, "Model pull / push")
 Rel(mousedroid, wandb, "Metrics + run telemetry")
 Rel(mousedroid, anthropic, "NL mission translation\n(HTTPS, post sanitize, OUT of 30 Hz loop)")
+Rel(mousedroid, adk, "Mission decomposition (off-loop)")
+Rel(mousedroid, honcho, "Memory sync (sanitized)")
+Rel(mousedroid, composio, "Cloud tools (dry-run supported)")
 ```
 
-> The **Anthropic Claude API** is the *deliberative* tier only: it
-> turns a natural-language mission into a normalised `GoalVector`. It is
-> deliberately outside the 30 Hz reactive control loop, which stays
+> The **Anthropic Claude API**, **Google ADK**, **Honcho**, and **Composio** are the *deliberative* tier only:
+> the LLM gateway translates natural-language missions into normalised `GoalVector`s, Google ADK decomposes complex missions into structured sub-tasks, Honcho mirrors safe journal entries for long-horizon recall, and Composio executes operator-scoped cloud tools.
+> All deliberative components run strictly outside the 30 Hz reactive control loop, which stays
 > LLM-free and deterministic. When the rover is off-network, a local
-> Phi-3-mini (llama_cpp) fallback serves the same translation. See
+> Phi-3-mini (llama_cpp) fallback serves mission translation. See
 > Level 2 and [`c4-llm-gateway.md`](./c4-llm-gateway.md) for detail.
 
 ---

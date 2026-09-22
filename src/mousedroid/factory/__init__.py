@@ -58,6 +58,11 @@ from mousedroid.factory._replay_batch_helpers import (
 from mousedroid.factory._replay_batch_helpers import (
     _run_coro_blocking as _run_coro_blocking,
 )
+from mousedroid.factory.agents import (
+    build_cloud_tool_adapter,
+    build_memory_mirror,
+    build_mission_decomposer,
+)
 from mousedroid.factory.arm import (
     build_arm_controller,
     build_arm_driver,
@@ -334,6 +339,7 @@ __all__ = [
     "build_cloud_logging_sink",
     "build_cloud_metrics_exporter",
     "build_cloud_telemetry_sink",
+    "build_cloud_tool_adapter",
     "build_cognitive_core",
     "build_curiosity_module",
     "build_distance_sensor",
@@ -359,9 +365,11 @@ __all__ = [
     "build_llm_replanner",
     "build_mcp_server",
     "build_memory_exporter",
+    "build_memory_mirror",
     "build_memory_tier",
     "build_metrics_registry",
     "build_microphone",
+    "build_mission_decomposer",
     "build_mission_lifecycle",
     "build_mission_parser",
     "build_mission_replanner",

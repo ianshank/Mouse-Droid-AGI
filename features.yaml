@@ -1522,3 +1522,100 @@ features:
       blocking gate (Phase 5 pattern). Does not implement F-052. No
       openspec/changes/archive/ layout exists — the change folder stays in place
       with status flipped to implemented in openspec/project.md.
+  - id: "F-054"
+    epic: "External Agent Integration"
+    name: "Mission-Agent Boundary and Protocol Definitions (MD-E1)"
+    description: >-
+      Define typed MissionIntent, MissionDecomposerProtocol, MemoryMirrorProtocol,
+      and CloudToolAdapterProtocol. Configure ADK, Honcho, and Composio schema in
+      src/mousedroid/config/schema/agents.py defaulting to disabled.
+    category: "infrastructure"
+    priority: "high"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "External agent protocols defined and runtime checkable"
+      - "ADKConfig, HonchoConfig, ComposioConfig default to disabled"
+    validation_command: "python -m pytest tests/unit/agents/test_adk_adapter.py -q"
+    implemented_in: "71f986fe86284f7076fe5465807e13b1ce7ae4bd"
+    depends_on: []
+    notes: >-
+      Integrates external agent frameworks strictly off-loop. Never inside the
+      30 Hz safety-critical control loop.
+
+  - id: "F-055"
+    epic: "External Agent Integration"
+    name: "Authoritative Append-Only Journal (MD-E2)"
+    description: >-
+      Extend JournalEntry with category and severity; create SafetyJournalWriter
+      for structured safety events and mission transitions.
+    category: "infrastructure"
+    priority: "high"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "JournalEntry backwards compatibility preserved"
+      - "SafetyJournalWriter records events correctly"
+    validation_command: "python -m pytest tests/unit/harness/test_safety_journal.py -q"
+    implemented_in: "71f986fe86284f7076fe5465807e13b1ce7ae4bd"
+    depends_on: []
+    notes: >-
+      Authoritative local journal with safety_state entries kept local-only.
+
+  - id: "F-056"
+    epic: "External Agent Integration"
+    name: "Honcho Memory Mirror (MD-E3)"
+    description: >-
+      Implement MemoryMirrorProtocol with Honcho backend for long-horizon
+      operator memory sync with injection sanitization on recall.
+    category: "functional"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "HonchoMemoryMirror correctly filters safety_state entries"
+      - "Mirror strips injected prompts on recall"
+    validation_command: "python -m pytest tests/unit/memory/test_honcho_mirror.py -q"
+    implemented_in: "71f986fe86284f7076fe5465807e13b1ce7ae4bd"
+    depends_on: ["F-055"]
+    notes: >-
+      Safe category filtering (mission, operator_preference only) prevents
+      safety state egress.
+
+  - id: "F-057"
+    epic: "External Agent Integration"
+    name: "Composio Cloud Tool Adapter (MD-E4)"
+    description: >-
+      Implement CloudToolAdapterProtocol with Composio backend for
+      operator-approved cloud actions with dry-run support.
+    category: "functional"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "ComposioToolAdapter enforces allowed_tools scoping"
+      - "Dry run mode correctly logs instead of executing"
+    validation_command: "python -m pytest tests/unit/agents/test_composio_adapter.py -q"
+    implemented_in: "71f986fe86284f7076fe5465807e13b1ce7ae4bd"
+    depends_on: []
+    notes: >-
+      Operator-scoped cloud actions with dry-run default.
+
+  - id: "F-058"
+    epic: "External Agent Integration"
+    name: "External Agent Factory Wiring"
+    description: >-
+      Add build_mission_decomposer, build_memory_mirror, and
+      build_cloud_tool_adapter to factory builders and orchestrator.
+    category: "infrastructure"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "Agents dynamically wired based on config.agents payload"
+      - "Defensive degradation when disabled or SDK missing"
+    validation_command: "python -m pytest tests/unit/agents/ -q"
+    implemented_in: "71f986fe86284f7076fe5465807e13b1ce7ae4bd"
+    depends_on: ["F-054", "F-055", "F-056", "F-057"]
+    notes: >-
+      Factory-first DI wiring for external agent adapters.

@@ -11,7 +11,7 @@
 > "what imports what", not "what talks to what at runtime".
 
 
-Covers **41** packages and **166** directed package-level import edges, split per architectural epic:
+Covers **41** packages and **167** directed package-level import edges, split per architectural epic:
 
 - [Runtime loop and embodiment](package-map/runtime.md) (`runtime`) — 8 packages
 - [Cognitive pillars](package-map/cognitive.md) (`cognitive`) — 10 packages

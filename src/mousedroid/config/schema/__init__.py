@@ -41,6 +41,18 @@ from mousedroid.config.schema._primitives import (
     VLAActiveBackendLiteral,
     VLABackendLiteral,
 )
+from mousedroid.config.schema.agents import (
+    ADKConfig as ADKConfig,
+)
+from mousedroid.config.schema.agents import (
+    AgentsConfig as AgentsConfig,
+)
+from mousedroid.config.schema.agents import (
+    ComposioConfig as ComposioConfig,
+)
+from mousedroid.config.schema.agents import (
+    HonchoConfig as HonchoConfig,
+)
 from mousedroid.config.schema.arm import (
     ArmConfig,
     ArmCurriculumConfig,

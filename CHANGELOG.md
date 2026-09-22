@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Feat — MD-E0..E4: External Agent Integration (ADK, Honcho, Composio)
+
+Implements foundational interfaces and adapters for external agent frameworks, strictly outside the 30 Hz control loop:
+- **ADK**: `MissionDecomposerProtocol` and lazy `ADKMissionAdapter` for off-loop NL command decomposition.
+- **Honcho**: `MemoryMirrorProtocol` and `HonchoMemoryMirror` for long-horizon operator memory sync, filtering to safe categories.
+- **Composio**: `CloudToolAdapterProtocol` and `ComposioToolAdapter` for operator-approved cloud actions with dry-run support.
+- **Journaling**: Extended `JournalEntry` with `category` and `severity`; added `SafetyJournalWriter`.
+- All adapters degrade gracefully on missing SDKs and enforce prompt injection/path traversal filtering.
+
 ### Docs — F-053 / WS-8d: one per-directory format, every subsystem indexed, `agent.md` retired
 
 Executes `docs/planning/TECH_DEBT_REMEDIATION_PLAN.md` **WS-8d** ("Pick one format; index all

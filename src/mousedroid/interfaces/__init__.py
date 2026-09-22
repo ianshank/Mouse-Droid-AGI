@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from mousedroid.interfaces.cloud_tool_adapter import CloudToolAdapterProtocol
+from mousedroid.interfaces.memory_mirror import MemoryMirrorProtocol
+from mousedroid.interfaces.mission_decomposer import MissionDecomposerProtocol
 from mousedroid.interfaces.protocols import (
     CameraProtocol,
     GoalVector,
@@ -14,10 +17,13 @@ from mousedroid.interfaces.protocols import (
 
 __all__ = [
     "CameraProtocol",
+    "CloudToolAdapterProtocol",
     "GoalVector",
     "LLMGatewayProtocol",
     "LiDARProtocol",
+    "MemoryMirrorProtocol",
     "MetricsRegistryProtocol",
+    "MissionDecomposerProtocol",
     "MotorControllerProtocol",
     "PromptInjectionFilterProtocol",
 ]

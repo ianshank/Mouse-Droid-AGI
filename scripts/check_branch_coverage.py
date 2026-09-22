@@ -69,6 +69,7 @@ _ALLOWED_DIR_PREFIXES: Final[tuple[str, ...]] = (
 _ALLOWED_FILES: Final[frozenset[str]] = frozenset(
     {
         "src/mousedroid/factory/__init__.py",
+        "src/mousedroid/factory/agents.py",
         "src/mousedroid/factory/arm.py",
         "src/mousedroid/factory/autonomous.py",
         "src/mousedroid/factory/cloud.py",
