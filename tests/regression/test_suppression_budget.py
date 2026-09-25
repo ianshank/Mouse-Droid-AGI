@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tools.claude_hooks.config import load_config
+from tools.claude_hooks.config import RatchetBudgetsConfig, load_config
 from tools.ratchet_budgets import count_marker_occurrences
 
 from tests._pyproject import load_pyproject
@@ -66,6 +66,49 @@ def test_type_ignore_within_budget() -> None:
 def test_noqa_within_budget() -> None:
     count = count_marker_occurrences(_REPO_ROOT, _SCOPE_GLOB, "noqa")
     assert count <= _ceiling("noqa")
+
+
+def test_hook_fallback_budgets_match_workforce_yaml() -> None:
+    """The hook's built-in fallback budgets must equal the YAML's, item for item.
+
+    This module's header says the ceilings live in ``.claude/workforce.yaml``
+    "so this hard-fail gate and the ratchet_budget_check hook's early warning
+    can never drift apart on what the ceiling actually is". That holds only
+    while the YAML is readable. ``RatchetBudgetsConfig`` also carries a
+    hard-coded fallback list, and its docstring claims those defaults
+    "reproduce today's hard-fail-only regression budgets ... exactly" while
+    naming this very file — but nothing asserted it, and it had in fact
+    drifted: the ``hardcoded_ok`` fallback sat at 24/22 against a YAML of
+    26/24 for the whole life of the F-030 bump, so any run with a missing or
+    unreadable YAML reported a phantom breach at 26 > 24. F-052 Slice A
+    ratcheted the YAML to 24/22, which made the fallback accidentally correct;
+    this pin is what keeps it correct on the next ratchet, when nobody
+    remembers the second file.
+    """
+    live = {item.name: item for item in load_config(repo_root=_REPO_ROOT).ratchet_budgets.items}
+    fallback = {item.name: item for item in RatchetBudgetsConfig().items}
+
+    assert set(fallback) == set(live), (
+        "budget names differ between the hook fallback and .claude/workforce.yaml: "
+        f"fallback={sorted(fallback)} yaml={sorted(live)}"
+    )
+    for name, yaml_item in live.items():
+        got = fallback[name]
+        # scope_glob is compared too: it decides WHICH files are counted, so a
+        # YAML scope change with the fallback left behind would keep the
+        # numbers equal while the fallback silently measured a different set.
+        assert (got.marker, got.scope_glob, got.ceiling, got.warn_threshold) == (
+            yaml_item.marker,
+            yaml_item.scope_glob,
+            yaml_item.ceiling,
+            yaml_item.warn_threshold,
+        ), (
+            f"{name}: hook fallback (marker={got.marker!r}, scope={got.scope_glob!r}, "
+            f"ceiling={got.ceiling}, warn={got.warn_threshold}) != .claude/workforce.yaml "
+            f"(marker={yaml_item.marker!r}, scope={yaml_item.scope_glob!r}, "
+            f"ceiling={yaml_item.ceiling}, warn={yaml_item.warn_threshold}). Ratchet both, "
+            "or the fallback lies whenever the YAML cannot be read."
+        )
 
 
 # The measured post-hygiene-sprint set of file-level ruff waivers targeting

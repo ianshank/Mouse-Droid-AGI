@@ -39,6 +39,7 @@ from mousedroid.comms._utils import (
     clamp,
     parse_encoder_reading,
 )
+from mousedroid.constants import MILLISECONDS_PER_SECOND
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
@@ -64,9 +65,6 @@ WAVESHARE_CMD_HEART_BEAT_SET: Final[int] = 136  # hardcoded-ok: vendor protocol 
 
 WAVESHARE_FEEDBACK_BASE_INFO: Final[int] = 1001  # hardcoded-ok: vendor protocol constant
 """``FEEDBACK_BASE_INFO`` — the telemetry frame carrying ``L``/``R``/``v``."""
-
-_MS_PER_SECOND: Final[float] = 1000.0  # hardcoded-ok: unit conversion, not a tunable
-"""Milliseconds per second — heartbeat-window derivation factor."""
 
 MIN_HEARTBEAT_WINDOW_MS: Final[int] = 1  # hardcoded-ok: smallest window the wire can express
 """Floor for the derived heartbeat window.
@@ -165,7 +163,7 @@ def heartbeat_window_ms(cfg: ESP32Config) -> int:
         below :data:`MIN_HEARTBEAT_WINDOW_MS`.
     """
     derived = math.ceil(
-        worst_case_command_gap_s(cfg) * _MS_PER_SECOND * cfg.heartbeat_window_multiple
+        worst_case_command_gap_s(cfg) * MILLISECONDS_PER_SECOND * cfg.heartbeat_window_multiple
     )
     return max(MIN_HEARTBEAT_WINDOW_MS, derived)
 

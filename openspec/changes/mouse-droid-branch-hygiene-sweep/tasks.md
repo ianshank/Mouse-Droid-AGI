@@ -173,24 +173,58 @@ None of those is an emergency. All four are the same shape: a check that exists 
 All three suppression budgets are at ceiling. No later phase can add a suppression until
 this one lands. It creates capacity by deletion, never by raising a ceiling.
 
-- [ ] 0.1 Delete the three inert `hardcoded_ok` markers whose values are already in the
+- [~] 0.1 **DECLINED** (see correction 6). Delete the three inert `hardcoded_ok` markers whose values are already in the
   gate's `ALLOWED_NUMERIC_VALUES = {0.0, 1.0, -1.0}`:
   `src/mousedroid/comms/_utils.py:23` (`= 1`), `:26` (`= 0`),
   `src/mousedroid/comms/command_set.py:71` (`= 1`). Verify with
   `python -m tools.ratchet_budgets` that the count drops 26 → 23 and no gate finding
   appears.
-- [ ] 0.2 Replace the two `1000.0` duplications with `constants.MILLISECONDS_PER_SECOND`
+- [x] 0.2 Replace the two `1000.0` duplications with `constants.MILLISECONDS_PER_SECOND`
   (`src/mousedroid/constants.py:67`) at `src/mousedroid/validation/latency_stats.py:30`
   and `src/mousedroid/comms/command_set.py:68`, deleting both markers. Count 23 → 21.
-- [ ] 0.3 Ratchet `.claude/workforce.yaml` `hardcoded_ok` to `ceiling: 21`,
+- [x] 0.3 Ratchet `.claude/workforce.yaml` `hardcoded_ok` to `ceiling: 21`,
   `warn_threshold: 19`, with a comment recording *why* (inert markers + an existing
   constant), matching the precedent at `:118-128`. Do not bank the slack.
-- [ ] 0.4 Sync the stale fallback at `tools/claude_hooks/config.py:353` (`ceiling=24,
+- [x] 0.4 Sync the stale fallback at `tools/claude_hooks/config.py:353` (`ceiling=24,
   warn_threshold=22`) to the post-ratchet values, and add a test asserting every
   `RatchetBudgetItem` default equals the shipped `.claude/workforce.yaml` entry — the
   docstring at `:339-341` claims this and nothing enforced it.
-- [ ] 0.5 `python -m tools.ratchet_budgets --strict` exits 0 and
+- [x] 0.5 `python -m tools.ratchet_budgets --strict` exits 0 and
   `tests/regression/test_suppression_budget.py` passes.
+
+### Slice A landed — what changed against the task wording
+
+Correction 6 above is binding, so Phase 0 shipped the corrected shape, not the written one.
+Ratchet is now `hardcoded_ok` **24/22** with a measured count of 24, at ceiling, strict green.
+
+- **0.1 declined, not deferred.** Stripping `ESP32_CMD_TYPE_VELOCITY` (=1) and `_STOP` (=0)
+  while `_BATTERY` (=2) keeps its marker is the inconsistency the recorded F-030 bump exists
+  to remove. `MIN_HEARTBEAT_WINDOW_MS` (=1) is the same class. The alternative the correction
+  allows — delete all four protocol markers and record F-030 as superseded — is a decision
+  about vendor-protocol marker policy, not headroom arithmetic, so it is left to the user
+  rather than taken silently inside a hygiene slice.
+- **0.3 landed at 24/22, not the written 21/19.** 21/19 was the pre-correction arithmetic,
+  which assumed 0.1's three deletions. With 0.1 declined the count is 24, so 21 would have
+  been an immediate self-inflicted breach. The YAML comment records the reason and states
+  explicitly why the ESP32 markers were left alone, so the next reader does not re-derive
+  the reversed decision from the ceiling alone.
+- **0.4 needed no source edit, and that is the finding.** The stale fallback already read
+  `ceiling=24, warn_threshold=22` — which the 26 -> 24 ratchet made correct *by coincidence*.
+  So the drift closed itself, and nothing would have caught the next one. The test the task
+  asks for was added (`test_hook_fallback_budgets_match_workforce_yaml`) and **proven to
+  fail**: reverting the fallback to 26/24 reds it with a message naming both sides; the
+  measured count and both gates return green once aligned.
+- **Headroom delivered is 0, by design.** Count 24 against ceiling 24 means later phases
+  still cannot add a suppression. Phase 0's premise — "creates capacity by deletion" — is
+  only satisfied by 0.1, which is declined. Any later phase needing a marker must either
+  reclaim elsewhere or come back to the ESP32 policy question. This is stated rather than
+  papered over by banking slack, which this budget's own discipline forbids.
+
+Verification: `python -m tools.ratchet_budgets --strict` exits 0; a probe 25th marker makes
+it exit 1 and reds `test_hardcoded_value_marker_budget.py` with `assert 25 <= 24`, proving the
+new ceiling binds. `make gates` green (295 passed, hook coverage 98.27%). 639 unit tests across
+`validation`, `comms` and `claude_hooks` plus 80 F-025/heartbeat tests pass — both edits
+substitute an identical `1000.0`, so behaviour is unchanged by construction.
 
 ## Phase 1 — Confirmed security defects in this branch's own code
 
@@ -234,14 +268,99 @@ Each was verified by driving the real script, not by reading it.
 - [ ] 1.9 `scripts/rover_wip_guard.sh:201` — `git checkout -b "${branch}"` passes
   `MOUSEDROID_ROVER_WIP_BRANCH` with no `--` separator and no validation. Add `--` and
   validate via `git check-ref-format --branch`.
-- [ ] 1.10 `scripts/docker_deploy.sh:43-48` sources `/etc/mousedroid/docker.env` as shell
+- [x] 1.10 `scripts/docker_deploy.sh:43-48` sources `/etc/mousedroid/docker.env` as shell
   code under `sudo`, and `:363-373` creates it with a default umask (0755/0644) — so any
   non-root write to the file is root code execution, and that file is the documented home
   of `MOUSEDROID_TELEMETRY_TOKEN` and `ANTHROPIC_API_KEY`. Replace `.` with a
   `KEY=VALUE`-only read loop and `chmod 600` at creation.
-- [ ] 1.11 `scripts/docker_deploy.sh` — validate `CONTAINER_NAME` and `DEPLOY_RECORD`
+- [x] 1.11 `scripts/docker_deploy.sh` — validate `CONTAINER_NAME` and `DEPLOY_RECORD`
   (both come from that sourced file) against `^[A-Za-z0-9_.-]+$` and insert `--` before
   the container name at `:234`, `:256`, `:264`, `:276`, `:394`, `:411`, `:417`.
+### Slice C landed — two corrections to the task wording
+
+Both defects were confirmed on the current tree before anything changed, and both fixes are
+pinned by `tests/unit/scripts/test_docker_deploy_env_loading.py` (22 tests), written to the
+`test_deploy_remote_guard.py` contract: real fixtures driven through `bash`, specific messages
+asserted, and every pin proven to fail before it was trusted.
+
+**1.10 — the dot-source.** Replaced with `_load_env_file_as_data`, which follows systemd's
+`EnvironmentFile` rules. The justification is stronger than "sourcing is risky": *every* other
+consumer of that file already parses it — `mousedroid-docker.service:47`,
+`mousedroid-trend.service:34`, and `docker-compose.jetson.yml:64` — so this script was the lone
+one treating it as code, and the only one running as root. It was a correctness bug too: a value
+containing `$` or a backtick was expanded here and taken literally by systemd, so the script and
+the units it installs disagreed about the same file. Proven both ways — the old `set -a` +
+dot-source creates a sentinel file from `PAYLOAD=$(touch ...)`; the parser does not, and yields
+the literal text systemd would. A `;` comment, which systemd accepts, is a bash *syntax error*,
+so the old dot-source aborted the whole file on one and silently dropped every key below it.
+
+**1.10 — CORRECTION: the directory must NOT be tightened.** The task says `:363-373` creates the
+file "with a default umask (0755/0644)" and asks for `chmod 600` at creation. The file fix landed
+and is proven: without it the operator's token lands `0o644`, and the test reds with that exact
+mode. But tightening the *directory* to 0700, which the 0755 half implies, would break the rover:
+`scripts/mousedroid.service:23` drops to `User=jetson` and `:26` points `MOUSEDROID_CONFIG` at a
+YAML inside that same directory. So the secret is confined to one file and that file is tightened;
+the directory is deliberately left as-is, with the reason recorded at the `mkdir` and pinned by
+`test_the_config_directory_is_deliberately_left_group_readable`, which fails if
+`mousedroid.service` ever stops dropping privileges (at which point tightening becomes safe).
+The 0600 mode is not a new policy: `scripts/host_bootstrap.sh:99,103` already applies exactly it
+to exactly this file, for exactly this reason. Two scripts created the same credential file and
+only one protected it.
+
+**1.10 — CORRECTION: the severity claim is overstated, and the fix still stands.** The task says
+"any non-root write to the file is root code execution". A non-root write is not actually reachable
+on a default host: `/etc` is root-owned `0755` and the `mkdir -p` created `/etc/mousedroid` the
+same way, so an unprivileged user could not write `docker.env` even while it was `0644`. The real,
+demonstrated problems are the two that do not depend on that: the script and the systemd units
+**disagreed about the meaning of the same file** (expansion here, literal there), and the
+credentials were **world-readable at `0644`** — confirmed by test, not argued. Both are fixed. The
+escalation framing is left corrected rather than repeated, because a fix that has to be oversold
+is a fix nobody re-examines. Not addressed, and recorded as a follow-up rather than silently
+skipped: the file can still set `PATH`, `IFS` or `LD_PRELOAD` for a root process that calls
+`docker` by bare name. That is unchanged from before this slice, matches what systemd itself would
+pass through, and needs the same "who can write this file" analysis to prioritise.
+
+**Review round 1 — four defects in the first cut, all verified before fixing.** Copilot flagged
+these on PR #245; each was reproduced against the tree first, and each fix was then proven by
+reverting it and watching the new pin go red.
+
+- **HIGH, and the worst of the four: the parser's warning echoed the offending line.** The line
+  that fails to parse is exactly a mistyped `ANTHROPIC_API_KEY` or `MOUSEDROID_TELEMETRY_TOKEN`, so
+  a fix whose purpose was to stop that file being dangerous had introduced a path that writes the
+  credential to stderr and the journal — against this repo's own rule that secrets are
+  presence-checked, never echoed. Now reports `<file>:<lineno>` and nothing else, with the line
+  count including comments and blanks so the location is actionable.
+- **HIGH: the `chmod` covered only the creation path.** Every rover seeded by the old script still
+  had `0644` credentials, and nothing else revisits them — so the remediation would have left the
+  entire existing fleet exposed while reading as applied. It now runs on every deploy, and
+  re-running the deploy is what repairs the fleet.
+- **MEDIUM: `KEY="v"   ` exported its quote characters.** The quote test ran before trailing blanks
+  were stripped, so an anchored pattern could not match a line ending in a space. That is the exact
+  script-vs-systemd disagreement this function exists to remove, for a line shape systemd accepts.
+  Trim now precedes the quote strip; blanks inside the quotes still survive.
+- **MEDIUM: the budget pin ignored `scope_glob`.** It decides which files are counted, so a YAML
+  scope change would have passed the pin while the fallback measured a different set. Now compared.
+
+One fixture bug of my own surfaced while verifying the second item: a fixture seeded from the real
+`config/docker.env.example` sets `MOUSEDROID_CONFIG_DIR`, and the env file legitimately overrides
+the process environment (as the old dot-source also did), so the script redirected to
+`/etc/mousedroid` and never reached the step under test. The first "after: 644" reading was that,
+not the fix failing. Recorded because the fixture's comment now explains it, and because a
+verification run that fails for the wrong reason is indistinguishable from a broken fix.
+
+**1.11 — CORRECTION: the specified regex does not close the hole.** The task asks for
+`^[A-Za-z0-9_.-]+$`. `-` is a member of that class, so `-uroot` *matches* it and the guard would
+have admitted the very value it exists to reject. Landed with Docker's own container-name rule,
+`^[A-Za-z0-9][A-Za-z0-9_.-]*$`, which anchors the first character and makes a leading dash
+unrepresentable. `test_the_weak_pattern_would_have_admitted_that_name` pins that reasoning so the
+pattern is not "simplified" back. Because a leading dash is now impossible, the `--`
+end-of-options insertion at seven call sites is **not needed and was not done** — which also
+avoids betting the deployment path on `--` placement in `docker exec`, unverifiable without a
+Docker daemon. `DEPLOY_RECORD` is a path, not an identifier, so the same regex would have been
+wrong for it; it is validated as absolute instead, which catches the real failure (silent
+resolution against the operator's cwd). With both guards neutered the three refusal tests go red
+and `-uroot` is shown reaching a live `docker` call.
+
 - [ ] 1.12 `scripts/deploy_remote.sh:285-289` — the off-rover WIP archive can contain the
   rover's whole non-gitignored tree and is written with a default umask, never pruned,
   never encrypted. `install -d -m 700` the directory and `umask 077` around the

@@ -8,6 +8,90 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Security — `docker_deploy.sh` stopped executing `/etc/mousedroid/docker.env`, and stopped leaving it world-readable
+
+Two defects in the same file, both confirmed on the tree before anything changed.
+
+`scripts/docker_deploy.sh` dot-sourced `/etc/mousedroid/docker.env` under `set -a`. Its documented
+invocation is `sudo bash scripts/docker_deploy.sh`, so every line of the documented home of
+`MOUSEDROID_TELEMETRY_TOKEN` and `ANTHROPIC_API_KEY` ran as root. The file is not a shell script:
+every other consumer parses it — `mousedroid-docker.service`, `mousedroid-trend.service`, and
+`docker-compose.jetson.yml`'s `env_file:` — so this script was the only one treating operator
+configuration as code, and the only one privileged. It was also a correctness bug, because a value
+containing `$` or a backtick was expanded here and taken literally by systemd: the script and the
+units it installs disagreed about the same file. It now parses the file following systemd's
+`EnvironmentFile` rules — comments, `KEY=VALUE`, one layer of quotes, no expansion, an unparseable
+line warned about and skipped rather than fatal, which is both systemd's behaviour and what keeps
+an already-provisioned rover loading unchanged. As a side effect a `;` comment no longer destroys
+the file: systemd accepts that form, bash treats it as a syntax error, so the old dot-source
+aborted and silently dropped every key below it.
+
+On severity, stated plainly rather than oversold: a non-root write to that file was not reachable on
+a default host, since `/etc` and the created `/etc/mousedroid` are both root-owned `0755`. The
+demonstrated problems are the two that do not depend on it — the script and the units disagreed
+about the meaning of the same file, and the credentials were world-readable. Still outstanding, and
+unchanged by this entry: the file can set `PATH` or `LD_PRELOAD` for a root process that invokes
+`docker` by bare name, which is also what systemd would pass through.
+
+The same script seeded `docker.env` from the tracked template with `cp` and no `chmod`, so on a
+stock umask the operator's credentials landed `0644`. It is now `0600` — not a new policy, just the
+one `scripts/host_bootstrap.sh` has always applied to this same file, with the same recorded
+reason. Two scripts created the credential file and only one protected it. The config *directory*
+is deliberately left alone: `mousedroid.service` drops to `User=jetson` and reads a YAML from it,
+so a 0700 directory would break the venv deployment path. The secret is confined to one file
+instead, and a test fails if that unit ever stops dropping privileges.
+
+Finally, `CONTAINER_NAME` and `DEPLOY_RECORD` both come from that file and both reach a `docker`
+argument list, so a name beginning with `-` was read by `docker exec` as a flag. `CONTAINER_NAME`
+is now validated against Docker's own name rule, which anchors the first character — a plain
+`[A-Za-z0-9_.-]+` would not have helped, since `-` is in that class and `-uroot` matches it.
+`DEPLOY_RECORD` is validated as an absolute path.
+
+All of it is pinned by `tests/unit/scripts/test_docker_deploy_env_loading.py`: real fixtures driven
+through `bash`, specific messages asserted rather than exit codes, and every pin proven to fail
+first — the payload test has a companion that dot-sources the identical fixture and requires the
+sentinel to appear, so it cannot pass by being harmless.
+
+Four defects in the first cut of that work were found in review and fixed before it landed, and two
+of them mattered more than the change they were attached to. The parser's warning echoed the
+offending line — and the line that fails to parse is exactly a mistyped `ANTHROPIC_API_KEY`, so a
+security fix had introduced a path that writes the credential to stderr and the journal. It now
+reports the file and line number only. And the `chmod` was on the creation path alone, so every
+rover already seeded by the old script would have kept its `0644` credentials while the fix looked
+applied; it now runs on every deploy, so re-running the deploy repairs the existing fleet. Also
+fixed: `KEY="v"   ` exported its quote characters literally, because the quote test ran before
+trailing blanks were stripped — the same script-vs-systemd disagreement the parser exists to
+remove; and the budget pin now compares `scope_glob`, which decides which files are counted, so a
+scope change cannot pass while the fallback measures a different set.
+
+
+### Chore — the `hardcoded_ok` ratchet came off its ceiling, and its fallback stopped lying
+
+All three suppression budgets sat at ceiling, so no change could add a suppression without first
+reclaiming one. `hardcoded_ok` is now 24/22, down from 26/24, by deleting two duplicated
+definitions rather than by raising anything: `validation/latency_stats.py`'s `_MS_PER_S` and
+`comms/command_set.py`'s `_MS_PER_SECOND` were both local copies of `1000.0`, which
+`constants.MILLISECONDS_PER_SECOND` has held all along. Both now import it — the same fix the
+earlier 28 -> 26 step applied to `config/migration.py`'s pair, so this sets no new precedent. The
+substituted value is identical, so behaviour is unchanged by construction.
+
+The ESP32 and Waveshare protocol markers were deliberately left alone. Reclaiming the two whose
+values (0, 1) happen to sit in `check_no_hardcoded_values.py`'s `ALLOWED_NUMERIC_VALUES` while
+`ESP32_CMD_TYPE_BATTERY` (2) must keep its marker would recreate exactly the inconsistent
+treatment that the recorded F-030 24 -> 28 bump exists to remove. The YAML comment says so at the
+ceiling, so the next reader cannot infer a reversed decision from the number alone. The
+consequence is stated rather than hidden: headroom delivered is zero — the count now equals the
+ceiling — so a change that genuinely needs a new marker must reclaim elsewhere or reopen the
+protocol-marker question.
+
+Separately, `RatchetBudgetsConfig`'s fallback defaults claimed in their own docstring to reproduce
+the shipped budgets "exactly" and nothing asserted it. They had drifted: `hardcoded_ok` read 24/22
+against a YAML of 26/24 for the whole life of the F-030 bump, so any run with an unreadable
+`.claude/workforce.yaml` would have reported a phantom breach at 26 > 24. The ratchet above makes
+the fallback accidentally correct; `test_hook_fallback_budgets_match_workforce_yaml` is what keeps
+it correct on the next ratchet, and it was proven to fail before it was trusted.
+
+
 ### Feat — MD-E0..E4: External Agent Integration (ADK, Honcho, Composio)
 
 Implements foundational interfaces and adapters for external agent frameworks, strictly outside the 30 Hz control loop:
