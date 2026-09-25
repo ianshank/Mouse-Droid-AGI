@@ -40,11 +40,70 @@ INSTALL_DIR="${MOUSEDROID_INSTALL_DIR:-/opt/mousedroid}"
 CONFIG_DIR="${MOUSEDROID_CONFIG_DIR:-/etc/mousedroid}"
 DOCKER_ENV_FILE="${MOUSEDROID_DOCKER_ENV_FILE:-${CONFIG_DIR}/docker.env}"
 
+# ---------------------------------------------------------------------------
+# Load the docker env file WITHOUT executing it.
+#
+# That file is an *environment file*, not a shell script. Every other consumer
+# parses it rather than runs it:
+#   scripts/mousedroid-docker.service:47  EnvironmentFile=-/etc/mousedroid/docker.env
+#   scripts/mousedroid-trend.service:34   EnvironmentFile=-/etc/mousedroid/docker.env
+#   docker-compose.jetson.yml:64          env_file: path: /etc/mousedroid/docker.env
+#
+# This script was the lone exception: it dot-sourced the file under `set -a`.
+# The documented invocation is `sudo bash scripts/docker_deploy.sh`, so every
+# line of the documented home of MOUSEDROID_TELEMETRY_TOKEN and
+# ANTHROPIC_API_KEY executed as root. It was a correctness bug as well as a
+# security one -- a value containing `$`, a backtick or `~` was expanded here
+# and taken literally by systemd, so this script and the units it installs
+# disagreed about what the same file meant.
+#
+# The parser follows systemd's EnvironmentFile rules: `#` / `;` comments,
+# KEY=VALUE, one optional layer of matching quotes, NO expansion or command
+# substitution, and an unparseable line warned about and skipped rather than
+# fatal. Skipping matches systemd, and is what keeps an already-provisioned
+# rover's file loading exactly as it does today.
+# ---------------------------------------------------------------------------
+_load_env_file_as_data() {
+    local file="$1"
+    local line trimmed key value
+
+    while IFS= read -r line || [ -n "${line}" ]; do
+        # Strip leading blanks; a comment marker is only a comment at the start.
+        trimmed="${line#"${line%%[![:space:]]*}"}"
+        if [ -z "${trimmed}" ]; then
+            continue
+        fi
+        case "${trimmed}" in
+            '#'* | ';'*) continue ;;
+        esac
+        trimmed="${trimmed#export }"
+
+        if [[ "${trimmed}" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+            key="${BASH_REMATCH[1]}"
+            value="${BASH_REMATCH[2]}"
+        else
+            printf '[WARN]  %s: ignoring unparseable line: %s\n' "${file}" "${line}" >&2
+            continue
+        fi
+
+        # One layer of matching quotes, as systemd strips. Otherwise trailing
+        # blanks are not part of the value.
+        if [[ "${value}" =~ ^\"(.*)\"$ ]]; then
+            value="${BASH_REMATCH[1]}"
+        elif [[ "${value}" =~ ^\'(.*)\'$ ]]; then
+            value="${BASH_REMATCH[1]}"
+        else
+            value="${value%"${value##*[![:space:]]}"}"
+        fi
+
+        # Assignment, never evaluation: `key` is validated against a strict
+        # identifier pattern above and `value` is assigned verbatim.
+        export "${key}=${value}"
+    done < "${file}"
+}
+
 if [ -f "${DOCKER_ENV_FILE}" ]; then
-    set -a
-    # shellcheck disable=SC1090
-    . "${DOCKER_ENV_FILE}"
-    set +a
+    _load_env_file_as_data "${DOCKER_ENV_FILE}"
 fi
 
 INSTALL_DIR="${MOUSEDROID_INSTALL_DIR:-/opt/mousedroid}"
@@ -95,6 +154,41 @@ NC='\033[0m'
 info()  { echo -e "${GREEN}[INFO]${NC}  $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+
+# ---------------------------------------------------------------------------
+# Validate the two values that reach a `docker exec` argument list.
+#
+# Both can come from the env file loaded above, so an operator typo -- or a
+# write to that file by anyone who can reach it -- otherwise lands in an argv
+# position where Docker parses it. The file is no longer executed, so what is
+# left is argument injection: a CONTAINER_NAME beginning with `-` is read by
+# `docker exec` as a flag, not a container (`docker exec -i "$NAME" python3 ...`
+# below).
+#
+# The pattern is Docker's own container-name rule -- first character
+# alphanumeric, then alphanumerics plus `_`, `.`, `-`. Note that a bare
+# `^[A-Za-z0-9_.-]+$` does NOT close this: `-` is in the class, so `-uroot`
+# matches it. Anchoring the first character is what makes a leading dash
+# unrepresentable, which is also why no `--` end-of-options marker is needed at
+# the call sites.
+# ---------------------------------------------------------------------------
+if [[ ! "${CONTAINER_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+    error "Refusing to run: container name is not a valid Docker name: ${CONTAINER_NAME}"
+    error "Set MOUSEDROID_CONTAINER (or the docker.env key) to [A-Za-z0-9][A-Za-z0-9_.-]*"
+    exit 1
+fi
+
+# A path, not an identifier, so the name rule above does not apply. It is always
+# quoted at its single use site, so the risk is misconfiguration rather than
+# injection: a relative value silently resolves against whatever directory the
+# operator happened to run this from.
+case "${DEPLOY_RECORD}" in
+    /*) ;;
+    *)
+        error "Refusing to run: deploy record must be an absolute path: ${DEPLOY_RECORD}"
+        exit 1
+        ;;
+esac
 
 # ---------------------------------------------------------------------------
 # Strict promotion probe (--strict-health only)
@@ -360,6 +454,10 @@ info "  Project source OK"
 # Step 2: Deploy config files
 # ---------------------------------------------------------------------------
 info "Step 2: Deploying configuration files"
+# Deliberately NOT tightened: scripts/mousedroid.service:23 runs as
+# `User=jetson` and reads ${CONFIG_DIR}/jetson_sdcard_64gb.yaml (`:26`), so a
+# root-owned 0700 directory here would break the venv deployment path. The
+# secret lives in one file, and that file is tightened below instead.
 mkdir -p "${CONFIG_DIR}"
 for cfg in "$PROJECT_DIR/config/"*.yaml; do
     [ -f "$cfg" ] || continue
@@ -371,6 +469,13 @@ done
 if [ ! -f "${CONFIG_DIR}/docker.env" ]; then
     if [ -f "$PROJECT_DIR/config/docker.env.example" ]; then
         cp "$PROJECT_DIR/config/docker.env.example" "${CONFIG_DIR}/docker.env"
+        # Same file, same secret, same mode as scripts/host_bootstrap.sh:99,103
+        # ("Holds ANTHROPIC_API_KEY once filled in - never leave it
+        # umask-wide."). `cp` does not carry a mode from the tracked template,
+        # so without this the operator's token lands world-readable on a stock
+        # umask. Its readers are all root: this script, mousedroid-docker
+        # (User=root), mousedroid-trend, and the compose `env_file:`.
+        chmod 600 "${CONFIG_DIR}/docker.env"
         info "  -> docker.env (from template — edit before production use)"
     fi
 fi

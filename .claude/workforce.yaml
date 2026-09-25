@@ -126,8 +126,20 @@ ratchet_budgets:
           # duplicated. A genuine reduction -- the literals are gone, not
           # re-suppressed elsewhere -- so the ceiling follows the count down
           # per this budget's own discipline rather than banking the slack.
-          ceiling: 26
-          warn_threshold: 24
+          #
+          # Ratcheted 26->24 (F-052 Slice A): the two remaining unjustified
+          # `1000.0` markers -- validation/latency_stats.py's _MS_PER_S and
+          # comms/command_set.py's _MS_PER_SECOND -- were resolved the same way
+          # the 28->26 step resolved config/migration.py's pair, by importing
+          # constants.MILLISECONDS_PER_SECOND, which both already duplicated.
+          # The literals are gone, not re-suppressed elsewhere. Deliberately
+          # NOT touching the ESP32/Waveshare protocol markers: the 24->28 bump
+          # above exists to make their treatment consistent, and reclaiming
+          # only the two whose values (0, 1) happen to sit in
+          # check_no_hardcoded_values.py's ALLOWED_NUMERIC_VALUES would
+          # recreate the inconsistency that bump removed.
+          ceiling: 24
+          warn_threshold: 22
 
 # Subagent asset contract enforced by tests/regression/test_claude_workforce_aqa.py.
 agents:

@@ -21,13 +21,16 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-# Definitional constants (NOT runtime-tunable): the percentile domain, the
-# percentile points named in LatencySummary, and the seconds→ms unit factor.
-# Named so the maths reads intentionally rather than via bare literals.
+from mousedroid.constants import MILLISECONDS_PER_SECOND
+
+# Definitional constants (NOT runtime-tunable): the percentile domain and the
+# percentile points named in LatencySummary. Named so the maths reads
+# intentionally rather than via bare literals. The seconds→ms factor is NOT
+# among them: it is the shared MILLISECONDS_PER_SECOND above, because a second
+# local copy of 1000.0 is a duplicated definition rather than a suppressed one.
 _PCT_MIN = 0.0
 _PCT_MAX = 100.0  # hardcoded-ok: percentile domain upper bound
 _P50, _P95, _P99 = 50.0, 95.0, 99.0  # hardcoded-ok: reported percentile points
-_MS_PER_S = 1000.0  # hardcoded-ok: seconds -> milliseconds
 
 
 class LatencySummary(BaseModel):
@@ -126,7 +129,8 @@ def intervals_ms(timestamps_s: list[float]) -> list[float]:
         empty list when fewer than two timestamps are supplied.
     """
     return [
-        (timestamps_s[i] - timestamps_s[i - 1]) * _MS_PER_S for i in range(1, len(timestamps_s))
+        (timestamps_s[i] - timestamps_s[i - 1]) * MILLISECONDS_PER_SECOND
+        for i in range(1, len(timestamps_s))
     ]
 
 
