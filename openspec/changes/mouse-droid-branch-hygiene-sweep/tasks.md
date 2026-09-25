@@ -320,6 +320,34 @@ skipped: the file can still set `PATH`, `IFS` or `LD_PRELOAD` for a root process
 `docker` by bare name. That is unchanged from before this slice, matches what systemd itself would
 pass through, and needs the same "who can write this file" analysis to prioritise.
 
+**Review round 1 — four defects in the first cut, all verified before fixing.** Copilot flagged
+these on PR #245; each was reproduced against the tree first, and each fix was then proven by
+reverting it and watching the new pin go red.
+
+- **HIGH, and the worst of the four: the parser's warning echoed the offending line.** The line
+  that fails to parse is exactly a mistyped `ANTHROPIC_API_KEY` or `MOUSEDROID_TELEMETRY_TOKEN`, so
+  a fix whose purpose was to stop that file being dangerous had introduced a path that writes the
+  credential to stderr and the journal — against this repo's own rule that secrets are
+  presence-checked, never echoed. Now reports `<file>:<lineno>` and nothing else, with the line
+  count including comments and blanks so the location is actionable.
+- **HIGH: the `chmod` covered only the creation path.** Every rover seeded by the old script still
+  had `0644` credentials, and nothing else revisits them — so the remediation would have left the
+  entire existing fleet exposed while reading as applied. It now runs on every deploy, and
+  re-running the deploy is what repairs the fleet.
+- **MEDIUM: `KEY="v"   ` exported its quote characters.** The quote test ran before trailing blanks
+  were stripped, so an anchored pattern could not match a line ending in a space. That is the exact
+  script-vs-systemd disagreement this function exists to remove, for a line shape systemd accepts.
+  Trim now precedes the quote strip; blanks inside the quotes still survive.
+- **MEDIUM: the budget pin ignored `scope_glob`.** It decides which files are counted, so a YAML
+  scope change would have passed the pin while the fallback measured a different set. Now compared.
+
+One fixture bug of my own surfaced while verifying the second item: a fixture seeded from the real
+`config/docker.env.example` sets `MOUSEDROID_CONFIG_DIR`, and the env file legitimately overrides
+the process environment (as the old dot-source also did), so the script redirected to
+`/etc/mousedroid` and never reached the step under test. The first "after: 644" reading was that,
+not the fix failing. Recorded because the fixture's comment now explains it, and because a
+verification run that fails for the wrong reason is indistinguishable from a broken fix.
+
 **1.11 — CORRECTION: the specified regex does not close the hole.** The task asks for
 `^[A-Za-z0-9_.-]+$`. `-` is a member of that class, so `-uroot` *matches* it and the guard would
 have admitted the very value it exists to reject. Landed with Docker's own container-name rule,

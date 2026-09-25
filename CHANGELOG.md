@@ -52,6 +52,18 @@ through `bash`, specific messages asserted rather than exit codes, and every pin
 first — the payload test has a companion that dot-sources the identical fixture and requires the
 sentinel to appear, so it cannot pass by being harmless.
 
+Four defects in the first cut of that work were found in review and fixed before it landed, and two
+of them mattered more than the change they were attached to. The parser's warning echoed the
+offending line — and the line that fails to parse is exactly a mistyped `ANTHROPIC_API_KEY`, so a
+security fix had introduced a path that writes the credential to stderr and the journal. It now
+reports the file and line number only. And the `chmod` was on the creation path alone, so every
+rover already seeded by the old script would have kept its `0644` credentials while the fix looked
+applied; it now runs on every deploy, so re-running the deploy repairs the existing fleet. Also
+fixed: `KEY="v"   ` exported its quote characters literally, because the quote test ran before
+trailing blanks were stripped — the same script-vs-systemd disagreement the parser exists to
+remove; and the budget pin now compares `scope_glob`, which decides which files are counted, so a
+scope change cannot pass while the fallback measures a different set.
+
 
 ### Chore — the `hardcoded_ok` ratchet came off its ceiling, and its fallback stopped lying
 

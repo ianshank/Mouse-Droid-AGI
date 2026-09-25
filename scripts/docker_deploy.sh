@@ -66,8 +66,10 @@ DOCKER_ENV_FILE="${MOUSEDROID_DOCKER_ENV_FILE:-${CONFIG_DIR}/docker.env}"
 _load_env_file_as_data() {
     local file="$1"
     local line trimmed key value
+    local lineno=0
 
     while IFS= read -r line || [ -n "${line}" ]; do
+        lineno=$((lineno + 1))
         # Strip leading blanks; a comment marker is only a comment at the start.
         trimmed="${line#"${line%%[![:space:]]*}"}"
         if [ -z "${trimmed}" ]; then
@@ -82,18 +84,29 @@ _load_env_file_as_data() {
             key="${BASH_REMATCH[1]}"
             value="${BASH_REMATCH[2]}"
         else
-            printf '[WARN]  %s: ignoring unparseable line: %s\n' "${file}" "${line}" >&2
+            # Location only, never contents: this file holds ANTHROPIC_API_KEY
+            # and MOUSEDROID_TELEMETRY_TOKEN, and a typo in a secret assignment
+            # is exactly the line that fails to parse. Echoing it would put the
+            # secret in stderr and the journal, which is the one thing
+            # AGENTS.md's validation discipline forbids outright.
+            printf '[WARN]  %s:%s: ignoring unparseable line (contents withheld)\n' \
+                "${file}" "${lineno}" >&2
             continue
         fi
 
-        # One layer of matching quotes, as systemd strips. Otherwise trailing
-        # blanks are not part of the value.
+        # Trailing blanks are not part of an unquoted value. This MUST run
+        # before the quote test: `KEY="v"   ` ends in a space, so the anchored
+        # pattern would not match and the quote characters would be exported
+        # literally -- the same script-vs-systemd disagreement this function
+        # exists to remove. Blanks INSIDE the quotes survive, because the strip
+        # happens outside them.
+        value="${value%"${value##*[![:space:]]}"}"
+
+        # One layer of matching quotes, as systemd strips.
         if [[ "${value}" =~ ^\"(.*)\"$ ]]; then
             value="${BASH_REMATCH[1]}"
         elif [[ "${value}" =~ ^\'(.*)\'$ ]]; then
             value="${BASH_REMATCH[1]}"
-        else
-            value="${value%"${value##*[![:space:]]}"}"
         fi
 
         # Assignment, never evaluation: `key` is validated against a strict
@@ -469,15 +482,25 @@ done
 if [ ! -f "${CONFIG_DIR}/docker.env" ]; then
     if [ -f "$PROJECT_DIR/config/docker.env.example" ]; then
         cp "$PROJECT_DIR/config/docker.env.example" "${CONFIG_DIR}/docker.env"
-        # Same file, same secret, same mode as scripts/host_bootstrap.sh:99,103
-        # ("Holds ANTHROPIC_API_KEY once filled in - never leave it
-        # umask-wide."). `cp` does not carry a mode from the tracked template,
-        # so without this the operator's token lands world-readable on a stock
-        # umask. Its readers are all root: this script, mousedroid-docker
-        # (User=root), mousedroid-trend, and the compose `env_file:`.
-        chmod 600 "${CONFIG_DIR}/docker.env"
         info "  -> docker.env (from template — edit before production use)"
     fi
+fi
+
+# Tighten the env file on EVERY run, not only when this run created it.
+#
+# Same file, same secret, same mode as scripts/host_bootstrap.sh:99,103 ("Holds
+# ANTHROPIC_API_KEY once filled in - never leave it umask-wide."). `cp` carries
+# no mode from the tracked template, so a freshly seeded file would land
+# world-readable on a stock umask.
+#
+# Applying it unconditionally is the point: every rover seeded by an earlier
+# version of this script still has 0644 credentials on disk, and nothing else
+# ever revisits them. A fix that only covered the creation path would leave the
+# whole existing fleet exposed and look remediated. Re-running the deploy is
+# what repairs it. Readers are all root -- this script, mousedroid-docker
+# (User=root), mousedroid-trend, and the compose `env_file:`.
+if [ -f "${CONFIG_DIR}/docker.env" ]; then
+    chmod 600 "${CONFIG_DIR}/docker.env"
 fi
 
 # ---------------------------------------------------------------------------

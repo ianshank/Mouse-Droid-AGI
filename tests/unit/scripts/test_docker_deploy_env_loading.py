@@ -250,6 +250,63 @@ def test_trailing_whitespace_is_not_part_of_an_unquoted_value(tmp_path: Path) ->
     assert values["MOUSEDROID_ESP32_DEV"] == "/dev/ttyUSB0"
 
 
+def test_a_quoted_value_followed_by_whitespace_loses_its_quotes(tmp_path: Path) -> None:
+    """`KEY="v"   ` must yield `v`, not `"v"`.
+
+    Regression for a real bug in the first cut of this parser: the quote test
+    ran *before* trailing blanks were stripped, so the anchored pattern did not
+    match a line with a trailing space and the quote characters were exported
+    literally. That reintroduced the exact script-vs-systemd disagreement the
+    parser exists to remove, for a line shape systemd accepts.
+    """
+    env = tmp_path / "docker.env"
+    env.write_text('A="value"   \nB="inner   "\nC=plain   \n', encoding="utf-8")
+
+    values, _, rc = _load(env, "A", "B", "C")
+
+    assert rc == 0
+    assert values["A"] == "value", "outer quotes leaked into the value"
+    # Blanks *inside* the quotes are part of the value and must survive.
+    assert values["B"] == "inner   "
+    assert values["C"] == "plain"
+
+
+def test_the_warning_never_echoes_the_line(tmp_path: Path) -> None:
+    """A malformed secret assignment must not put the secret in stderr.
+
+    The file holds `ANTHROPIC_API_KEY` and `MOUSEDROID_TELEMETRY_TOKEN`, and a
+    typo in one of those is precisely the line that fails to parse — so echoing
+    the offending line writes the credential to stderr and the journal. The
+    warning reports the file and line number only.
+    """
+    secret = "sk-ant-thisvaluemustnotappearinstderr"  # noqa: S105 - fixture, not a credential
+    env = tmp_path / "docker.env"
+    env.write_text(f"ANTHROPIC_API_KEY {secret}\n", encoding="utf-8")
+
+    _, stderr, rc = _load(env)
+
+    assert rc == 0
+    assert secret not in stderr, "the parser echoed a credential into stderr"
+    assert "ANTHROPIC_API_KEY" not in stderr, "the parser echoed the key name too"
+    # Still actionable: the operator gets a location to go and look at.
+    assert "docker.env:1: ignoring unparseable line" in stderr
+
+
+def test_the_reported_line_number_is_the_real_one(tmp_path: Path) -> None:
+    """...and the location is correct, or it is not actionable.
+
+    Counting must include comments and blank lines, otherwise the number sends
+    the operator to the wrong line of a file they cannot have echoed.
+    """
+    env = tmp_path / "docker.env"
+    env.write_text("# comment\n\nGOOD=1\nbroken line here\n", encoding="utf-8")
+
+    _, stderr, rc = _load(env, "GOOD")
+
+    assert rc == 0
+    assert "docker.env:4: ignoring unparseable line" in stderr
+
+
 def test_an_unparseable_line_is_warned_about_and_does_not_lose_other_keys(
     tmp_path: Path,
 ) -> None:
@@ -266,7 +323,9 @@ def test_an_unparseable_line_is_warned_about_and_does_not_lose_other_keys(
 
     assert rc == 0
     assert values == {"BEFORE": "1", "AFTER": "2"}
-    assert "ignoring unparseable line: this is not an assignment" in stderr
+    # Location, not contents — see test_the_warning_never_echoes_the_line.
+    assert "docker.env:2: ignoring unparseable line" in stderr
+    assert "this is not an assignment" not in stderr
 
 
 def test_a_lowercase_or_dashed_key_is_rejected_rather_than_assigned(tmp_path: Path) -> None:
@@ -278,7 +337,8 @@ def test_a_lowercase_or_dashed_key_is_rejected_rather_than_assigned(tmp_path: Pa
 
     assert rc == 0
     assert values["OK"] == "y"
-    assert "not-an-identifier=x" in stderr
+    assert "docker.env:1: ignoring unparseable line" in stderr
+    assert "not-an-identifier" not in stderr
 
 
 def test_the_shipped_template_parses_with_no_warnings() -> None:
@@ -375,6 +435,57 @@ def test_the_created_env_file_is_not_world_readable(tmp_path: Path) -> None:
     assert created.is_file(), "step 2 did not seed docker.env — the fixture no longer reaches it"
     mode = created.stat().st_mode & 0o777
     assert mode == 0o600, f"docker.env landed {mode:#o}, expected 0o600 (holds API credentials)"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+def test_an_existing_world_readable_env_file_is_repaired(tmp_path: Path) -> None:
+    """Re-running the deploy must tighten a file it did not create.
+
+    Every rover seeded by an earlier version of this script has `0644`
+    credentials on disk right now, and nothing else ever revisits them. A fix
+    that only covered the creation path would leave the whole existing fleet
+    exposed while looking remediated, so the `chmod` runs on every deploy.
+
+    The fixture's env file deliberately sets no `MOUSEDROID_*_DIR` keys: the env
+    file legitimately overrides the process environment (as the old
+    dot-source also did), so a fixture seeded from the real template would
+    redirect the script at `/etc/mousedroid` and never reach this step.
+    """
+    install_dir = tmp_path / "opt"
+    config_dir = tmp_path / "etc"
+    bin_dir = tmp_path / "bin"
+    for directory in (install_dir, config_dir, bin_dir):
+        directory.mkdir()
+    (install_dir / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+    for tool in ("docker", "curl", "systemctl"):
+        _make_shim(bin_dir, tool)
+
+    existing = config_dir / "docker.env"
+    existing.write_text("MOUSEDROID_TELEMETRY_TOKEN=abc\n", encoding="utf-8")
+    existing.chmod(0o644)
+
+    subprocess.run(
+        ["bash", str(_DEPLOY), "--no-build"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+            "MOUSEDROID_INSTALL_DIR": str(install_dir),
+            "MOUSEDROID_CONFIG_DIR": str(config_dir),
+            "MOUSEDROID_HEALTH_TIMEOUT": "1",
+        },
+        cwd=str(_REPO_ROOT),
+    )
+
+    mode = existing.stat().st_mode & 0o777
+    assert mode == 0o600, (
+        f"a pre-existing docker.env stayed {mode:#o}; re-running the deploy must repair "
+        "the fleet the old script left world-readable, not only new installs"
+    )
+    # And the file was not clobbered while being tightened.
+    assert "MOUSEDROID_TELEMETRY_TOKEN=abc" in existing.read_text(encoding="utf-8")
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")

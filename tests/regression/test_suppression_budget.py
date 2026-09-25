@@ -94,16 +94,20 @@ def test_hook_fallback_budgets_match_workforce_yaml() -> None:
     )
     for name, yaml_item in live.items():
         got = fallback[name]
-        assert (got.marker, got.ceiling, got.warn_threshold) == (
+        # scope_glob is compared too: it decides WHICH files are counted, so a
+        # YAML scope change with the fallback left behind would keep the
+        # numbers equal while the fallback silently measured a different set.
+        assert (got.marker, got.scope_glob, got.ceiling, got.warn_threshold) == (
             yaml_item.marker,
+            yaml_item.scope_glob,
             yaml_item.ceiling,
             yaml_item.warn_threshold,
         ), (
-            f"{name}: hook fallback (marker={got.marker!r}, ceiling={got.ceiling}, "
-            f"warn={got.warn_threshold}) != .claude/workforce.yaml "
-            f"(marker={yaml_item.marker!r}, ceiling={yaml_item.ceiling}, "
-            f"warn={yaml_item.warn_threshold}). Ratchet both, or the fallback lies "
-            "whenever the YAML cannot be read."
+            f"{name}: hook fallback (marker={got.marker!r}, scope={got.scope_glob!r}, "
+            f"ceiling={got.ceiling}, warn={got.warn_threshold}) != .claude/workforce.yaml "
+            f"(marker={yaml_item.marker!r}, scope={yaml_item.scope_glob!r}, "
+            f"ceiling={yaml_item.ceiling}, warn={yaml_item.warn_threshold}). Ratchet both, "
+            "or the fallback lies whenever the YAML cannot be read."
         )
 
 
