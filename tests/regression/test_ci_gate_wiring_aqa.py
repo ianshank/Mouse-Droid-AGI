@@ -552,6 +552,13 @@ _CI_EXEMPT_GATES: dict[str, str] = {
         "startup smoke check, which the e2e and smoke tiers cover in the "
         "blocking `test` job."
     ),
+    "scripts/generate_package_map.py": (
+        "covered by tests/regression/test_f053_package_map_aqa.py in the "
+        "blocking `test` job (regenerate-and-diff with CRLF/path normalisation). "
+        "ci.sh --check is the fast local mirror; a duplicate workflow step would "
+        "only re-assert what pytest already gates, and editing ci.yml requires "
+        "the workflow OAuth scope this account's token does not carry."
+    ),
 }
 
 

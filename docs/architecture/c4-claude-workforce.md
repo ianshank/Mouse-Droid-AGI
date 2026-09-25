@@ -181,6 +181,9 @@ scripts on Unix. The AQA gate verifies the helper exists and branches on
 
 ## Related
 
+- Root `CLAUDE.md` Surface Map — indexes all 17 in-package `CLAUDE.md` subsystem contracts (F-053 / WS-8d)
+- `docs/claude/surfaces/README.md` — operational surfaces index, including the package import map
+- `docs/architecture/package-map.md` — generated package import map (not dataflow; F-053 Phase 5)
 - `docs/runbooks/claude-workforce-hooks.md` — operator guide, debugging, overrides
 - `docs/runbooks/worktrees.md` — git worktrees for parallel agent isolation (D-6)
 - `docs/runbooks/secret-scanning.md` — the CI-side gitleaks gate (F-015)

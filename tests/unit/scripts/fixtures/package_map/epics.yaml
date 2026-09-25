@@ -1,0 +1,10 @@
+epics:
+  - id: left
+    title: Left side
+    packages:
+      - alpha
+      - beta
+  - id: right
+    title: Right side
+    packages:
+      - gamma

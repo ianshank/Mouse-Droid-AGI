@@ -39,6 +39,7 @@ from mousedroid.config.migration import (
     seconds_to_milliseconds as seconds_to_milliseconds,
 )
 from mousedroid.config.schema._primitives import PlatformType, Self, _settings_default_factory
+from mousedroid.config.schema.agents import AgentsConfig
 from mousedroid.config.schema.arm import (
     ArmConfig,
     ArmCurriculumConfig,
@@ -388,6 +389,17 @@ class Settings(BaseSettings):
         description=(
             "Tier C1 cloud retraining loop config. Default-on with the OTA "
             "poller disabled (``cloud.weight_update.poll_interval_s = 0.0``)."
+        ),
+    )
+
+    # External agent frameworks (optional — all disabled by default).
+    agents: AgentsConfig | None = Field(
+        None,
+        description=(
+            "External agent framework config (Google ADK, Honcho, Composio). "
+            "``None`` (default) disables — existing YAML loads byte-identical. "
+            "All frameworks are strictly off-loop and never touch the 30 Hz "
+            "control path."
         ),
     )
 

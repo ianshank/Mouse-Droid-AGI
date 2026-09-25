@@ -25,6 +25,18 @@ from pathlib import Path
 
 import yaml
 
+from tests._claude_md import (
+    KEY_FILES_EXEMPTION_LAPSE_FEATURE,
+    KEY_FILES_PATH_EXEMPTIONS,
+    discover_nested_claude_md,
+    feature_status,
+    illegal_config_value_claims,
+    iter_config_value_claims,
+    iter_key_files_claims,
+    iter_named_py_path_claims,
+    unresolved_path_claims,
+)
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CI_YML = _REPO_ROOT / ".github" / "workflows" / "ci.yml"
 _PYPROJECT = _REPO_ROOT / "pyproject.toml"
@@ -41,9 +53,10 @@ _JOB_COUNT_DOCS = (
 )
 
 # Live surfaces that state the src/mousedroid line-coverage floor.
+# tests/agent.md was retired by F-053 Phase 4 (WS-8d); HARNESS_SPEC.md and
+# c4-spec-harness.md remain the live pins for the dual-gate claim.
 _SRC_COVERAGE_DOCS = (
     _REPO_ROOT / "HARNESS_SPEC.md",
-    _REPO_ROOT / "tests" / "agent.md",
     _REPO_ROOT / "docs" / "architecture" / "c4-spec-harness.md",
 )
 
@@ -114,12 +127,13 @@ def test_no_live_doc_claims_a_stale_src_coverage_floor() -> None:
     not the next one, whichever direction it goes.
 
     The tools_hooks exemption is scoped to the SPECIFIC claimed value, not the
-    whole line: HARNESS_SPEC.md:303 and tests/agent.md:6 both state the real
-    90% src/mousedroid claim and the 85% tools_hooks claim on the same line.
-    An earlier version of this test skipped any line containing "claude_hooks"
-    at all, which -- caught by a Copilot review comment on this same PR --
-    exempted the legitimate 90% claim right along with the 85% one, on
-    exactly the two lines this test exists to check.
+    whole line: HARNESS_SPEC.md:303 states the real 90% src/mousedroid claim and
+    the 85% tools_hooks claim on the same line (tests/agent.md:6 carried the
+    same dual claim until F-053 Phase 4 retired that file). An earlier version
+    of this test skipped any line containing "claude_hooks" at all, which --
+    caught by a Copilot review comment on this same PR -- exempted the
+    legitimate 90% claim right along with the 85% one, on exactly the lines
+    this test exists to check.
     """
     from tools.claude_hooks.config import load_config
 
@@ -441,4 +455,117 @@ def test_every_adr_the_log_links_to_exists_on_disk() -> None:
         f"adr-log.md links to ADR files that do not exist: {dangling} -- "
         "either the file was renamed (fix the link) or removed (an ADR is "
         "immutable once accepted; supersede it with a new one instead)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# F-053 Phase 3 — every nested CLAUDE.md Key Files list names real paths/symbols
+# ---------------------------------------------------------------------------
+#
+# Generalises :func:`test_orchestrator_claude_md_names_only_real_symbols` from
+# one file to all seventeen nested surfaces. The orchestrator-specific pin above
+# stays: it still guards the four core symbols and the two known phantoms. This
+# section owns the Key Files / named-path / config-value shape for every package.
+
+
+def _nested_claude_offenders(*, apply_exemptions: bool) -> list[str]:
+    """Unresolved Key Files / named ``*.py`` claims across nested ``CLAUDE.md``."""
+    offenders: list[str] = []
+    for doc in discover_nested_claude_md():
+        rel = doc.as_posix()
+        if apply_exemptions and rel in KEY_FILES_PATH_EXEMPTIONS:
+            continue
+        text = (_REPO_ROOT / doc).read_text(encoding="utf-8")
+        claims = iter_key_files_claims(doc, text) + iter_named_py_path_claims(doc, text)
+        seen: set[tuple[object, ...]] = set()
+        unique = []
+        for claim in claims:
+            key = (claim.doc, claim.lineno, claim.path, claim.kind, claim.symbol)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(claim)
+        offenders.extend(unresolved_path_claims(unique))
+    return offenders
+
+
+def test_every_nested_claude_md_key_files_names_only_real_paths_and_symbols() -> None:
+    """Each nested CLAUDE.md Key Files entry resolves to a real path / symbol.
+
+    Regression targets caught on first run (F-053 task 3.2):
+    - ``llm_gateway/CLAUDE.md`` named ``mock_gateway.py`` (file is
+      ``fallback_gateway.py``);
+    - ``arm/CLAUDE.md`` named ``mock_arm.py`` (file is
+      ``hardware/mock_arm_driver.py``) — recorded as a declared exemption
+      while F-008 freezes ``src/mousedroid/arm/**``.
+    """
+    offenders = _nested_claude_offenders(apply_exemptions=True)
+    assert not offenders, (
+        "these nested CLAUDE.md Key Files / named-path claims do not resolve "
+        f"to a real file, directory, or class/def: {offenders}"
+    )
+
+
+def test_arm_claude_md_path_exemption_is_enumerated_not_a_prefix() -> None:
+    """The F-008 freeze exemption is an exact path, never a directory prefix."""
+    assert frozenset({"src/mousedroid/arm/CLAUDE.md"}) == KEY_FILES_PATH_EXEMPTIONS
+    assert not any(path.endswith("/") for path in KEY_FILES_PATH_EXEMPTIONS)
+    # A sibling under arm/ must not inherit the exemption by prefix.
+    assert "src/mousedroid/arm/hardware/CLAUDE.md" not in KEY_FILES_PATH_EXEMPTIONS
+    assert "src/mousedroid/arm/" not in KEY_FILES_PATH_EXEMPTIONS
+
+
+def test_arm_claude_md_path_exemption_lapses_when_f008_is_done() -> None:
+    """When F-008 reaches ``done``, the arm Key Files exemption must be empty.
+
+    The freeze_gate PreToolUse hook self-disables on ``done``; keeping a stale
+    filename exemption after that would permanently hide a known-false line.
+    """
+    status = feature_status(KEY_FILES_EXEMPTION_LAPSE_FEATURE)
+    assert status is not None, f"{KEY_FILES_EXEMPTION_LAPSE_FEATURE} missing from features.yaml"
+    if status == "done":
+        assert frozenset() == KEY_FILES_PATH_EXEMPTIONS, (
+            f"{KEY_FILES_EXEMPTION_LAPSE_FEATURE} is done but "
+            f"KEY_FILES_PATH_EXEMPTIONS still holds {sorted(KEY_FILES_PATH_EXEMPTIONS)} — "
+            "remove the exemption and fix src/mousedroid/arm/CLAUDE.md"
+        )
+    else:
+        assert "src/mousedroid/arm/CLAUDE.md" in KEY_FILES_PATH_EXEMPTIONS, (
+            f"{KEY_FILES_EXEMPTION_LAPSE_FEATURE} is {status!r}; the arm CLAUDE.md "
+            "exemption must remain until the freeze lifts"
+        )
+
+
+def test_arm_key_files_exemption_is_not_vacuous() -> None:
+    """The arm exemption must hide a real failure, not a green path.
+
+    If ``arm/CLAUDE.md`` starts resolving without an edit, the exemption has
+    gone stale for a different reason than F-008 and must be re-examined.
+    """
+    if "src/mousedroid/arm/CLAUDE.md" not in KEY_FILES_PATH_EXEMPTIONS:
+        return
+    offenders = _nested_claude_offenders(apply_exemptions=False)
+    arm = [o for o in offenders if o.startswith("src/mousedroid/arm/CLAUDE.md:")]
+    assert arm, (
+        "src/mousedroid/arm/CLAUDE.md has no unresolved named-path claims, so "
+        "KEY_FILES_PATH_EXEMPTIONS is hiding nothing — remove the exemption"
+    )
+
+
+def test_nested_claude_md_config_values_named_in_prose_are_legal() -> None:
+    """Backticked values next to ``SomeConfig.field`` must be legal Literals.
+
+    Regression target: ``llm_gateway/CLAUDE.md`` required
+    ``LLMConfig.fallback_backend`` to target ``mock`` / ``ollama`` while the
+    schema permits only ``none``, ``llama_cpp``, ``openai_compatible``.
+    """
+    offenders: list[str] = []
+    for doc in discover_nested_claude_md():
+        rel = doc.as_posix()
+        if rel in KEY_FILES_PATH_EXEMPTIONS:
+            continue
+        text = (_REPO_ROOT / doc).read_text(encoding="utf-8")
+        offenders.extend(illegal_config_value_claims(iter_config_value_claims(doc, text)))
+    assert not offenders, (
+        f"these nested CLAUDE.md lines name config values the schema rejects: {offenders}"
     )

@@ -1,0 +1,73 @@
+# Architectural epic roster for the F-053 package import map.
+#
+# This is NOT the features.yaml delivery-epic catalog: those track feature
+# IDs, not package folders. This file partitions every src/mousedroid/*
+# package into a small set of architecture-facing epics so the generated
+# import map stays readable (~one file per epic) instead of a single ~34 KB
+# blob. The generator fails closed if a discovered package is missing or
+# duplicated here — edit this file when a new top-level package lands.
+epics:
+  - id: runtime
+    title: Runtime loop and embodiment
+    packages:
+      - orchestrator
+      - agents
+      - sensing
+      - hardware
+      - comms
+      - safety
+      - health
+      - voice
+
+  - id: cognitive
+    title: Cognitive pillars
+    packages:
+      - cognitive
+      - world_model
+      - memory
+      - curiosity
+      - reward
+      - learning
+      - growth
+      - meta
+      - scaling
+      - vla
+
+  - id: deliberative
+    title: Deliberative brain and agent tooling
+    packages:
+      - llm_gateway
+      - skills
+      - mcp
+      - tools
+      - harness
+
+  - id: platform
+    title: Shared kernel and composition
+    packages:
+      - config
+      - factory
+      - logging
+      - common
+      - utils
+      - interfaces
+      - resilience
+      - security
+
+  - id: observability
+    title: Observability and experience
+    packages:
+      - telemetry
+      - diagnostics
+      - experience
+      - efficiency
+
+  - id: training_and_ops
+    title: Training, simulation, and operator surfaces
+    packages:
+      - training
+      - sim
+      - arm
+      - cli
+      - validation
+      - cloud

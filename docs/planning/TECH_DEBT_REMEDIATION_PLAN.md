@@ -32,6 +32,7 @@ this plan, which matters more than the tick-list:
 | WS-6a — dangling `__all__` | **Done** | Names bound; new sweep pins every `__all__` entry in every package |
 | WS-9a — version pin | **Done** (tag deferred) | `0.3.0` → `0.4.0`; `tests/regression/test_package_version_single_source.py` pins pyproject against the newest CHANGELOG heading **and** five further restatements; `release.yml` extras aligned + `concurrency` added. Only the `v0.4.0` tag itself remains, deferred to maintainer approval |
 | WS-8b — widen `doc_hygiene` | **Deferred** | See correction 2 below |
+| WS-8d — one per-directory doc format | **Done** (F-053 Phases 2–4) | Nested `CLAUDE.md` only; 16 `agent.md` retired; root Surface Map indexes all in-package surfaces. WS-8a root-file moves remain Wave 4 |
 
 **Correction 1 — `--strict` was not "one word".** This plan called adding
 `--strict` to `ratchet_budgets` a one-word fix. It would have made CI
@@ -83,7 +84,7 @@ are already right:
 | Blocking calls inside `async def` (invariant 4) | **Zero** across `src/` (AST scan) |
 | `deque(maxlen=…)` schema-sourced (invariant 8) | **13 of 14** — one violation, `hardware/lidar_driver.py:37` |
 | Factory-First DI (invariant 1) | **Enforced in CI** by `scripts/check_subsystem_boundaries.py`, whole-tree, no diff carve-out |
-| Root `CLAUDE.md` accuracy | **0 drifted claims** — 17-job CI list, Surface Map (14/14 links), Makefile targets all verified |
+| Root `CLAUDE.md` accuracy | **0 drifted claims** — 17-job CI list, Surface Map (17/17 in-package CLAUDE.md links), Makefile targets all verified |
 | `features.yaml` governance | **Clean** — 39/39 `done` entries carry a resolvable `implemented_in` + `validation_command` |
 | Test-tier mirror discipline | **40 of 41** packages have a `tests/unit/<pkg>/` mirror (only `interfaces/` lacks one) |
 
@@ -1489,15 +1490,17 @@ is **structurally exempt from Factory-First DI enforcement**. Current contents:
 Shrinking these and narrowing `_SHARED_KERNEL_PREFIXES` *is* a strengthening of
 invariant 1, not cosmetics.
 
-**WS-8d — Two parallel per-directory doc systems.** 22 in-package agent docs in
-two incompatible formats (confirmed against `pyproject.toml:242-244`, whose
-wheel-exclusion comment says "the wheel ships 22 CLAUDE.md / agent.md files"):
-5 directories have **both**; 3 have `CLAUDE.md` only; **9** have `agent.md`
-only. The `agent.md` stubs carry far less signal — compare
-`hardware/agent.md` (13 lines) with `hardware/CLAUDE.md` (26 lines, 6 numbered
-invariants). Root `CLAUDE.md`'s Surface Map indexes only the 8 `CLAUDE.md`
-files, so **9 subsystems carry per-directory guidance invisible from the root
-surface**. Pick one format; index all subsystems.
+**WS-8d — Two parallel per-directory doc systems.** **Executed by F-053
+Phases 2–4** (`openspec/changes/mouse-droid-agents-md-directory-docs/`). One
+format: nested `CLAUDE.md` only. Phase 2 authored the 9 missing surfaces and
+indexed all in-package docs from the root Surface Map; Phase 4 retired the 16
+`agent.md` persona stubs (14 under `src/mousedroid/`, root, and `tests/`) after
+confirming folder-purpose prose already lived in the sibling `CLAUDE.md` (or,
+for `tests/`, in `HARNESS_SPEC.md` / `docs/architecture/c4-spec-harness.md`).
+`pyproject.toml` keeps `"**/agent.md"` in the wheel exclude as defence-in-depth
+so a reintroduced stub cannot ship to PyPI. Cite **WS-8d**, not the WS-8a root
+`agent.md` row — that row rules on the root persona stub alone; WS-8d rules on
+the per-directory pair.
 
 Also undocumented: `.agents/skills/approval-gate-wiring/SKILL.md` is a top-level
 directory parallel to `.claude/skills/`, live in
@@ -1793,8 +1796,9 @@ documents the cleanup; landed before, it holds the line.
 30. **WS-4** — orchestrator constructor bundles, `tick()` extraction,
     `RoverIsaacLabEnv` split. C901 15 → 12. Sequence
     `hardware/lidar/ld19_driver.py` first (complex **and** coverage-omitted).
-31. **WS-8a/8c/8d/8f** — root-file moves, grab-bag dissolution + narrowed
-    `_SHARED_KERNEL_PREFIXES`, one per-directory doc format, `openspec` archive.
+31. **WS-8a/8c/8f** — root-file moves, grab-bag dissolution + narrowed
+    `_SHARED_KERNEL_PREFIXES`, `openspec` archive. (**WS-8d** already executed
+    by F-053 Phases 2–4 — nested `CLAUDE.md` only; `agent.md` retired.)
 32. **WS-9b/9c/9d** — container hardening.
 33. **WS-2d** — extras-job consolidation, **only** once promotion metadata is
     keyed by job *and* matrix leg, or once `onnx-world-model-extras` and

@@ -1,0 +1,5 @@
+epics:
+  - id: only
+    title: Only
+    packages:
+      - bare
