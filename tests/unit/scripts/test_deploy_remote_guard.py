@@ -508,12 +508,8 @@ def test_deploy_on_a_clean_rover_syncs_without_creating_an_archive(
 _SERVICE = _SCRIPTS / "mousedroid.service"
 
 
-def _without_install_dirs(env: dict[str, str]) -> dict[str, str]:
-    return {
-        k: v
-        for k, v in env.items()
-        if k not in ("MOUSEDROID_INSTALL_DIR", "MOUSEDROID_REMOTE_INSTALL_DIR")
-    }
+def _without_install_dir(env: dict[str, str]) -> dict[str, str]:
+    return {k: v for k, v in env.items() if k != "MOUSEDROID_INSTALL_DIR"}
 
 
 def _remote_commands(deploy_env: dict[str, str], tmp_path: Path, *args: str, **extra: str) -> str:
@@ -536,7 +532,7 @@ def test_the_remote_venv_is_the_one_the_service_runs(
     rover_repo: Path, tmp_path: Path, deploy_env: dict[str, str]
 ) -> None:
     venv = _service_venv()
-    sent = _remote_commands(_without_install_dirs(deploy_env), tmp_path)
+    sent = _remote_commands(_without_install_dir(deploy_env), tmp_path)
 
     assert f"test -d {venv}" in sent
     assert f"{venv}/bin/pip install" in sent
@@ -553,21 +549,18 @@ def test_the_install_root_is_the_services_working_directory() -> None:
     assert _service_venv() == f"{working.group(1)}/venv"
 
 
-@pytest.mark.parametrize(
-    "knob", ["MOUSEDROID_INSTALL_DIR", "MOUSEDROID_REMOTE_INSTALL_DIR"], ids=["pc-own", "removed"]
-)
-def test_no_variable_on_this_pc_retargets_the_rovers_venv(
-    rover_repo: Path, tmp_path: Path, deploy_env: dict[str, str], knob: str
+def test_the_pcs_own_install_dir_never_retargets_the_rovers_venv(
+    rover_repo: Path, tmp_path: Path, deploy_env: dict[str, str]
 ) -> None:
-    """Neither the PC's own install dir nor the knob an earlier draft added.
+    """``MOUSEDROID_INSTALL_DIR`` is for the scripts that run where it is set.
 
-    ``MOUSEDROID_INSTALL_DIR`` belongs to docker_deploy.sh / deploy_jetson.sh on
-    the machine they run on. ``MOUSEDROID_REMOTE_INSTALL_DIR`` existed in a draft
-    of this change and was removed in review: it moved the venv but not the
-    service, so a deploy could pass its health check on one tree while the
-    service restarted the other.
+    docker_deploy.sh and deploy_jetson.sh read it on the machine they run on;
+    an operator who set it on this PC for a local run must not move the
+    rover's tree.
     """
-    sent = _remote_commands(_without_install_dirs(deploy_env), tmp_path, **{knob: "/srv/elsewhere"})
+    sent = _remote_commands(
+        _without_install_dir(deploy_env), tmp_path, MOUSEDROID_INSTALL_DIR="/srv/elsewhere"
+    )
 
     assert f"test -d {_service_venv()}" in sent
     assert "/srv/elsewhere" not in sent
@@ -576,16 +569,21 @@ def test_no_variable_on_this_pc_retargets_the_rovers_venv(
 def test_a_full_deploy_hands_deploy_jetson_no_install_root(
     rover_repo: Path, tmp_path: Path, deploy_env: dict[str, str]
 ) -> None:
-    """deploy_jetson.sh keeps its own default -- the tree the unit it installs runs."""
+    """deploy_jetson.sh keeps its own default -- the tree the unit it installs runs.
+
+    Driven with this PC's own ``MOUSEDROID_INSTALL_DIR`` set, because that is
+    the value a pass-through would carry to the rover.
+    """
     sent = _remote_commands(
-        _without_install_dirs(deploy_env),
+        _without_install_dir(deploy_env),
         tmp_path,
         "--full",
-        MOUSEDROID_REMOTE_INSTALL_DIR="/srv/elsewhere",
+        MOUSEDROID_INSTALL_DIR="/srv/elsewhere",
     )
 
     assert "scripts/deploy_jetson.sh" in sent
     assert "MOUSEDROID_INSTALL_DIR" not in sent
+    assert "/srv/elsewhere" not in sent
 
 
 # ---------------------------------------------------------------------------

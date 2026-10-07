@@ -170,8 +170,12 @@ require_mount_target() {
         fi
     done
     for target in "${_SOURCE_PATHS_IN_USE[@]}"; do
-        if _is_within "${target}" "${value}" || _is_within "${value}" "${target}"; then
-            _refuse "${name}" "would shadow ${target}, which the container runs from"
+        if _is_within "${target}" "${value}"; then
+            _refuse "${name}" "would cover ${target}, which the container runs from"
+            return 1
+        fi
+        if _is_within "${value}" "${target}"; then
+            _refuse "${name}" "must not be inside ${target}, which the container runs from"
             return 1
         fi
     done

@@ -104,8 +104,8 @@ are stripped, and a rejected value is shown quoted. Neither the compose-value va
 `preflight_check.sh` (the same boot step) prints a value that is not one plain path: on the boot
 path a value with an open quote has the following template lines, the API key among them, joined
 onto it. The validator accepts one trailing `/` rather than failing boot on it, and also refuses
-`/var/run`, `/var/lock`, the service's other mount targets, and anything covering
-`/opt/mousedroid/src`, `weights`, `config` or `models`.
+`/var/run`, `/var/lock`, the service's other mount targets, and anything covering or nested
+inside `/opt/mousedroid/src`, `weights`, `config` or `models`.
 
 One planned change was **not** made, because it was wrong: routing the strict probe's config through
 the env-var resolver to honour `MOUSEDROID_JETSON_CONFIG`. The rover ignores that key entirely (it

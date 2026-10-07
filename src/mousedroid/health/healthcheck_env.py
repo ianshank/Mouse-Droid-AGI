@@ -1,10 +1,17 @@
 """Derive Docker healthcheck environment variables from runtime Settings.
 
 The container entrypoint calls :func:`derive_healthcheck_env` once at
-startup to produce the env-var mapping consumed by
-``scripts/mousedroid_healthcheck.sh``. This is the single source of
-truth — no values are duplicated between Python and shell. The shell
-script reads only env vars; this module defines them.
+startup and writes the mapping to its healthcheck env file
+(``print_healthcheck_env``). Two scripts read it back:
+``scripts/mousedroid_healthcheck.sh`` (the heartbeat and start-grace keys)
+and ``scripts/docker_deploy.sh`` (the ``RESOLVED_`` telemetry endpoint).
+Every value is derived here, from the ``Settings`` the rover runs on.
+
+The deploy probe re-applies two rules to what it reads back -- the TCP port
+range and the URL-path rule -- because that file is the container's to
+write. They are the only rules duplicated in shell, and
+``tests/unit/scripts/test_docker_deploy_health_endpoint.py`` runs both
+sides against the same cases.
 
 The module also re-applies the shell-safety whitelist that the
 ``LoopConfig`` field validator enforces at YAML load time. The
@@ -46,6 +53,11 @@ _DOT_SEGMENTS = frozenset({".", ".."})
 
 # TCP ports a probe can connect to; see ``TCP_PORT_MAX``.
 _TCP_PORTS = range(1, TCP_PORT_MAX + 1)
+
+# The keys ``scripts/docker_deploy.sh`` reads back. ``RESOLVED_`` marks them
+# as outputs of resolution, never operator inputs.
+RESOLVED_TELEMETRY_PORT_KEY = "MOUSEDROID_RESOLVED_TELEMETRY_PORT"
+RESOLVED_HEALTH_PATH_KEY = "MOUSEDROID_RESOLVED_HEALTH_PATH"
 
 
 def _validate_path(value: str, field: str) -> str:
@@ -180,7 +192,6 @@ def derive_healthcheck_env(cfg: Settings) -> dict[str, str]:
     # than guessing: before they existed it probed ``MOUSEDROID_TELEMETRY_PORT``,
     # which is not a settings key (the nested delimiter is ``__``), so an
     # operator moving the port the supported way left the probe on the old one.
-    # ``RESOLVED_`` marks them as outputs of resolution, never operator inputs.
-    env["MOUSEDROID_RESOLVED_TELEMETRY_PORT"] = _resolved_telemetry_port(cfg) or ""
-    env["MOUSEDROID_RESOLVED_HEALTH_PATH"] = _resolved_health_path(cfg) or ""
+    env[RESOLVED_TELEMETRY_PORT_KEY] = _resolved_telemetry_port(cfg) or ""
+    env[RESOLVED_HEALTH_PATH_KEY] = _resolved_health_path(cfg) or ""
     return env

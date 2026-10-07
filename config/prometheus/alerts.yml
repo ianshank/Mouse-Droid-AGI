@@ -13,7 +13,7 @@
 #
 # Requires Prometheus >= 2.26 (last_over_time). An older server rejects the
 # whole file, so every rule below would stop loading, not just the ones that
-# use it. CI tests these rules with promtool 2.51.0.
+# use it. CI tests these rules with the promtool pinned in .github/workflows/ci.yml.
 #
 # Metric names from MetricsConfig (namespace = "mousedroid"):
 #   mousedroid_loop_time_ms           (gauge)

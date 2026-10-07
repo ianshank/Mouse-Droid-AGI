@@ -30,7 +30,15 @@ from pathlib import Path
 
 import pytest
 
-from mousedroid.health.healthcheck_env import _is_probe_safe_url_path
+from mousedroid.config.schema import Settings
+from mousedroid.config.schema.telemetry import TelemetryConfig
+from mousedroid.constants import HEALTH_ROUTE_SUFFIX, TCP_PORT_MAX
+from mousedroid.health.healthcheck_env import (
+    RESOLVED_HEALTH_PATH_KEY,
+    RESOLVED_TELEMETRY_PORT_KEY,
+    _is_probe_safe_url_path,
+    derive_healthcheck_env,
+)
 from tests._bash import requires_bash
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -77,18 +85,32 @@ _BASE_KEYS = (
     "MOUSEDROID_HEARTBEAT_STALE_S='30.000'",
 )
 
+# Where the probe falls back to when the rover cannot name its endpoint: the
+# schema's default one, which is also what the probe used before it read the
+# rover. Derived rather than written out, so neither side can move alone.
+_DEFAULT_TELEMETRY = TelemetryConfig()
+_FALLBACK_PORT = str(_DEFAULT_TELEMETRY.port)
+_FALLBACK_PATH = f"{_DEFAULT_TELEMETRY.api_prefix}{HEALTH_ROUTE_SUFFIX}"
+
+
+def _url(port: str, path: str) -> str:
+    return f"http://127.0.0.1:{port}{path}"
+
 
 def _container_env(tmp_path: Path, *, port: str | None, path: str | None) -> Path:
     """Write the healthcheck env file the fake container's entrypoint produced.
 
     ``None`` omits the key, which is what code predating the resolved keys
     writes; ``""`` is the rover publishing "cannot vouch for this value".
+    The key names are the ones healthcheck_env publishes, so renaming them on
+    either side alone fails these tests instead of passing against a fixture
+    that kept the old name.
     """
     lines = list(_BASE_KEYS)
     if port is not None:
-        lines.append(f"MOUSEDROID_RESOLVED_TELEMETRY_PORT='{port}'")
+        lines.append(f"{RESOLVED_TELEMETRY_PORT_KEY}='{port}'")
     if path is not None:
-        lines.append(f"MOUSEDROID_RESOLVED_HEALTH_PATH='{path}'")
+        lines.append(f"{RESOLVED_HEALTH_PATH_KEY}='{path}'")
     env_file = tmp_path / "container.env"
     env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return env_file
@@ -234,7 +256,7 @@ def test_older_code_keeps_the_previous_behaviour_and_says_so(tmp_path: Path) -> 
 
     probed, output = _run(tmp_path, container)
 
-    assert probed == ["http://127.0.0.1:8080/api/v1/health"]
+    assert probed == [_url(_FALLBACK_PORT, _FALLBACK_PATH)]
     assert "Could not read the rover's resolved telemetry endpoint" in output
     assert "Restart the container on current code" in output
     assert "rebuild the image" not in output
@@ -251,7 +273,7 @@ def test_an_unreadable_env_file_is_reported_as_that(tmp_path: Path) -> None:
 
     probed, output = _run(tmp_path, container)
 
-    assert probed == ["http://127.0.0.1:8080/api/v1/health"]
+    assert probed == [_url(_FALLBACK_PORT, _FALLBACK_PATH)]
     assert "Could not read the rover's healthcheck env file" in output
     assert "Restart the container on current code" not in output
 
@@ -267,11 +289,11 @@ def test_a_port_the_rover_picks_at_startup_falls_back_and_says_why(tmp_path: Pat
     The rover publishes it empty; the probe must say why and what to set,
     rather than reporting "older code" or probing a confident guess silently.
     """
-    container = _container_env(tmp_path, port="", path="/api/v1/health")
+    container = _container_env(tmp_path, port="", path="/rover/v2/health")
 
     probed, output = _run(tmp_path, container)
 
-    assert probed == ["http://127.0.0.1:8080/api/v1/health"]
+    assert probed == [_url(_FALLBACK_PORT, "/rover/v2/health")]
     assert "did not publish its telemetry port" in output
     assert "port_discovery_strategy" in output
     assert "MOUSEDROID_HEALTH_PORT" in output
@@ -288,11 +310,11 @@ def test_an_override_stands_in_for_a_port_the_rover_picks_at_startup(tmp_path: P
 
 
 def test_a_path_the_rover_cannot_vouch_for_falls_back_and_says_why(tmp_path: Path) -> None:
-    container = _container_env(tmp_path, port="8080", path="")
+    container = _container_env(tmp_path, port="9191", path="")
 
     probed, output = _run(tmp_path, container)
 
-    assert probed == ["http://127.0.0.1:8080/api/v1/health"]
+    assert probed == [_url("9191", _FALLBACK_PATH)]
     assert "did not publish its health path" in output
     assert "api_prefix" in output
     assert "MOUSEDROID_HEALTH_PATH" in output
@@ -304,7 +326,7 @@ def test_an_older_image_still_honours_the_legacy_port_variable(tmp_path: Path) -
 
     probed, _ = _run(tmp_path, container, MOUSEDROID_TELEMETRY_PORT="7070")
 
-    assert probed == ["http://127.0.0.1:7070/api/v1/health"]
+    assert probed == [_url("7070", _FALLBACK_PATH)]
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +386,30 @@ def test_an_invalid_resolved_port_never_reaches_curl(tmp_path: Path, bad_port: s
 
     assert probed == [], f"curl was invoked with an unvalidated port: {probed}"
     assert "The container published a telemetry port that is not a valid TCP port" in output
+
+
+def _published_port(port: int) -> bool:
+    """Whether healthcheck_env publishes ``port`` (validation bypassed, as in
+    ``test_healthcheck_env.py``, so out-of-range values reach the rule).
+    """
+    cfg = Settings.model_validate({"mock_hardware": True})
+    cfg = cfg.model_copy(update={"telemetry": cfg.telemetry.model_copy(update={"port": port})})
+    return derive_healthcheck_env(cfg)[RESOLVED_TELEMETRY_PORT_KEY] != ""
+
+
+@pytest.mark.parametrize("port", [0, 1, 8080, TCP_PORT_MAX, TCP_PORT_MAX + 1])
+def test_the_publish_rule_and_the_probe_rule_agree_on_ports(tmp_path: Path, port: int) -> None:
+    """The shell copy of ``TCP_PORT_MAX`` against the Python constant, at both edges.
+
+    ``99999`` above shows only that some ceiling exists; this pins where it is.
+    """
+    published = _published_port(port)
+    container = _container_env(tmp_path, port=str(port), path="/api/v1/health")
+
+    probed, _ = _run(tmp_path, container)
+
+    assert published == (1 <= port <= TCP_PORT_MAX)
+    assert (probed == [_url(str(port), "/api/v1/health")]) == published
 
 
 @pytest.mark.parametrize(

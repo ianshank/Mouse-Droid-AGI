@@ -13,6 +13,7 @@ from mousedroid.config.schema import (
     Settings,
     UltrasonicConfig,
 )
+from mousedroid.constants import TCP_PORT_MAX
 
 positive_float = st.floats(min_value=0.01, max_value=1e6, allow_nan=False, allow_infinity=False)
 positive_int = st.integers(min_value=1, max_value=10000)
@@ -20,7 +21,7 @@ positive_int = st.integers(min_value=1, max_value=10000)
 
 @given(
     serial_baud=positive_int,
-    wifi_port=st.integers(min_value=1, max_value=65535),
+    wifi_port=st.integers(min_value=1, max_value=TCP_PORT_MAX),
     command_timeout_s=positive_float,
     keepalive_hz=positive_float,
     max_velocity_mps=positive_float,

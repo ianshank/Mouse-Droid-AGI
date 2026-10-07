@@ -11,6 +11,7 @@ from typing import Literal
 from pydantic import Field, SecretStr, field_validator
 
 from mousedroid.config.schema._primitives import StrictBaseModel
+from mousedroid.constants import TCP_PORT_MAX
 
 
 class TelemetryAuthConfig(StrictBaseModel):
@@ -116,7 +117,7 @@ class TelemetryConfig(StrictBaseModel):
         "0.0.0.0",  # noqa: S104 — intentional all-interfaces default for the rover WiFi dashboard
         description="Server bind address (0.0.0.0 = all interfaces)",
     )
-    port: int = Field(8080, gt=0, le=65535, description="Server port")
+    port: int = Field(8080, gt=0, le=TCP_PORT_MAX, description="Server port")
     port_discovery_strategy: Literal["fixed", "fallback_range", "kernel_assigned"] = Field(
         "fixed",
         description=(

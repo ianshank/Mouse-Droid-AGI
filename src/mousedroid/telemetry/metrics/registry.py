@@ -233,6 +233,12 @@ def generate_metrics_sample() -> str:
     # promtool / Grafana / alert evaluation all see non-empty series from
     # the first scrape (REQUIRED, not optional — CloudWeightUpdateDigestMismatch
     # in alerts.yml references the sha256 counter and would fail without it).
+    registry.inc_cloud_weight_update_download("ianshank/mousedroid-policy-v2")
+    registry.inc_cloud_weight_update_sha256_mismatch("ianshank/mousedroid-policy-v2")
+    registry.observe_cloud_weight_update_download_seconds(2.5)
+    registry.inc_cloud_weight_update_swap("policy")
+    registry.inc_cloud_weight_update_swap("world_model")
+
     # MCP server families (track_mcp defaults True). Never seeded before, so
     # the dashboard test had to whitelist them by ASSERTED name -- and the
     # assertion was wrong: the counter rendered `..._total_total`. Seeding
@@ -244,11 +250,6 @@ def generate_metrics_sample() -> str:
     registry.inc_mcp_tool_call("health_check", "circuit_open")
     registry.inc_mcp_tool_call("health_check", "rate_limited")
     registry.observe_mcp_request_latency_ms(12.0)
-    registry.inc_cloud_weight_update_download("ianshank/mousedroid-policy-v2")
-    registry.inc_cloud_weight_update_sha256_mismatch("ianshank/mousedroid-policy-v2")
-    registry.observe_cloud_weight_update_download_seconds(2.5)
-    registry.inc_cloud_weight_update_swap("policy")
-    registry.inc_cloud_weight_update_swap("world_model")
 
     # Tier C2 (C2.3) — exercise mission lifecycle + safety projection
     # families so ``promtool check metrics`` sees them in CI.

@@ -33,6 +33,9 @@ from pathlib import Path
 import pytest
 import yaml
 
+from mousedroid.config.schema.hardware import JetsonConfig
+from mousedroid.config.schema.telemetry import TelemetryConfig
+from mousedroid.constants import HEALTH_ROUTE_SUFFIX
 from mousedroid.tools.print_healthcheck_env import main as print_healthcheck_env_main
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -243,3 +246,77 @@ class TestTheEnvTemplateOffersOnlyKeysThatWork:
             "MOUSEDROID_TELEMETRY__PORT",
         }
         assert not (added & live), f"uncommented, so every rover would warn: {added & live}"
+
+    @staticmethod
+    def _deploy_default(name: str) -> str:
+        """What docker_deploy.sh uses when ``name`` is unset: its ``${name:-...}``."""
+        text = (_REPO_ROOT / "scripts" / "docker_deploy.sh").read_text(encoding="utf-8")
+        found = set(re.findall(rf'^\w+="\$\{{{name}:-(.*)\}}"$', text, re.MULTILINE))
+        assert len(found) == 1, f"{name}: expected one default, found {found}"
+        return found.pop()
+
+    def test_each_commented_example_is_the_default_it_stands_for(self) -> None:
+        """Uncommenting an example must change nothing.
+
+        Each reads as the default, so each is pinned to where that default
+        comes from: the schema, or the script's own fallback.
+        """
+        text = self._TEMPLATE.read_text(encoding="utf-8")
+        examples = dict(re.findall(r"^#\s*([A-Z][A-Z0-9_]*)=(\S+)$", text, re.MULTILINE))
+        telemetry = TelemetryConfig()
+        install_dir = self._deploy_default("MOUSEDROID_INSTALL_DIR")
+        expected = {
+            "MOUSEDROID_TELEMETRY__PORT": str(telemetry.port),
+            "MOUSEDROID_HEALTH_PORT": str(telemetry.port),
+            "MOUSEDROID_HEALTH_PATH": f"{telemetry.api_prefix}{HEALTH_ROUTE_SUFFIX}",
+            "MOUSEDROID_HEALTH_TIMEOUT": self._deploy_default("MOUSEDROID_HEALTH_TIMEOUT"),
+            "MOUSEDROID_DEPLOY_RECORD": self._deploy_default("MOUSEDROID_DEPLOY_RECORD").replace(
+                "${INSTALL_DIR}", install_dir
+            ),
+            "MOUSEDROID_JETSON__TENSORRT_CACHE_DIR": JetsonConfig().tensorrt_cache_dir.as_posix(),
+        }
+
+        assert {key: examples.get(key) for key in expected} == expected
+
+
+class TestEveryReaderOfTheHealthcheckEnvFileAgreesWithItsWriter:
+    """One file, one writer, several readers -- each with its own copy of the path.
+
+    The entrypoint writes ``print_healthcheck_env``'s output to
+    ``${MOUSEDROID_HEALTHCHECK_ENV_FILE:-<default>}``. The healthcheck script, the
+    deploy probe and the operator docs read it back with their own copy of that
+    default, and the docs ``sed`` the resolved keys out by name. A reader that
+    drifted would read nothing -- which the deploy probe takes for older code,
+    and falls back to a guess.
+    """
+
+    _DEFAULT = re.compile(r"\$\{MOUSEDROID_HEALTHCHECK_ENV_FILE:-([^}]*)\}")
+    _RESOLVED = re.compile(r"\bMOUSEDROID_RESOLVED_[A-Z0-9_]+")
+
+    @staticmethod
+    def _readers() -> dict[str, str]:
+        files = [*(_REPO_ROOT / "scripts").glob("*.sh"), *(_REPO_ROOT / "docs").rglob("*.md")]
+        return {
+            path.relative_to(_REPO_ROOT).as_posix(): path.read_text(encoding="utf-8")
+            for path in sorted(files)
+            if path != _ENTRYPOINT
+        }
+
+    def test_every_reader_defaults_to_the_file_the_entrypoint_writes(self) -> None:
+        written = set(self._DEFAULT.findall(_ENTRYPOINT.read_text(encoding="utf-8")))
+        found = {name: set(self._DEFAULT.findall(text)) for name, text in self._readers().items()}
+        readers = {name: paths for name, paths in found.items() if paths}
+
+        assert len(written) == 1, f"the entrypoint names {written}"
+        assert {"scripts/docker_deploy.sh", "scripts/mousedroid_healthcheck.sh"} <= set(readers)
+        assert {name: paths for name, paths in readers.items() if paths != written} == {}
+
+    def test_every_resolved_key_a_reader_names_is_one_the_writer_publishes(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert print_healthcheck_env_main([]) == 0
+        published = set(re.findall(r"^([A-Z][A-Z0-9_]*)=", capsys.readouterr().out, re.MULTILINE))
+        named = {key for text in self._readers().values() for key in self._RESOLVED.findall(text)}
+
+        assert named, "no reader names a resolved key: has the probe stopped reading them?"
+        assert named <= published, f"read but never written: {sorted(named - published)}"

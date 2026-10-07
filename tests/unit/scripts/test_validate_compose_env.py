@@ -114,12 +114,15 @@ def test_safe_values_are_accepted(value: str | None) -> None:
             "must not be inside /home/jetson/mousedroid_experience, which compose",
         ),
         ("/var/lib/promtail", "would cover /var/lib/promtail, which compose also mounts"),
-        # Inside the source bind mount, what the container runs from.
-        ("/opt/mousedroid/src", "would shadow /opt/mousedroid/src, which the container"),
-        ("/opt/mousedroid/src/mousedroid", "would shadow /opt/mousedroid/src, which"),
-        ("/opt/mousedroid/weights", "would shadow /opt/mousedroid/weights, which"),
-        ("/opt/mousedroid/config", "would shadow /opt/mousedroid/config, which"),
-        ("/opt/mousedroid/models/trt", "would shadow /opt/mousedroid/models, which"),
+        # Inside the source bind mount, what the container runs from: neither
+        # covered nor nested into, and the refusal says which.
+        ("/opt/mousedroid/src", "would cover /opt/mousedroid/src, which the container"),
+        ("/opt/mousedroid/src/mousedroid", "must not be inside /opt/mousedroid/src, which"),
+        ("/opt/mousedroid/weights", "would cover /opt/mousedroid/weights, which"),
+        # The relocation the template used to read as allowed.
+        ("/opt/mousedroid/weights/trt_cache", "must not be inside /opt/mousedroid/weights"),
+        ("/opt/mousedroid/config", "would cover /opt/mousedroid/config, which"),
+        ("/opt/mousedroid/models/trt", "must not be inside /opt/mousedroid/models, which"),
     ],
 )
 def test_unsafe_values_are_refused_with_the_reason(value: str, reason: str) -> None:
@@ -127,6 +130,58 @@ def test_unsafe_values_are_refused_with_the_reason(value: str, reason: str) -> N
 
     assert proc.returncode == 1
     assert f"{_KEY} refused: {reason}" in proc.stderr
+
+
+# Linux limits from <linux/limits.h>. The validator targets the Linux
+# container whatever the host, so these are the spec, not the host's values.
+_LINUX_PATH_MAX = 4096  # including the terminating NUL
+_LINUX_NAME_MAX = 255
+
+
+def _path_of_length(length: int) -> str:
+    """A cache path breaking no rule but, possibly, its length: ``length`` bytes.
+
+    Built from short components, so the per-component limit stays out of it.
+    """
+    path = "/data"
+    while len(path) + 10 <= length:
+        path += "/" + "a" * 9
+    return path + "a" * (length - len(path))
+
+
+def test_the_length_limits_are_linuxs_and_hold_at_the_edge() -> None:
+    """``_PATH_MAX`` is exercised at its boundary, not merely declared."""
+    limit = int(_script_scalar("_PATH_MAX"))
+    longest = _path_of_length(limit)
+
+    assert limit == _LINUX_PATH_MAX - 1
+    assert int(_script_scalar("_NAME_MAX")) == _LINUX_NAME_MAX
+    assert len(longest) == limit
+    accepted = _validate(longest)
+    assert accepted.returncode == 0, accepted.stderr
+    over = _validate(_path_of_length(limit + 1))
+    assert over.returncode == 1
+    assert f"{_KEY} refused: must not be longer than {limit} bytes" in over.stderr
+
+
+# The FHS trees a relocated cache must never enter. The validator may list
+# more; it may not list fewer.
+_REQUIRED_OS_TREES = frozenset(
+    {"bin", "boot", "dev", "etc", "lib", "proc", "root", "run", "sbin", "sys", "usr"}
+)
+
+
+def test_every_os_owned_tree_is_refused_not_just_two() -> None:
+    trees = _script_array("_OS_OWNED_TREES")
+    wrong = {}
+    for tree in trees:
+        proc = _validate(f"/{tree}/mousedroid/trt_cache")
+        reason = f"must not be inside /{tree}, which belongs to the OS image"
+        if proc.returncode != 1 or reason not in proc.stderr:
+            wrong[tree] = proc.stderr
+
+    assert set(trees) >= _REQUIRED_OS_TREES, sorted(_REQUIRED_OS_TREES - set(trees))
+    assert not wrong, wrong
 
 
 def test_a_refusal_never_echoes_the_value() -> None:

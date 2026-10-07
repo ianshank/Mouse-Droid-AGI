@@ -87,6 +87,11 @@ _load_env_file_as_data() {
     local line trimmed key value
     local lineno=0
     local exported='^(MOUSEDROID_[A-Z0-9_]+|COMPOSE_FILE|GCP_CREDENTIALS_FILE|GOOGLE_APPLICATION_CREDENTIALS)$'
+    # Byte semantics for both patterns below, as _matches_c gives the rest of
+    # this script: a locale that collates accented letters into [A-Z] (older
+    # glibc) would pass a non-ASCII key on to `export`, which refuses it -- and
+    # under `set -e` that aborts the deploy. Restored when the function returns.
+    local LC_ALL=C
 
     while IFS= read -r line || [ -n "${line}" ]; do
         lineno=$((lineno + 1))
@@ -241,7 +246,7 @@ _matches_c() {
 # ---------------------------------------------------------------------------
 if ! _matches_c "${CONTAINER_NAME}" '^[A-Za-z0-9][A-Za-z0-9_.-]*$'; then
     error "Refusing to run: container name is not a valid Docker name: $(_shown "${CONTAINER_NAME}")"
-    error "Set MOUSEDROID_CONTAINER (or the docker.env key) to [A-Za-z0-9][A-Za-z0-9_.-]*"
+    error "Remove MOUSEDROID_CONTAINER (from this shell and ${DOCKER_ENV_FILE}) to use the container compose creates, or set it to [A-Za-z0-9][A-Za-z0-9_.-]*"
     exit 1
 fi
 
@@ -413,9 +418,6 @@ strict_promotion_probe() {
 }
 
 # ---------------------------------------------------------------------------
-# Health check function
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
 # Resolve the telemetry health endpoint from the RUNNING container.
 #
 # The rover serves cfg.telemetry.port (compose runs network_mode: host) at
@@ -441,6 +443,10 @@ strict_promotion_probe() {
 # does not form a plain URL path -- and code older than the keys writes neither.
 # The resolved port is the CONFIGURED port, which under 'fixed' is the bound one.
 # ---------------------------------------------------------------------------
+# The fallback is the schema's default endpoint -- TelemetryConfig.port, then
+# api_prefix + HEALTH_ROUTE_SUFFIX -- which is what this probe used before it
+# read the rover. TCP_PORT_MAX is mousedroid.constants.TCP_PORT_MAX. All three
+# are pinned to those sources by test_docker_deploy_health_endpoint.py.
 LEGACY_HEALTH_PORT_FALLBACK=8080
 LEGACY_HEALTH_PATH_FALLBACK=/api/v1/health
 TCP_PORT_MAX=65535
@@ -579,6 +585,9 @@ resolve_health_endpoint() {
     return 0
 }
 
+# ---------------------------------------------------------------------------
+# Health check function
+# ---------------------------------------------------------------------------
 health_check() {
     info "Running container health checks..."
     # Failure accumulator: the strict legs report EVERY problem before

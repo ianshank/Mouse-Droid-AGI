@@ -351,6 +351,23 @@ def test_a_lowercase_or_dashed_key_is_rejected_rather_than_assigned(tmp_path: Pa
     assert "not-an-identifier" not in stderr
 
 
+def test_the_key_patterns_match_bytes_whatever_the_callers_locale() -> None:
+    """Structural, because no locale on a current glibc reproduces the failure.
+
+    Under an older glibc a UTF-8 locale collates accented letters into
+    ``[A-Z]``, so a non-ASCII key would pass both patterns and reach ``export``,
+    which refuses it -- and under the script's ``set -e`` that aborts the
+    deploy. ``local LC_ALL=C`` gives the patterns byte semantics, as
+    ``_matches_c`` does for the rest of the script, and must be in force before
+    the loop that applies them.
+    """
+    body = _extract_loader()
+    pinned = body.find("local LC_ALL=C")
+
+    assert pinned != -1, "the loader no longer matches its key patterns in the C locale"
+    assert pinned < body.index("while IFS= read -r line"), "LC_ALL=C is set after the loop"
+
+
 def test_the_shipped_template_parses_with_no_warnings() -> None:
     """Backwards compatibility: the real template must load cleanly.
 

@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from mousedroid.config.schema import Settings
+from mousedroid.constants import TCP_PORT_MAX
 from mousedroid.health.healthcheck_env import (
     _SAFE_PATH_RE,
     _validate_path,
@@ -141,7 +142,8 @@ class _ShoutingInt(int):
         pytest.param("1'; echo INJECTED; '", "", id="str-bypassing-validation"),
         pytest.param(True, "", id="bool"),  # an int subclass; never a port
         pytest.param(0, "", id="zero"),
-        pytest.param(65536, "", id="above-max"),
+        pytest.param(TCP_PORT_MAX, str(TCP_PORT_MAX), id="max"),
+        pytest.param(TCP_PORT_MAX + 1, "", id="above-max"),
         # Written back through int(), so only its digits reach the file.
         pytest.param(_ShoutingInt(8080), "8080", id="int-with-hostile-str"),
     ],

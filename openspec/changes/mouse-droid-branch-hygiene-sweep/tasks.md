@@ -682,6 +682,43 @@ defects were real, and the task wording around them was not.
   A dry run of that first guard showed `weights/../src/x` matching the prefix; it now refuses `..`
   before the prefix test.
 
+### Fourth review round — two audits of the whole diff, each finding checked first
+
+A hardcoded-value audit and a modularity / dead-code review. Every finding was reproduced or read
+against the tree before it was changed; three were declined, and why is recorded.
+
+- **The docs sent operators into a boot failure.** The compose-value validator refuses a cache
+  directory *inside* `src`, `weights`, `config` or `models` as well as one covering them, but the
+  template and the CHANGELOG said only "covering": `/opt/mousedroid/weights/trt_cache` read as
+  allowed, and the unit's fatal preflight refuses it at boot. The refusal now says which it is
+  (`would cover` / `must not be inside`), as the mount-target rule already did, and both docs say
+  both.
+- **The env loader's two patterns ran in the caller's locale**, unlike every other pattern in the
+  script. Under an older glibc a non-ASCII key passes them and reaches `export`, which refuses it,
+  and `set -e` aborts the deploy. `local LC_ALL=C`.
+- **Values with a source but no pin.** The probe's fallback endpoint is pinned behaviourally to
+  `TelemetryConfig` and `HEALTH_ROUTE_SUFFIX` (and the published half of each partial fallback now
+  differs from the fallback, so a mix-up cannot pass); the shell's `TCP_PORT_MAX` to the Python
+  constant at both edges, by a publish/probe parity table; the schema's three port fields use
+  `TCP_PORT_MAX` instead of a literal; the shell fixture writes the key names `healthcheck_env`
+  exports; every reader of the healthcheck env file, scripts and docs, to the entrypoint's
+  default path and to the keys the writer publishes; the template's commented examples to the
+  defaults they stand for; `_PATH_MAX` and every OS-owned tree are exercised; and the playbook's
+  `sudo rm` guard runs in a test, extracted from the playbook, against the tree both caches are
+  derived to live in.
+- **Smaller.** The MCP metric seeds sat between the Tier C1 comment and its calls (moved; the
+  rendered sample is byte-identical). Two docstrings still described one consumer and credited
+  `_validate_path` for values it never sees. The container-name hint offered the docker.env key the
+  template says does not work. Two tests fed the removed install-root knob, so the full-deploy test
+  never set the variable that actually collided — the PC's own `MOUSEDROID_INSTALL_DIR`. The
+  alerts header repeated CI's promtool pin.
+- **Declined.** One `_env_text_get` returning 1 when a key is absent, in place of `_env_text_has`
+  and `_env_text_value`: every `var="$(…)"` call site would then abort under `set -e`, which the
+  split avoids by design. A helper for `resolve_health_endpoint`'s two validation blocks: it would
+  need a nameref and an indirect call to save ten explicit lines, each message pinned by a test.
+  Deleting the pre-existing LLM-group metric test that the all-groups test overlaps: harmless, and
+  not this change's to remove.
+
 ## Phase 6 — Documentation, and the alert that does not exist
 
 - [x] 6.1 Add a `ModelArtifactDigestMismatch` rule to `config/prometheus/alerts.yml` for
@@ -690,6 +727,60 @@ defects were real, and the task wording around them was not.
   rate" and `grep` finds **zero** hits outside `src/` — no rule, no panel, no runbook.
   This is the F-050 defect class repeated inside F-050's own change. Not documentation:
   a digest mismatch means wrong weights, wrong inference, silently, and nothing pages.
+- [ ] 6.2 Add a `### Added` block for F-050/F-051 under `CHANGELOG.md:9`. The file was not
+  touched by this branch at all; 78 files are unrecorded. Include a forward reference to
+  the PR #93 entry at `:4129-4151` whose "wired" claim F-050 contradicts — do not edit
+  history.
+- [ ] 6.3 Reword `src/mousedroid/world_model/CLAUDE.md:10-11`, which still states
+  ONNX/TensorRT execution as present-tense fact. This is the same false claim the task-4.1
+  narrative sweep corrected in ADR-008, the export script and the schema — this surface
+  was missed.
+- [ ] 6.4 `docs/architecture/c4-orchestrator.md:106-137` — add `_warm_world_model()` to the
+  lifecycle sequence as the last step before the loop, noting it can abort startup; and add
+  the `RSSM → metrics` relationship at `:30-34,47-56`.
+- [ ] 6.5 `docs/architecture/ADR-008-world-model-onnx-engine.md` §Public surface — add the four new `WorldModelConfig` fields to
+  the public-surface block, and an "Artifact integrity" subsection for the SHA-256 manifest
+  gate the ADR never mentions.
+- [ ] 6.6 `docs/architecture/c4-rssm-sim-pretraining.md:80` — `@torch.no_grad()` now sits on
+  `_observe_step_impl` (`rssm.py:155`), not `observe_step`. The invariant holds; the pointer
+  does not.
+- [ ] 6.7 Add `docs/architecture/c4-world-model.md` and
+  `docs/architecture/c4-pc-to-jetson-delivery.md`, and their rows in
+  `c4-overview.md:116-128`. Two subsystem seams have no component diagram; no architecture
+  doc mentions the delivery scripts at all.
+- [ ] 6.8 `README.md:279-291` and `scripts/README.md:7` — add `deploy_remote.sh`,
+  `rover_wip_guard.sh`, `analyze_observe_step_ceiling.py` and the two new runbooks.
+- [ ] 6.9 Root `NEXT_STEPS.md` — add the four rover-gated open items (7.3, 7.4, 7.5, 8.7)
+  under "Open engineering follow-ups", tagged F-008-sequenced, and index the three missing
+  runbooks at `:196-204`.
+- [ ] 6.10 Rename the two overpromising `features.yaml` entries: F-050 `:1422` says "ONNX
+  provider proof" where provider observation is recorded NOT BUILT; F-051 `:1465` says
+  "offline rollback drill" where the drill is recorded not run. A reader of
+  `scripts/select_next.py` sees the name, not the caveat.
+- [ ] 6.11 Move F-050 from `epic: "Jetson deployment"` to the existing `World model` epic.
+- [ ] 6.12 `docs/architecture/adr-log.md:16` — annotate ADR-008 "amended 2026-09-19"; the
+  branch reversed its multi-step cross-engine parity decision.
+- [x] 6.13 **[LANDED]** `docs/analysis/positioning-safety-peer-review-2026-09-19.md` — D-7,
+  P7 and the corrected-design map all still read as live. Done while merging the base:
+  the drafted wording ("partly addressed by F-051 task 8.1, leaving the
+  `_model_fingerprint` half open") was **wrong by the time it was written** — base PR #234
+  landed `_runtime_identity()` and `cache_dir_is_private` and closed that half, while
+  annotating D-25 and D-26 but not D-7. Both halves are now closed and the row says so.
+- [ ] 6.13a **UNMARKED — was falsely [LANDED].** A seventh site survives: `CHANGELOG.md:19` Six sites said the cache directory is "bind-mounted from the host"
+  — false on the merged tree, since F-051 replaced that with the named volume
+  `mousedroid_tensorrt_cache`. Two are operator-facing (`JetsonConfig.tensorrt_cache_dir`'s
+  `description=`, `cache_dir_is_private`'s docstring). A semantic merge conflict with **zero file overlap**. Revision 2 claimed all six were closed; `CHANGELOG.md:19` — an operator-facing `### Security` entry — still says `docker-compose.jetson.yml` bind-mounts the default location from the host, while `docker-compose.jetson.yml:130` uses the named volume. Replace the prose sweep with a regression test: no tracked file may pair "bind-mount" with "tensorrt_cache". Also read `src/mousedroid/efficiency/tensorrt.py:191` in context — it may be an eighth.
+- [ ] 6.13b Verify the interaction the merge created rather than assuming it: Docker creates
+  a named volume root-owned `0755`, and `cache_dir_is_private` treats group/other-reachable
+  as a MISS. Reading `_save_sync` shows it does `mkdir(mode=0700)` **plus** an explicit
+  `os.chmod`, which hardens the mount point, so there is no permanent-miss loop — but the
+  chmod is wrapped in `except OSError` for the not-our-directory case, so confirm on the
+  rover that the container user can chmod the volume root. Not a claimed defect; a claimed
+  unknown.
+- [ ] 6.14 Append the four omitted artifacts to the `openspec/project.md:24` cell
+  (`src/mousedroid/utils/artifact_integrity.py`, `src/mousedroid/world_model/onnx_export_metadata.py`,
+  `src/mousedroid/world_model/composite.py`, `scripts/rover_wip_guard.sh`) and the two new runbooks.
+
 ### Slice E landed — the alert as written could never have fired
 
 - **The specified rule was dead on arrival.** "Page on any non-zero rate" over a counter written
@@ -749,60 +840,6 @@ defects were real, and the task wording around them was not.
   violation ever, the first after a restart, and one counted during an outage; the
   `unless ... offset` version on every scrape-gap and outage case (false pages, closed pages).
   Runbook: `docs/playbooks/artifact-integrity-fail.md`, pinned into the playbook structure contract.
-
-- [ ] 6.2 Add a `### Added` block for F-050/F-051 under `CHANGELOG.md:9`. The file was not
-  touched by this branch at all; 78 files are unrecorded. Include a forward reference to
-  the PR #93 entry at `:4129-4151` whose "wired" claim F-050 contradicts — do not edit
-  history.
-- [ ] 6.3 Reword `src/mousedroid/world_model/CLAUDE.md:10-11`, which still states
-  ONNX/TensorRT execution as present-tense fact. This is the same false claim the task-4.1
-  narrative sweep corrected in ADR-008, the export script and the schema — this surface
-  was missed.
-- [ ] 6.4 `docs/architecture/c4-orchestrator.md:106-137` — add `_warm_world_model()` to the
-  lifecycle sequence as the last step before the loop, noting it can abort startup; and add
-  the `RSSM → metrics` relationship at `:30-34,47-56`.
-- [ ] 6.5 `docs/architecture/ADR-008-world-model-onnx-engine.md` §Public surface — add the four new `WorldModelConfig` fields to
-  the public-surface block, and an "Artifact integrity" subsection for the SHA-256 manifest
-  gate the ADR never mentions.
-- [ ] 6.6 `docs/architecture/c4-rssm-sim-pretraining.md:80` — `@torch.no_grad()` now sits on
-  `_observe_step_impl` (`rssm.py:155`), not `observe_step`. The invariant holds; the pointer
-  does not.
-- [ ] 6.7 Add `docs/architecture/c4-world-model.md` and
-  `docs/architecture/c4-pc-to-jetson-delivery.md`, and their rows in
-  `c4-overview.md:116-128`. Two subsystem seams have no component diagram; no architecture
-  doc mentions the delivery scripts at all.
-- [ ] 6.8 `README.md:279-291` and `scripts/README.md:7` — add `deploy_remote.sh`,
-  `rover_wip_guard.sh`, `analyze_observe_step_ceiling.py` and the two new runbooks.
-- [ ] 6.9 Root `NEXT_STEPS.md` — add the four rover-gated open items (7.3, 7.4, 7.5, 8.7)
-  under "Open engineering follow-ups", tagged F-008-sequenced, and index the three missing
-  runbooks at `:196-204`.
-- [ ] 6.10 Rename the two overpromising `features.yaml` entries: F-050 `:1422` says "ONNX
-  provider proof" where provider observation is recorded NOT BUILT; F-051 `:1465` says
-  "offline rollback drill" where the drill is recorded not run. A reader of
-  `scripts/select_next.py` sees the name, not the caveat.
-- [ ] 6.11 Move F-050 from `epic: "Jetson deployment"` to the existing `World model` epic.
-- [ ] 6.12 `docs/architecture/adr-log.md:16` — annotate ADR-008 "amended 2026-09-19"; the
-  branch reversed its multi-step cross-engine parity decision.
-- [x] 6.13 **[LANDED]** `docs/analysis/positioning-safety-peer-review-2026-09-19.md` — D-7,
-  P7 and the corrected-design map all still read as live. Done while merging the base:
-  the drafted wording ("partly addressed by F-051 task 8.1, leaving the
-  `_model_fingerprint` half open") was **wrong by the time it was written** — base PR #234
-  landed `_runtime_identity()` and `cache_dir_is_private` and closed that half, while
-  annotating D-25 and D-26 but not D-7. Both halves are now closed and the row says so.
-- [ ] 6.13a **UNMARKED — was falsely [LANDED].** A seventh site survives: `CHANGELOG.md:19` Six sites said the cache directory is "bind-mounted from the host"
-  — false on the merged tree, since F-051 replaced that with the named volume
-  `mousedroid_tensorrt_cache`. Two are operator-facing (`JetsonConfig.tensorrt_cache_dir`'s
-  `description=`, `cache_dir_is_private`'s docstring). A semantic merge conflict with **zero file overlap**. Revision 2 claimed all six were closed; `CHANGELOG.md:19` — an operator-facing `### Security` entry — still says `docker-compose.jetson.yml` bind-mounts the default location from the host, while `docker-compose.jetson.yml:130` uses the named volume. Replace the prose sweep with a regression test: no tracked file may pair "bind-mount" with "tensorrt_cache". Also read `src/mousedroid/efficiency/tensorrt.py:191` in context — it may be an eighth.
-- [ ] 6.13b Verify the interaction the merge created rather than assuming it: Docker creates
-  a named volume root-owned `0755`, and `cache_dir_is_private` treats group/other-reachable
-  as a MISS. Reading `_save_sync` shows it does `mkdir(mode=0700)` **plus** an explicit
-  `os.chmod`, which hardens the mount point, so there is no permanent-miss loop — but the
-  chmod is wrapped in `except OSError` for the not-our-directory case, so confirm on the
-  rover that the container user can chmod the volume root. Not a claimed defect; a claimed
-  unknown.
-- [ ] 6.14 Append the four omitted artifacts to the `openspec/project.md:24` cell
-  (`src/mousedroid/utils/artifact_integrity.py`, `src/mousedroid/world_model/onnx_export_metadata.py`,
-  `src/mousedroid/world_model/composite.py`, `scripts/rover_wip_guard.sh`) and the two new runbooks.
 
 ## Phase 7 — Advisory ladder and supply chain
 

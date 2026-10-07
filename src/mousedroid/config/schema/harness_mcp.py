@@ -14,6 +14,7 @@ from pydantic import Field, field_validator, model_validator
 
 from mousedroid.config.schema._primitives import Self, StrictBaseModel, _settings_default_factory
 from mousedroid.config.schema.misc import CircuitBreakerConfig
+from mousedroid.constants import TCP_PORT_MAX
 
 
 class MCPResourcesConfig(StrictBaseModel):
@@ -81,7 +82,7 @@ class MCPConfig(StrictBaseModel):
         "127.0.0.1",
         description="Bind address (loopback by default for safety)",
     )
-    port: int = Field(8765, gt=0, le=65535, description="Server port (HTTP/SSE only)")
+    port: int = Field(8765, gt=0, le=TCP_PORT_MAX, description="Server port (HTTP/SSE only)")
     auth_token_env_var: str = Field(
         "MOUSEDROID_MCP_TOKEN",
         description="Environment variable holding bearer token (never in YAML)",
