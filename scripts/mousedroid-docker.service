@@ -72,9 +72,12 @@ ExecStartPre=/bin/bash -lc 'exec "${MOUSEDROID_INSTALL_DIR}/scripts/preflight_ch
 # Non-fatal dash prefix: the mousedroid:jetson image is built locally on the
 # rover (compose `build:`, no registry), so `pull` always errors — without the
 # dash that error aborts every service start.
-ExecStartPre=-/usr/bin/docker compose -f ${COMPOSE_FILE} pull --quiet
-ExecStart=/usr/bin/docker compose -f ${COMPOSE_FILE} up --abort-on-container-exit
-ExecStop=/usr/bin/docker compose -f ${COMPOSE_FILE} down --timeout 30
+# --env-file /dev/null: compose interpolates from this unit's environment only
+# -- the one preflight_check.sh just validated -- never from a project .env or
+# COMPOSE_ENV_FILES, which that check cannot see (scripts/validate_compose_env.sh).
+ExecStartPre=-/usr/bin/docker compose --env-file /dev/null -f ${COMPOSE_FILE} pull --quiet
+ExecStart=/usr/bin/docker compose --env-file /dev/null -f ${COMPOSE_FILE} up --abort-on-container-exit
+ExecStop=/usr/bin/docker compose --env-file /dev/null -f ${COMPOSE_FILE} down --timeout 30
 
 # Restart policy
 Restart=on-failure

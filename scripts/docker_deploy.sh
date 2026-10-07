@@ -271,6 +271,16 @@ if ! bash "${SCRIPT_DIR}/validate_compose_env.sh"; then
     exit 1
 fi
 
+# Every compose call below goes through here. Without --env-file, compose also
+# reads <project dir>/.env and any COMPOSE_ENV_FILES for interpolation --
+# sources the check above never sees, so a developer .env rsync'd into the
+# checkout could still move the cache mount onto /etc. An empty env file
+# replaces both: compose interpolates from this process's environment only, the
+# one just validated. mousedroid-docker.service passes the same flag.
+_compose() {
+    docker compose --env-file /dev/null -f "${COMPOSE_FILE}" "$@"
+}
+
 # ---------------------------------------------------------------------------
 # Strict promotion probe (--strict-health only)
 # ---------------------------------------------------------------------------
@@ -658,7 +668,7 @@ health_check() {
 
     # Check compose service status
     info "  Compose services:"
-    docker compose -f "${COMPOSE_FILE}" ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null | \
+    _compose ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null | \
         _strip_controls | sed 's/^/    /' || true
 
     if [ "$failures" -gt 0 ]; then
@@ -752,12 +762,12 @@ fi
 # ---------------------------------------------------------------------------
 if [ "$NO_BUILD" = true ]; then
     info "Step 3: Pulling container image (--no-build)"
-    docker compose -f "${COMPOSE_FILE}" pull 2>&1 | tail -5
+    _compose pull 2>&1 | tail -5
 else
     info "Step 3: Building mousedroid:jetson container image"
     info "  This will pull the L4T base image (~10 GB) on first run..."
     cd "${INSTALL_DIR}"
-    docker compose -f "${COMPOSE_FILE}" build --no-cache 2>&1 | tail -5
+    _compose build --no-cache 2>&1 | tail -5
 fi
 
 # ---------------------------------------------------------------------------
@@ -765,7 +775,7 @@ fi
 # ---------------------------------------------------------------------------
 if docker ps -q --filter "name=${CONTAINER_NAME}" | grep -q .; then
     info "Step 4: Stopping existing container"
-    docker compose -f "${COMPOSE_FILE}" down --timeout 30
+    _compose down --timeout 30
 else
     info "Step 4: No existing container running"
 fi
@@ -774,7 +784,7 @@ fi
 # Step 5: Start the container
 # ---------------------------------------------------------------------------
 info "Step 5: Starting mousedroid container"
-docker compose -f "${COMPOSE_FILE}" up -d
+_compose up -d
 
 # Wait for container to be healthy with timeout
 info "  Waiting for container to start (timeout: ${HEALTH_TIMEOUT}s)..."
@@ -789,7 +799,7 @@ done
 if ! docker ps --filter "name=${CONTAINER_NAME}" --filter "status=running" -q | grep -q .; then
     error "Container failed to start within ${HEALTH_TIMEOUT}s"
     error "Logs:"
-    docker compose -f "${COMPOSE_FILE}" logs --tail=20 2>&1 | _strip_controls | sed 's/^/  /'
+    _compose logs --tail=20 2>&1 | _strip_controls | sed 's/^/  /'
     exit 1
 fi
 
@@ -834,7 +844,7 @@ if [ "$INSTALL_SERVICE" = true ]; then
 
     # Stop the manually-started compose and let systemd manage it
     info "  Stopping manual compose (systemd will manage lifecycle)..."
-    docker compose -f "${COMPOSE_FILE}" down --timeout 30
+    _compose down --timeout 30
     systemctl start mousedroid-docker
     info "  Service started via systemd"
 
@@ -865,8 +875,8 @@ echo ""
 info "Commands:"
 info "  Logs:       docker logs -f ${CONTAINER_NAME}"
 info "  Shell:      docker exec -it ${CONTAINER_NAME} bash"
-info "  Stop:       docker compose -f ${COMPOSE_FILE} down"
-info "  Restart:    docker compose -f ${COMPOSE_FILE} restart"
+info "  Stop:       docker compose --env-file /dev/null -f ${COMPOSE_FILE} down"
+info "  Restart:    docker compose --env-file /dev/null -f ${COMPOSE_FILE} restart"
 info "  Health:     bash $0 --health-only"
 info "  Promote:    bash $0 --health-only --strict-health   # fails on provider/digest/telemetry"
 if [ "$INSTALL_SERVICE" = true ]; then

@@ -72,20 +72,22 @@ did its job; disabling it loads exactly the weights it just refused.
    (`world_model.onnx_cache_dir`, `cognitive.weights_dir`), which the
    container bind-mounts from the host, so the same path is valid here; the
    `case` refuses anything outside that tree -- a `..` segment included, which
-   the prefix alone would let through -- rather than delete it:
+   the prefix alone would let through -- rather than delete it, and the
+   service restarts only after the file is actually gone:
    ```bash
    ARTIFACT='/opt/mousedroid/weights/...'   # the path from the refusing-to-load line
    case "$ARTIFACT" in
        */../* | */..) echo "the path climbs out with '..': stop and check it" >&2 ;;
-       /opt/mousedroid/weights/*) sudo rm -v -- "$ARTIFACT" ;;
+       /opt/mousedroid/weights/*) sudo rm -v -- "$ARTIFACT" && sudo systemctl restart mousedroid-docker ;;
        *) echo "not under /opt/mousedroid/weights: stop and check the path" >&2 ;;
    esac
-   sudo systemctl restart mousedroid-docker
    ```
-   Restarting alone would refuse the same file again.
+   Restarting alone would refuse the same file again, so a refused path or a
+   failed `rm` leaves the service as it is.
 3. **Manifest wrong** — regenerate and republish `sha256.txt` alongside the
-   artifact in its repository, then restart as above. Never edit the cached
-   manifest on the rover to match a file you have not independently verified.
+   artifact in its repository, then `sudo systemctl restart mousedroid-docker`.
+   Never edit the cached manifest on the rover to match a file you have not
+   independently verified.
 4. `ModelArtifactDigestMismatch` clears only after the process restarts with
    verified weights, because the counter lives for the life of the process —
    and up to 5 minutes after that restart, because the rule rides out scrape

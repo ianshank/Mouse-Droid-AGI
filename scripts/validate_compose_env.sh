@@ -28,10 +28,15 @@
 # lines down hold ANTHROPIC_API_KEY and MOUSEDROID_TELEMETRY_TOKEN. Stderr from
 # an ExecStartPre goes to the journal.
 #
+# Compose also reads interpolation values from a project `.env` and from
+# COMPOSE_ENV_FILES, which this check cannot see. Both callers therefore run
+# compose with `--env-file /dev/null`, so it interpolates from the environment
+# checked here and nothing else -- tested against compose itself in
+# tests/unit/scripts/test_validate_compose_env.py.
+#
 # Not covered, and said so rather than implied: the other values compose
 # splices into mount and device entries (GCP_CREDENTIALS_FILE as a bind-mount
-# SOURCE, and the four MOUSEDROID_*_DEV device paths), and values compose reads
-# from a project `.env` file or COMPOSE_ENV_FILES rather than the environment.
+# SOURCE, and the four MOUSEDROID_*_DEV device paths).
 #
 # Exit codes:
 #   0 - every checked value is safe (or unset)

@@ -105,7 +105,13 @@ are stripped, and a rejected value is shown quoted. Neither the compose-value va
 path a value with an open quote has the following template lines, the API key among them, joined
 onto it. The validator accepts one trailing `/` rather than failing boot on it, and also refuses
 `/var/run`, `/var/lock`, the service's other mount targets, and anything covering or nested
-inside `/opt/mousedroid/src`, `weights`, `config` or `models`.
+inside `/opt/mousedroid/src`, `weights`, `config` or `models`. **Behaviour change:** both paths now
+run compose with `--env-file /dev/null`, so it no longer reads a project `.env` (or
+`COMPOSE_ENV_FILES`) for interpolation. Those sources reached compose without passing the check:
+`deploy_remote.sh` rsyncs the working tree, untracked `.env` included, into the rover's checkout,
+and a `MOUSEDROID_JETSON__TENSORRT_CACHE_DIR=/etc:ro` there mounted the cache read-only over `/etc`
+(reproduced with `compose config`). Interpolation values belong in `docker.env`, which both paths
+load into the environment the check reads.
 
 One planned change was **not** made, because it was wrong: routing the strict probe's config through
 the env-var resolver to honour `MOUSEDROID_JETSON_CONFIG`. The rover ignores that key entirely (it

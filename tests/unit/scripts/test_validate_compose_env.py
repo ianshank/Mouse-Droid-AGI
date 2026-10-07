@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path, PurePosixPath
 
@@ -26,6 +27,7 @@ import pytest
 import yaml
 
 from mousedroid.config import loader as config_loader
+from mousedroid.config.schema.hardware import JetsonConfig
 from mousedroid.config.schema.llm import LLMConfig
 from mousedroid.config.schema.world_model import WorldModelConfig
 from tests._bash import requires_bash
@@ -337,6 +339,89 @@ def test_docker_deploy_proceeds_to_compose_with_a_safe_value(tmp_path: Path) -> 
     _, docker_calls = _deploy(tmp_path, "/opt/mousedroid/tensorrt_cache")
 
     assert "compose" in docker_calls, "a safe value never reached compose"
+
+
+# ---------------------------------------------------------------------------
+# Compose interpolates from the checked environment and nothing else
+# ---------------------------------------------------------------------------
+# Without --env-file, compose also reads <project dir>/.env and COMPOSE_ENV_FILES
+# for interpolation, and this check sees neither. deploy_remote.sh rsyncs the
+# working tree, .env included, into the rover's checkout -- which is the
+# project directory on both start paths.
+
+_NO_ENV_FILE = "--env-file /dev/null -f "
+
+
+def test_every_compose_call_on_the_deploy_path_reads_no_env_file(tmp_path: Path) -> None:
+    _, docker_calls = _deploy(tmp_path, "/opt/mousedroid/tensorrt_cache")
+    compose_calls = [line for line in docker_calls.splitlines() if line.startswith("compose")]
+
+    assert compose_calls, "no compose call reached the shim"
+    assert [c for c in compose_calls if not c.startswith(f"compose {_NO_ENV_FILE}")] == []
+
+
+def test_every_compose_line_in_the_unit_reads_no_env_file() -> None:
+    lines = [
+        line.strip()
+        for line in _UNIT.read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith("Exec") and "docker compose" in line
+    ]
+
+    assert lines, "the unit no longer runs compose"
+    assert [line for line in lines if f"docker compose {_NO_ENV_FILE}" not in line] == []
+
+
+def _cache_mount(compose_args: list[str], env: dict[str, str]) -> tuple[str, bool]:
+    """``(target, read_only)`` of the cache volume, as compose itself resolves it."""
+    proc = subprocess.run(
+        ["docker", "compose", *compose_args, "config"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert proc.returncode == 0, proc.stderr
+    for volume in yaml.safe_load(proc.stdout)["services"]["mousedroid"]["volumes"]:
+        if volume.get("source") == _CACHE_VOLUME:
+            return volume["target"], bool(volume.get("read_only", False))
+    raise AssertionError("the resolved config has no cache volume")
+
+
+@pytest.mark.parametrize("source", ["project-dotenv", "COMPOSE_ENV_FILES"])
+def test_the_premise_holds_against_compose_itself(tmp_path: Path, source: str) -> None:
+    """Unasked, compose reads the env file; told ``--env-file /dev/null``, it does not.
+
+    ``compose config`` resolves interpolation without a daemon. With the key
+    absent from the environment, the planted value moves the cache onto
+    ``/etc`` read-only -- an OS tree and an injected ``:ro``, both refused by
+    the validator, which never saw it.
+    """
+    if (
+        shutil.which("docker") is None
+        or subprocess.run(
+            ["docker", "compose", "version"], capture_output=True, check=False
+        ).returncode
+    ):
+        pytest.skip("needs the docker compose CLI (config runs without a daemon)")
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    compose_file = checkout / _COMPOSE.name
+    compose_file.write_text(_COMPOSE.read_text(encoding="utf-8"), encoding="utf-8")
+    unset = {_KEY, "COMPOSE_ENV_FILES", "COMPOSE_FILE", "COMPOSE_PROJECT_NAME"}
+    env = {k: v for k, v in os.environ.items() if k not in unset}
+    planted = f"{_KEY}=/etc:ro\n"
+    if source == "project-dotenv":
+        (checkout / ".env").write_text(planted, encoding="utf-8")
+    else:
+        elsewhere = tmp_path / "elsewhere.env"
+        elsewhere.write_text(planted, encoding="utf-8")
+        env["COMPOSE_ENV_FILES"] = str(elsewhere)
+
+    unasked = _cache_mount(["-f", str(compose_file)], env)
+    guarded = _cache_mount([*_NO_ENV_FILE.split(), str(compose_file)], env)
+
+    assert unasked == ("/etc", True), f"compose no longer reads {source}: {unasked}"
+    assert guarded == (JetsonConfig().tensorrt_cache_dir.as_posix(), False)
 
 
 # ---------------------------------------------------------------------------

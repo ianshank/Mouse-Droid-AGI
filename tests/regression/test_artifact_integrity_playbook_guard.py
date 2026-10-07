@@ -5,7 +5,9 @@ from the ``refusing to load`` line into a ``sudo rm``. Its ``case`` guard is all
 that stands between a mistyped path and root deleting it, and the ORDER of its
 arms is the guard: the ``..`` arm must come before the weights-prefix arm, or
 ``weights/../src`` matches the prefix and is deleted. A dry run of the first
-draft did exactly that.
+draft did exactly that. The restart sits in the accepted arm, behind the
+``rm``: a refused path or a failed delete must leave the service alone, since
+restarting would only refuse the same file again.
 
 The snippet runs as documented: extracted from the playbook, with ``sudo``
 shimmed to record what it was asked to do. The tree it may delete from is
@@ -35,8 +37,11 @@ _ASSIGNMENT = re.compile(r"^ARTIFACT=.*$", re.M)
 
 pytestmark = requires_bash()
 
+# Records every call; with FAIL_RM set, ``rm`` fails as a busy or read-only
+# file would.
 _SUDO_SHIM = """#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$SUDO_LOG"
+if [ "$1" = rm ] && [ -n "${FAIL_RM:-}" ]; then exit 1; fi
 """
 
 
@@ -65,7 +70,7 @@ def _delete_snippet() -> str:
     return matching[0]
 
 
-def _run(tmp_path: Path, artifact: str) -> tuple[list[str], str]:
+def _run(tmp_path: Path, artifact: str, *, fail_rm: bool = False) -> tuple[list[str], str]:
     """Run the snippet with ``ARTIFACT`` set as the operator would set it.
 
     Returns:
@@ -90,9 +95,12 @@ def _run(tmp_path: Path, artifact: str) -> tuple[list[str], str]:
             "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
             "SUDO_LOG": str(sudo_log),
             "TEST_ARTIFACT": artifact,
+            **({"FAIL_RM": "1"} if fail_rm else {}),
         },
     )
-    assert proc.returncode == 0, proc.stderr
+    # Only the failed ``rm`` makes the snippet itself fail: the refusal arms
+    # print and end it cleanly.
+    assert proc.returncode == (1 if fail_rm else 0), proc.stderr
     return sudo_log.read_text(encoding="utf-8").splitlines(), proc.stderr
 
 
@@ -136,13 +144,22 @@ def test_a_path_that_leaves_the_weights_tree_is_never_deleted(
 ) -> None:
     calls, stderr = _run(tmp_path, f"{_weights_root()}{relative}")
 
-    assert not [call for call in calls if call.startswith("rm")], calls
+    assert calls == [], f"a refused path still reached sudo: {calls}"
     assert why in stderr
+
+
+def test_a_failed_delete_does_not_restart(tmp_path: Path) -> None:
+    """The file is still there, so a restart would only refuse it again."""
+    artifact = f"{_weights_root()}/dual_stream_rssm/model.onnx"
+
+    calls, _ = _run(tmp_path, artifact, fail_rm=True)
+
+    assert calls == [f"rm -v -- {artifact}"]
 
 
 @pytest.mark.parametrize("artifact", ["/etc/passwd", "/opt/mousedroid/src/x.py", "weights/x"])
 def test_a_path_elsewhere_is_never_deleted(tmp_path: Path, artifact: str) -> None:
     calls, stderr = _run(tmp_path, artifact)
 
-    assert not [call for call in calls if call.startswith("rm")], calls
+    assert calls == [], f"a refused path still reached sudo: {calls}"
     assert "not under" in stderr

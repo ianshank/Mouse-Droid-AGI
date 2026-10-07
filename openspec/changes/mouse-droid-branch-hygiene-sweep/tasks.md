@@ -719,6 +719,22 @@ against the tree before it was changed; three were declined, and why is recorded
   Deleting the pre-existing LLM-group metric test that the all-groups test overlaps: harmless, and
   not this change's to remove.
 
+### Fifth review round — Copilot's review of the final head
+
+- **The validator could be bypassed through an env file compose reads on its own.** Compose
+  interpolates from `<project dir>/.env` and `COMPOSE_ENV_FILES` as well as the environment, and the
+  check sees only the environment. The path is real, not theoretical: `deploy_remote.sh`'s rsync
+  excludes `.git` and caches but not `.env`, so a developer's untracked `.env` lands in
+  `/opt/mousedroid`, the project directory on both start paths. Reproduced with `compose config`
+  against the shipped compose file: a planted `MOUSEDROID_JETSON__TENSORRT_CACHE_DIR=/etc:ro` mounted
+  the cache read-only over `/etc`, and the same via `COMPOSE_ENV_FILES` put it on `/usr/lib`. Every
+  compose call on both paths now passes `--env-file /dev/null` (one `_compose` helper in the deploy
+  script; the unit's three lines), which replaces both sources, so compose interpolates from exactly
+  the environment the check read. Pinned three ways: the deploy script's logged compose calls, the
+  unit's lines, and a premise test against compose itself (skipped where the CLI is absent).
+- **The playbook's restart ran after a refusal or a failed `rm`.** It now sits in the accepted arm
+  behind `&&`; a refused path or a failed delete leaves the service alone.
+
 ## Phase 6 — Documentation, and the alert that does not exist
 
 - [x] 6.1 Add a `ModelArtifactDigestMismatch` rule to `config/prometheus/alerts.yml` for
