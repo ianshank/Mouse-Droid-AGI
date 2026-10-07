@@ -9,6 +9,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from mousedroid.common.rate_limit import TokenBucket
+from mousedroid.common.time.protocol import MockClock
 
 
 async def _take_ok(bucket: TokenBucket) -> bool:
@@ -38,12 +39,20 @@ async def test_explicit_capacity_overrides_default() -> None:
 
 @pytest.mark.asyncio
 async def test_refills_over_time() -> None:
-    """After draining, waiting refill_per_s seconds yields one new token."""
-    bucket = TokenBucket(rate_per_s=20.0, capacity=1.0)
+    """After draining, one refill interval (1/rate s) yields one new token, not before.
+
+    Simulated time, through the clock seam the bucket exposes for tests. The
+    wall-clock version slept 60 ms for a 50 ms token and failed on Windows:
+    ``time.monotonic`` ticks every 15.625 ms there and asyncio treats a timer
+    within one tick as due, so the sleep could end 46.9 ms in -- 0.94 of a token.
+    """
+    clock = MockClock()
+    bucket = TokenBucket(rate_per_s=20.0, capacity=1.0, clock=clock)
     assert await _take_ok(bucket) is True
     assert await _take_ok(bucket) is False
-    # 1/20 s + a little slack so the loop's monotonic clock advances.
-    await asyncio.sleep(0.06)
+    clock.advance(0.04)  # 0.8 of a token: still empty
+    assert await _take_ok(bucket) is False
+    clock.advance(0.01)  # 50 ms in all: one token
     assert await _take_ok(bucket) is True
 
 
