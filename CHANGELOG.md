@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — the nightly Spec Harness, red every night since 2026-09-08
+
+`validate-slow` runs `--strict-git`, which needs every `done` feature's `implemented_in` to resolve.
+Seventeen did not: F-036–F-042, F-043–F-046, F-048 and F-054–F-058 were pinned to commits on their
+PR branches, and those PRs were squash-merged and the branches deleted, so the commits exist nowhere
+a clone can fetch. Pull-request CI skips that job, so every PR stayed green while the nightly failed.
+Each is now pinned to its PR's merge commit (#222, #224, #242), all ancestors of the default branch
+— the follow-up step `.claude/skills/feature-closeout/SKILL.md` prescribes.
+
 ### Fixed — three alerts that could never fire, and the two the docstrings promised
 
 `promtool check rules` validates syntax, not whether a rule can ever be true, and three rules
