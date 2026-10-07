@@ -21,8 +21,11 @@
 #   MOUSEDROID_REMOTE_SRC             Rsync destination on the rover
 #                                     (default: /opt/mousedroid/src)
 #   MOUSEDROID_CONFIG_DIR             Remote config dir (default: /etc/mousedroid)
-#   MOUSEDROID_INSTALL_DIR            Remote install root; the venv is <it>/venv,
-#                                     as deploy_jetson.sh creates it (default: /opt/mousedroid)
+#   MOUSEDROID_REMOTE_INSTALL_DIR     Remote install root; the venv is <it>/venv, as
+#                                     deploy_jetson.sh creates it, and when set it is
+#                                     handed to that script too (default: /opt/mousedroid).
+#                                     The legacy bare-metal unit, mousedroid.service,
+#                                     hardcodes /opt/mousedroid/venv: relocate it too.
 #   MOUSEDROID_DEPLOY_CONFIRM_DIRTY   1/true = same as --confirm-dirty
 #   MOUSEDROID_DEPLOY_ARCHIVE_DIR     Where rover WIP archives land on THIS
 #                                     machine (default: ~/.mousedroid/rover-wip)
@@ -41,11 +44,17 @@ REMOTE_SRC="${MOUSEDROID_REMOTE_SRC:-/opt/mousedroid/src}"
 REMOTE_CONFIG="${MOUSEDROID_CONFIG_DIR:-/etc/mousedroid}"
 # deploy_jetson.sh creates the venv at ${INSTALL_DIR}/venv with
 # INSTALL_DIR=${MOUSEDROID_INSTALL_DIR:-/opt/mousedroid}; derive it the same way
-# instead of hardcoding the default. The literal used to appear twice below, so
-# an install-dir override left the health probe on the old tree and made
-# pip_reinstall's `test -d` miss, silently falling through to a FULL
-# deploy_jetson.sh run in place of a quick reinstall.
-REMOTE_INSTALL_DIR="${MOUSEDROID_INSTALL_DIR:-/opt/mousedroid}"
+# instead of hardcoding the default. The literal used to appear twice below.
+#
+# Its own REMOTE_ knob, like MOUSEDROID_REMOTE_SRC, and not MOUSEDROID_INSTALL_DIR:
+# that one is read by docker_deploy.sh and deploy_jetson.sh on the machine THEY
+# run on, so a value exported on this PC for those must not retarget the rover.
+# When set it is also passed to the rover's deploy_jetson.sh (run_deploy), so the
+# venv this script looks for is the venv that script creates -- otherwise
+# pip_reinstall's `test -d` would miss on every run and fall through to a FULL
+# deploy_jetson.sh, which would create the venv somewhere else again.
+REMOTE_INSTALL_DIR_OVERRIDE="${MOUSEDROID_REMOTE_INSTALL_DIR:-}"
+REMOTE_INSTALL_DIR="${REMOTE_INSTALL_DIR_OVERRIDE:-/opt/mousedroid}"
 REMOTE_VENV="${REMOTE_INSTALL_DIR}/venv"
 DEPLOY_MODE="code-only"
 HOST=""
@@ -127,12 +136,13 @@ require_safe_remote_path() {
 
 require_safe_remote_path "MOUSEDROID_REMOTE_SRC" "${REMOTE_SRC}"
 require_safe_remote_path "MOUSEDROID_CONFIG_DIR" "${REMOTE_CONFIG}"
-require_safe_remote_path "MOUSEDROID_INSTALL_DIR" "${REMOTE_INSTALL_DIR}"
+require_safe_remote_path "MOUSEDROID_REMOTE_INSTALL_DIR" "${REMOTE_INSTALL_DIR}"
 
 # Pre-quoted forms for interpolation into remote command strings. Use these,
 # not the raw variables, anywhere the value crosses into a shell on the rover.
 REMOTE_SRC_Q="$(printf '%q' "${REMOTE_SRC}")"
 REMOTE_CONFIG_Q="$(printf '%q' "${REMOTE_CONFIG}")"
+REMOTE_INSTALL_DIR_Q="$(printf '%q' "${REMOTE_INSTALL_DIR}")"
 REMOTE_VENV_Q="$(printf '%q' "${REMOTE_VENV}")"
 
 remote_cmd() {
@@ -410,7 +420,15 @@ run_hardware_setup() {
 
 run_deploy() {
     log_section "Running deploy_jetson.sh on remote"
-    remote_sudo bash "${REMOTE_SRC_Q}/scripts/deploy_jetson.sh"
+    # Only an explicit override is passed, so the default leaves the command
+    # the rover receives exactly as it was. `env` because sudo resets the
+    # environment; ssh flattens the arguments, hence the pre-quoted value.
+    if [ -n "${REMOTE_INSTALL_DIR_OVERRIDE}" ]; then
+        remote_sudo env "MOUSEDROID_INSTALL_DIR=${REMOTE_INSTALL_DIR_Q}" \
+            bash "${REMOTE_SRC_Q}/scripts/deploy_jetson.sh"
+    else
+        remote_sudo bash "${REMOTE_SRC_Q}/scripts/deploy_jetson.sh"
+    fi
 }
 
 # ---------------------------------------------------------------------------

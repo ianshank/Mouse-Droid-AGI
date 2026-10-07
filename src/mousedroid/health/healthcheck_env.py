@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from mousedroid.constants import HEALTH_ROUTE_SUFFIX
+from mousedroid.constants import HEALTH_ROUTE_SUFFIX, TCP_PORT_MAX
 
 if TYPE_CHECKING:
     # ``Settings`` is only used as a type annotation. ``from __future__
@@ -34,6 +34,17 @@ if TYPE_CHECKING:
 # alphanumerics, dot, dash, underscore, plus colon (for paths like
 # C:/...). Anything else is unsafe for shell-source contexts.
 _SAFE_PATH_RE = re.compile(r"^[A-Za-z0-9._/\-:]+$")
+
+# The URL-path rule ``scripts/docker_deploy.sh`` applies to the health path it
+# reads back -- absolute, then RFC 3986 unreserved characters plus ``/`` -- so a
+# path is published only if the probe will accept it. Every character it allows
+# is also literal inside the single quotes the env file wraps values in.
+# ``tests/unit/scripts/test_docker_deploy_health_endpoint.py`` runs the shell
+# side against the same cases, so the two cannot drift apart unnoticed.
+_RESOLVED_URL_PATH_RE = re.compile(r"/[A-Za-z0-9._~/-]*")
+
+# TCP ports a probe can connect to; see ``TCP_PORT_MAX``.
+_TCP_PORTS = range(1, TCP_PORT_MAX + 1)
 
 
 def _validate_path(value: str, field: str) -> str:
@@ -60,6 +71,54 @@ def _validate_path(value: str, field: str) -> str:
     return value
 
 
+def _resolved_telemetry_port(cfg: Settings) -> str | None:
+    """Return the port the rover will serve, or ``None`` when it cannot be known.
+
+    Only the ``fixed`` strategy binds ``telemetry.port`` itself: ``fallback_range``
+    may bind a later port, and ``kernel_assigned`` lets the OS pick one. For those
+    the configured port would be a confident wrong answer, so nothing is
+    published and the deploy probe says why.
+
+    The value is re-checked rather than trusted -- an in-range ``int``, written
+    back through ``int()`` -- so a ``Settings`` that bypassed validation
+    (``model_construct``, a test double) can only ever put digits in the file.
+
+    Args:
+        cfg: Resolved runtime ``Settings`` instance.
+
+    Returns:
+        The port as a decimal string, or ``None``.
+    """
+    telemetry = cfg.telemetry
+    if telemetry.port_discovery_strategy != "fixed":
+        return None
+    port = telemetry.port
+    if isinstance(port, bool) or not isinstance(port, int) or port not in _TCP_PORTS:
+        return None
+    return str(int(port))
+
+
+def _resolved_health_path(cfg: Settings) -> str | None:
+    """Return the health route the rover registers, or ``None`` if unusable.
+
+    ``telemetry.api_prefix`` is a free-form string in the schema, so a prefix
+    the rover accepts can still fail the probe's URL rule (a space, a quote, no
+    leading ``/``). Such a path is OMITTED, never raised on: the entrypoint
+    writes this file under ``set -eu`` before it execs the rover, so raising
+    here would turn a prefix the rover itself accepts into a crash loop.
+
+    Args:
+        cfg: Resolved runtime ``Settings`` instance.
+
+    Returns:
+        The path, or ``None``.
+    """
+    path = f"{cfg.telemetry.api_prefix}{HEALTH_ROUTE_SUFFIX}"
+    if not _RESOLVED_URL_PATH_RE.fullmatch(path):
+        return None
+    return path
+
+
 def derive_healthcheck_env(cfg: Settings) -> dict[str, str]:
     """Return the env-var mapping for the Docker healthcheck script.
 
@@ -67,16 +126,21 @@ def derive_healthcheck_env(cfg: Settings) -> dict[str, str]:
         cfg: Resolved runtime ``Settings`` instance.
 
     Returns:
-        Mapping of env var name to string value. All values are
-        non-empty and validated for shell-source safety. Keys form a
-        stable contract with ``scripts/mousedroid_healthcheck.sh``.
+        Mapping of env var name to string value, every value validated for
+        shell-source safety. The four heartbeat/grace keys form a stable
+        contract with ``scripts/mousedroid_healthcheck.sh`` and are never
+        empty. The two ``MOUSEDROID_RESOLVED_*`` keys are read by
+        ``scripts/docker_deploy.sh``; each is always present and is EMPTY when
+        the rover cannot vouch for it (see :func:`_resolved_telemetry_port`
+        and :func:`_resolved_health_path`). Present-but-empty is how the probe
+        tells "unknowable" apart from "code that predates the key" (absent).
 
     Raises:
-        ValueError: If any path-typed config value contains characters
-            unsafe for shell sourcing.
+        ValueError: If a heartbeat or start-grace path contains characters
+            unsafe for shell sourcing. The resolved keys never raise.
     """
     stale_s = cfg.loop.watchdog_interval_s * cfg.loop.watchdog_tolerance_factor
-    return {
+    env = {
         "MOUSEDROID_HEARTBEAT_PATH": _validate_path(
             cfg.loop.watchdog_heartbeat_path,
             "watchdog_heartbeat_path",
@@ -87,18 +151,15 @@ def derive_healthcheck_env(cfg: Settings) -> dict[str, str]:
             cfg.loop.start_grace_file,
             "start_grace_file",
         ),
-        # The telemetry endpoint the rover will actually serve, derived from
-        # the SAME ``Settings`` as every value above -- and therefore from the
-        # exact ``--config`` the entrypoint hands to ``mousedroid.main``.
-        # ``scripts/docker_deploy.sh`` reads these from the running container
-        # rather than guessing: before they existed it probed
-        # ``MOUSEDROID_TELEMETRY_PORT``, which is not a settings key (the
-        # nested delimiter is ``__``), so an operator moving the port the
-        # supported way left the probe on the old one. ``RESOLVED_`` marks
-        # them as outputs of resolution, never operator inputs.
-        "MOUSEDROID_RESOLVED_TELEMETRY_PORT": str(cfg.telemetry.port),
-        "MOUSEDROID_RESOLVED_HEALTH_PATH": _validate_path(
-            f"{cfg.telemetry.api_prefix}{HEALTH_ROUTE_SUFFIX}",
-            "telemetry.api_prefix",
-        ),
     }
+    # The telemetry endpoint the rover will actually serve, derived from the
+    # SAME ``Settings`` as every value above -- and therefore from the exact
+    # ``--config`` the entrypoint hands to ``mousedroid.main``.
+    # ``scripts/docker_deploy.sh`` reads these from the running container rather
+    # than guessing: before they existed it probed ``MOUSEDROID_TELEMETRY_PORT``,
+    # which is not a settings key (the nested delimiter is ``__``), so an
+    # operator moving the port the supported way left the probe on the old one.
+    # ``RESOLVED_`` marks them as outputs of resolution, never operator inputs.
+    env["MOUSEDROID_RESOLVED_TELEMETRY_PORT"] = _resolved_telemetry_port(cfg) or ""
+    env["MOUSEDROID_RESOLVED_HEALTH_PATH"] = _resolved_health_path(cfg) or ""
+    return env

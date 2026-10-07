@@ -9,9 +9,18 @@
 # rules against synthetic series shaped like the ones the registry really
 # produces, so "does this alert ever fire" is a test result, not an argument.
 #
-# The shape that matters: every counter in this registry is PURE-ADD -- absent
-# from /metrics until its first write, so the series is born non-zero. A rule
-# built only on increase()/rate() never sees a series being born.
+# Two shapes matter:
+#
+#   * Every counter in this registry is PURE-ADD -- absent from /metrics until
+#     its first write, so the series is born non-zero. A rule built only on
+#     increase()/rate() never sees a series being born.
+#   * A failed scrape writes a STALENESS MARKER ('stale' below), which an
+#     instant selector reads as "absent". A rule that treats absence as "not
+#     yet born" (`m unless m offset W`) therefore pages one window after every
+#     scrape blip, on a counter that never moved. A rover on Wi-Fi blips often.
+#
+# '_' is a scrape that produced no sample for the series; 'stale' is the
+# marker Prometheus writes when a series vanishes or its scrape fails.
 #
 # Not loaded by Prometheus: the scrape configs list `alerts.yml` explicitly in
 # rule_files, never a glob.
@@ -28,7 +37,7 @@ tests:
   # The previous `increase(...[1m]) > 0` stayed silent here and only fired from
   # the second violation onward.
   # ---------------------------------------------------------------------------
-  - name: SafetyViolation fires on a rover's first-ever violation
+  - name: SafetyViolation fires on a rover's first-ever violation, for one window
     interval: 15s
     input_series:
       - series: 'mousedroid_safety_violations_total{instance="rover1",job="mousedroid",law="law1"}'
@@ -39,7 +48,7 @@ tests:
         exp_alerts: []
       - eval_time: 2m
         alertname: SafetyViolation
-        exp_alerts:
+        exp_alerts: &safety_law1_new_1
           - exp_labels:
               severity: critical
               instance: rover1
@@ -47,10 +56,13 @@ tests:
               law: law1
             exp_annotations:
               summary: "Safety violations detected (law=law1)"
-              description: "Safety violation counter for law=law1 increased by 1 on rover1 in the last minute. Investigate immediately — constitutional safety constraints may be at risk."
-              config_ref: "SafetyConfig (Three Laws enforcement)"
-      # The window passes: a single violation does not page forever.
-      - eval_time: 4m
+              description: "Safety violation counter for law=law1 increased by 1 on rover1. Investigate immediately — constitutional safety constraints may be at risk."
+              config_ref: "SafetyConfig (Three Laws enforcement); 1m window, 5m gap tolerance and 1d memory are operator defaults"
+      - eval_time: 2m45s
+        alertname: SafetyViolation
+        exp_alerts: *safety_law1_new_1
+      # One window later: a single violation does not page forever.
+      - eval_time: 3m
         alertname: SafetyViolation
         exp_alerts: []
 
@@ -65,16 +77,81 @@ tests:
         exp_alerts: []
       - eval_time: 5m15s
         alertname: SafetyViolation
-        exp_alerts:
-          - exp_labels:
-              severity: critical
-              instance: rover1
-              job: mousedroid
-              law: law1
-            exp_annotations:
-              summary: "Safety violations detected (law=law1)"
-              description: "Safety violation counter for law=law1 increased by 1 on rover1 in the last minute. Investigate immediately — constitutional safety constraints may be at risk."
-              config_ref: "SafetyConfig (Three Laws enforcement)"
+        exp_alerts: *safety_law1_new_1
+
+  # A single failed scrape on a counter that never moves. The `unless ... offset
+  # 1m` rule paged here at 11m15s -- "increased by 3" -- one window after the
+  # blip, because the offset selector landed on the staleness marker.
+  - name: SafetyViolation stays silent across a scrape blip
+    interval: 15s
+    input_series:
+      - series: 'mousedroid_safety_violations_total{instance="rover1",job="mousedroid",law="law1"}'
+        values: '3x40 stale 3x40'
+    alert_rule_test:
+      - eval_time: 10m15s
+        alertname: SafetyViolation
+        exp_alerts: []
+      - eval_time: 10m30s
+        alertname: SafetyViolation
+        exp_alerts: []
+      - eval_time: 11m15s
+        alertname: SafetyViolation
+        exp_alerts: []
+      - eval_time: 11m30s
+        alertname: SafetyViolation
+        exp_alerts: []
+
+  # The rover is unreachable for 2m15s -- longer than the window -- and the
+  # counter has not moved. The `unless ... offset` rule paged on reconnect.
+  - name: SafetyViolation stays silent when scraping resumes after an outage
+    interval: 15s
+    input_series:
+      - series: 'mousedroid_safety_violations_total{instance="rover1",job="mousedroid",law="law1"}'
+        values: '3x19 stale _x8 3x20'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: SafetyViolation
+        exp_alerts: []
+      - eval_time: 7m15s
+        alertname: SafetyViolation
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: SafetyViolation
+        exp_alerts: []
+
+  # ...but a violation counted DURING that outage pages on reconnect, with the
+  # count it rose by (1), not the counter's total (2). increase() over the 1m
+  # window holds only post-outage samples here, so it alone sees nothing; a
+  # guard that suppressed the reconnect window would miss it entirely.
+  - name: SafetyViolation reports a violation counted during an outage, on reconnect
+    interval: 15s
+    input_series:
+      - series: 'mousedroid_safety_violations_total{instance="rover1",job="mousedroid",law="law1"}'
+        values: '1x19 stale _x8 2x20'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: SafetyViolation
+        exp_alerts: []
+      - eval_time: 7m15s
+        alertname: SafetyViolation
+        exp_alerts: *safety_law1_new_1
+
+  # The process restarts (the counter vanishes: 'stale', then no samples) and
+  # the new process' first violation comes 5m later. The old process' last
+  # value (3) is the most recent earlier sample, and is HIGHER: a counter
+  # reset, so all of the new count is new.
+  - name: SafetyViolation fires on the first violation after a process restart
+    interval: 15s
+    input_series:
+      - series: 'mousedroid_safety_violations_total{instance="rover1",job="mousedroid",law="law1"}'
+        values: '3x19 stale _x20 1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SafetyViolation
+        exp_alerts: []
+      - eval_time: 10m15s
+        alertname: SafetyViolation
+        exp_alerts: *safety_law1_new_1
 
   # ---------------------------------------------------------------------------
   # ModelArtifactDigestMismatch (page): written once, at boot, before the
@@ -100,10 +177,38 @@ tests:
             exp_annotations:
               summary: "Model artifact bdi_weights refused by its SHA-256 gate"
               description: "bdi_weights failed its SHA-256 manifest check at boot on rover1 and was refused. For bdi_weights the rover is still running but degraded to the MCTS planner, and stays degraded until restarted with verified weights. See docs/playbooks/artifact-integrity-fail.md."
-              config_ref: "cognitive.require_sha256_manifest / world_model.onnx_require_sha256_manifest"
+              config_ref: "cognitive.require_sha256_manifest / world_model.onnx_require_sha256_manifest; 5m gap tolerance is an operator default"
       - eval_time: 90m
         alertname: ModelArtifactDigestMismatch
         exp_alerts: *model_artifact_alert
+
+  # The page is meant to stay open for hours. A failed scrape must not resolve
+  # it -- the bare series reads "absent" at the blip, and the page would close
+  # and re-open, which looks like a second refusal.
+  - name: ModelArtifactDigestMismatch stays firing across a scrape blip
+    interval: 15s
+    input_series:
+      - series: 'mousedroid_model_artifact_sha256_mismatches_total{instance="rover1",job="mousedroid",artifact="bdi_weights"}'
+        values: '1x40 stale 1x40'
+    alert_rule_test:
+      - eval_time: 10m15s
+        alertname: ModelArtifactDigestMismatch
+        exp_alerts: *model_artifact_alert
+
+  # Restarted with verified weights: the counter is gone for good. The tolerance
+  # that rides out a blip delays the resolve by at most 5m, and no longer.
+  - name: ModelArtifactDigestMismatch resolves after a restart with verified weights
+    interval: 15s
+    input_series:
+      - series: 'mousedroid_model_artifact_sha256_mismatches_total{instance="rover1",job="mousedroid",artifact="bdi_weights"}'
+        values: '1x40 stale _x40'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: ModelArtifactDigestMismatch
+        exp_alerts: *model_artifact_alert
+      - eval_time: 15m15s
+        alertname: ModelArtifactDigestMismatch
+        exp_alerts: []
 
   - name: ModelArtifactDigestMismatch is silent when nothing was refused
     interval: 15s
@@ -119,7 +224,7 @@ tests:
   # CloudWeightUpdateDigestMismatch (page): an event. The first refusal creates
   # the pure-add series at 1; it must fire at once and resolve after 15m.
   # ---------------------------------------------------------------------------
-  - name: CloudWeightUpdateDigestMismatch fires on the first refusal, then resolves
+  - name: CloudWeightUpdateDigestMismatch fires on the first refusal, for 15m
     interval: 1m
     input_series:
       - series: 'mousedroid_cloud_weight_update_sha256_mismatches_total{instance="rover1",job="mousedroid",repo_id="ianshank/mousedroid-policy-v2"}'
@@ -130,7 +235,7 @@ tests:
         exp_alerts: []
       - eval_time: 10m
         alertname: CloudWeightUpdateDigestMismatch
-        exp_alerts:
+        exp_alerts: &ota_refused_1
           - exp_labels:
               severity: page
               subsystem: artifact_integrity
@@ -140,8 +245,44 @@ tests:
             exp_annotations:
               summary: "OTA weight update from ianshank/mousedroid-policy-v2 refused by its SHA-256 gate"
               description: "A downloaded artifact from ianshank/mousedroid-policy-v2 did not match its sha256 manifest on rover1, and the swap was refused. The rover is still on its previous weights. Something upstream produced or served a bad artifact -- investigate before re-publishing. See docs/playbooks/artifact-integrity-fail.md."
-              config_ref: "operator default 15m window; gate: cloud weight-update sha256_manifest_filename"
-      - eval_time: 30m
+              config_ref: "operator defaults: 15m window, 5m gap tolerance, 1d memory; gate: cloud weight-update sha256_manifest_filename"
+      - eval_time: 24m
+        alertname: CloudWeightUpdateDigestMismatch
+        exp_alerts: *ota_refused_1
+      - eval_time: 25m
+        alertname: CloudWeightUpdateDigestMismatch
+        exp_alerts: []
+
+  # A blip inside the 15m window must not resolve the page: it would re-open a
+  # minute later, and a second page reads as a second refusal.
+  - name: CloudWeightUpdateDigestMismatch stays open across a blip inside its window
+    interval: 1m
+    input_series:
+      - series: 'mousedroid_cloud_weight_update_sha256_mismatches_total{instance="rover1",job="mousedroid",repo_id="ianshank/mousedroid-policy-v2"}'
+        values: '_x10 1x3 stale 1x30'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: CloudWeightUpdateDigestMismatch
+        exp_alerts: *ota_refused_1
+
+  # A blip long after the refusal must not fake a new one. The `unless ...
+  # offset 15m` rule paged here at 56m, one window after the blip at 41m.
+  - name: CloudWeightUpdateDigestMismatch stays silent across a later blip
+    interval: 1m
+    input_series:
+      - series: 'mousedroid_cloud_weight_update_sha256_mismatches_total{instance="rover1",job="mousedroid",repo_id="ianshank/mousedroid-policy-v2"}'
+        values: '1x40 stale 1x40'
+    alert_rule_test:
+      - eval_time: 41m
+        alertname: CloudWeightUpdateDigestMismatch
+        exp_alerts: []
+      - eval_time: 42m
+        alertname: CloudWeightUpdateDigestMismatch
+        exp_alerts: []
+      - eval_time: 56m
+        alertname: CloudWeightUpdateDigestMismatch
+        exp_alerts: []
+      - eval_time: 57m
         alertname: CloudWeightUpdateDigestMismatch
         exp_alerts: []
 

@@ -586,8 +586,50 @@ defects were real, and the task wording around them was not.
   compose. The schema has no validator on `tensorrt_cache_dir` at all; that, and the observation
   that relocating a named volume's container path buys no host-side benefit, are recorded as
   follow-ups rather than widened into here.
-- **5.7 — confirmed as written.** The venv is now `${MOUSEDROID_INSTALL_DIR:-/opt/mousedroid}/venv`,
-  exactly as `deploy_jetson.sh` creates it, validated and `%q`-quoted like its siblings.
+- **5.7 — defect confirmed; the variable the task named was the wrong one (declared deviation).**
+  The first version read `MOUSEDROID_INSTALL_DIR`, as the task said. Review found two faults, both
+  reproduced with the ssh shim: that name is what `docker_deploy.sh` and `deploy_jetson.sh` read
+  on the machine they run on, so a PC exporting it for those retargeted the rover; and the value
+  never reached the rover, so after a full deploy built `/opt/mousedroid/venv` this script went on
+  looking elsewhere and fell back to a full deploy every run. Now `MOUSEDROID_REMOTE_INSTALL_DIR`
+  (default `/opt/mousedroid`, validated and `%q`-quoted like its siblings), passed to the rover's
+  `deploy_jetson.sh` when set; with it unset, every command the rover receives is unchanged. The
+  legacy bare-metal `mousedroid.service` still hardcodes `/opt/mousedroid/venv`, so relocating an
+  install means editing that unit too — stated in the script's help rather than widened into here.
+
+### Review corrections to 5.3 and 5.6 — found by peer and security review, each reproduced
+
+- **5.3 — a schema-valid `api_prefix` crash-looped the container.** The derivation reused the
+  heartbeat-path whitelist and RAISED on anything outside it; `api_prefix` is a free-form `str`, so
+  `/~rover` loaded and then killed the entrypoint (`set -eu`) before the rover started. Now each
+  resolved key is published only when the probe's own URL rule accepts it, else EMPTY — and
+  present-but-empty is how the probe tells "cannot vouch" from "code older than the keys"
+  (absent), which is the common upgrade case. The port is re-checked (`str(int(...))`, 1..65535)
+  and published only under `port_discovery_strategy: fixed`; under the other two the configured
+  port is not the bound one. The probe's advice was also wrong: "rebuild the image" — the image
+  runs an editable install off the bind mount, so a restart on current code is what writes the keys.
+- **5.3 — container text reached the terminal as escapes.** `echo -e` interpreted a printable
+  `\033]52;…` from the container's env file (screen clear, clipboard write), and a value was
+  printed before it was validated. Messages are `printf %s` now, container values are validated
+  before any use, and a rejected one is shown `%q`-quoted. A one-table test runs the Python publish
+  rule and the bash probe rule over the same cases, under a UTF-8 locale; the probe matches in C.
+- **5.6 — the new validator spawn re-opened code execution from `docker.env`.** The loader
+  exported every key, so `BASH_ENV` ran as root when the deploy started `bash validate_compose_env.sh`
+  (it does not at 1b34271~1, before the spawn existed). The loader now refuses names that hook
+  process startup (shell startup, `LD_*`, `PATH`); both units that read the file unset the same
+  names, `PATH` excepted because that would also remove the PATH systemd gives the unit. Pinned
+  between the loader and both units.
+- **5.6 — the validator itself.** It printed the refused value (on the boot path, systemd joins
+  the next lines onto a value with an open quote — in the template, the API key and token, into the
+  journal); it refused a trailing `/`, which on the fatal boot path would have stopped a rover that
+  booted before; and it accepted `/var/run` and `/var/lock` (links into `/run`), the service's other
+  mount targets, and paths covering `/opt/mousedroid/src` or `weights`. All fixed, with the target
+  lists pinned to the compose file, the Dockerfile and the schema. Still not covered, and now said
+  in the script: the five other values compose splices into mount and device entries, and a
+  project `.env` or `COMPOSE_ENV_FILES`.
+- **5.3's AQA pin was a partial compare.** It checked that `"$@"` appeared in both entrypoint
+  commands; `print_healthcheck_env --config x "$@"` passed it. It now compares the interpreter and
+  the full argument lists.
 
 ## Phase 6 — Documentation, and the alert that does not exist
 
@@ -613,19 +655,31 @@ defects were real, and the task wording around them was not.
   there; the golden diff is exactly that rename. The Grafana MCP panel was dead for the same reason,
   hidden by a dashboard-test whitelist that asserted the name without checking it — removed, now
   that the sample seeds the MCP family.
-- **Declared extension: `SafetyViolation` (critical) missed every rover's first violation.** Every
-  counter here is pure-add — absent until its first write, so born at 1 — and `increase()` never
-  sees a series being born. The old rule fired only from the second violation; promtool proves
-  both behaviours. Fixed with a second `unless ... offset` arm; `max without ()` keeps labels and
-  avoids a duplicate-labelset error when both arms match. Taken here, not deferred, because it is
-  this slice's defect class on a critical safety alert.
+- **Declared extension: `SafetyViolation` (critical) missed the first violation of every process
+  lifetime** — the first ever and the first after each restart. Every counter here is pure-add —
+  absent until its first write, so born at 1 — and `increase()` never sees a series being born; it
+  also missed counts made during a scrape gap longer than its window. Taken here, not deferred,
+  because it is this slice's defect class on a critical safety alert. Now: count now minus the last
+  count seen before the window (0 when there is none; dropped after a reset), with `last_over_time`
+  on both sides.
+- **Review correction.** The first version added an `unless ... offset` arm. Peer review found, and
+  promtool reproduced, that it pages one window after every failed scrape: the scrape writes a
+  staleness marker, which an instant selector reads as "absent", so an unchanged counter looks
+  newly born ("increased by 3" on a counter that never moved). The review's proposed guard
+  (`and on(instance, job) (up offset 1m == 1)`) stops that but goes blind to anything counted during
+  an outage longer than the window — checked with promtool, not assumed. Range selectors skip
+  staleness markers, which fixes both. The same version claimed `max without ()` prevented a
+  duplicate alert; it did not (`or` already matches without `__name__`), and it is gone. The two
+  artifact rules now also ride out scrape blips instead of closing and reopening their pages.
 - **Declared extension: `CloudWeightUpdateDigestMismatch`.** The OTA sibling carries the identical
   docstring instruction, and `generate_metrics_sample` claimed rules referenced it; none did. Added
   as an event alert (fires on the first refusal, resolves after 15 minutes), since the rover keeps
   its previous weights.
 - **The semantics are now gated, not argued.** `config/prometheus/alerts_test.yml` runs under
-  `promtool test rules` in the `prometheus-check` job. Against the pre-fix `alerts.yml` it fails on
-  exactly the fixed and added rules, and on `SafetyViolation` only at the first-violation check.
+  `promtool test rules` in the `prometheus-check` job. With only the expressions swapped back, it
+  fails exactly where each older rule was wrong: the original `increase()` rule on the first
+  violation ever, the first after a restart, and one counted during an outage; the
+  `unless ... offset` version on every scrape-gap and outage case (false pages, closed pages).
   Runbook: `docs/playbooks/artifact-integrity-fail.md`, pinned into the playbook structure contract.
 
 - [ ] 6.2 Add a `### Added` block for F-050/F-051 under `CHANGELOG.md:9`. The file was not

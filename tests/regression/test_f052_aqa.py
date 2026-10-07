@@ -107,12 +107,36 @@ class TestTheProbeAndTheRoverReadTheSameConfig:
         ]
         derive = [line for line in lines if "mousedroid.tools.print_healthcheck_env" in line]
         rover = [line for line in lines if "mousedroid.main" in line]
-
         assert len(derive) == 1, derive
         assert len(rover) == 1, rover
-        assert '"$@"' in derive[0], derive[0]
         assert rover[0].startswith("exec "), rover[0]
-        assert rover[0].endswith('"$@"'), rover[0]
+
+        derive_python, derive_args = _python_module_call(derive[0])
+        rover_python, rover_args = _python_module_call(rover[0].removeprefix("exec "))
+
+        # Presence of "$@" is not enough: `print_healthcheck_env --config x "$@"`
+        # contains it, and the env file would then describe a different config
+        # from the one the rover runs.
+        assert derive_args == rover_args, (derive_args, rover_args)
+        assert '"$@"' in rover_args, rover_args
+        assert derive_python == rover_python, (derive_python, rover_python)
+
+
+def _python_module_call(line: str) -> tuple[list[str], list[str]]:
+    """Split ``<python...> -m <module> <args...> [> redirect]`` into its parts.
+
+    Returns:
+        ``(interpreter_tokens, argument_tokens)``, quoting kept as written so
+        ``"$@"`` stays distinguishable from ``$@``.
+    """
+    tokens = shlex.split(line, posix=False)
+    module_at = tokens.index("-m") + 1
+    args: list[str] = []
+    for token in tokens[module_at + 1 :]:
+        if token.startswith((">", "<", "|", "&", ";")):
+            break
+        args.append(token)
+    return tokens[: module_at - 1], args
 
 
 class TestTheLegacyConfigKeysDoNotSteerTheRoverPath:
@@ -192,6 +216,8 @@ class TestTheEnvTemplateOffersOnlyKeysThatWork:
             ("MOUSEDROID_DOCKER_ENV_FILE", "it is the path of this file: circular"),
             ("MOUSEDROID_REMOTE_SRC", "deploy_remote.sh runs on the PC, not the rover"),
             ("MOUSEDROID_REMOTE_USER", "deploy_remote.sh runs on the PC, not the rover"),
+            # Added with the review fix that gave the remote venv its own knob.
+            ("MOUSEDROID_REMOTE_INSTALL_DIR", "deploy_remote.sh runs on the PC, not the rover"),
             ("MOUSEDROID_DEPLOY_ARCHIVE_DIR", "deploy_remote.sh runs on the PC, not the rover"),
             ("MOUSEDROID_DEPLOY_CONFIRM_DIRTY", "deploy_remote.sh runs on the PC, not the rover"),
             ("MOUSEDROID_ROVER_WIP_BRANCH", "deploy_remote.sh runs on the PC, not the rover"),

@@ -105,7 +105,8 @@ services:
       # the Python config follow. That works because the docker.env keys reach
       # the *compose process* environment on both start paths —
       # mousedroid-docker.service's ``EnvironmentFile=-/etc/mousedroid/docker.env``
-      # and docker_deploy.sh's ``set -a; . docker.env; set +a`` — whereas the
+      # and docker_deploy.sh's ``_load_env_file_as_data`` (parsed as data, not
+      # sourced) — whereas the
       # ``env_file:`` directive above only injects into the container and is
       # invisible to compose interpolation.
       #

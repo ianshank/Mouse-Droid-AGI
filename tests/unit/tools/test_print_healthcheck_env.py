@@ -86,3 +86,28 @@ def test_main_output_is_shell_sourceable(
     # No unescaped quotes inside any value (would break dot-sourcing).
     for value in parsed.values():
         assert "'" not in value, value
+
+
+def test_a_prefix_the_probe_cannot_use_does_not_stop_the_entrypoint(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The entrypoint runs this under ``set -eu`` before it execs the rover.
+
+    A non-zero exit here is a container crash loop, so a schema-valid
+    ``api_prefix`` the deploy probe cannot use must still exit 0 -- with the
+    health path published empty ("cannot vouch") and the healthcheck's own
+    keys written.
+    """
+    overlay = tmp_path / "overlay.yaml"
+    overlay.write_text(
+        'telemetry:\n  api_prefix: "/api v1"\nmock_hardware: true\n',
+        encoding="utf-8",
+    )
+
+    rc = main(["--config", str(overlay)])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "MOUSEDROID_RESOLVED_HEALTH_PATH=''\n" in out
+    assert "MOUSEDROID_HEARTBEAT_PATH='" in out

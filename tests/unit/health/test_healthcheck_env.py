@@ -12,6 +12,15 @@ from mousedroid.health.healthcheck_env import (
     derive_healthcheck_env,
 )
 
+_BASE_KEYS = {
+    "MOUSEDROID_HEARTBEAT_PATH",
+    "MOUSEDROID_HEARTBEAT_STALE_S",
+    "MOUSEDROID_START_GRACE_S",
+    "MOUSEDROID_START_GRACE_FILE",
+}
+_PORT_KEY = "MOUSEDROID_RESOLVED_TELEMETRY_PORT"
+_PATH_KEY = "MOUSEDROID_RESOLVED_HEALTH_PATH"
+
 
 def _settings(**loop_overrides: object) -> Settings:
     """Build a minimal ``Settings`` with ``loop`` overrides."""
@@ -53,18 +62,99 @@ def test_resolved_health_path_follows_the_api_prefix() -> None:
     assert derive_healthcheck_env(cfg)["MOUSEDROID_RESOLVED_HEALTH_PATH"] == "/rover/v2/health"
 
 
-def test_a_shell_unsafe_api_prefix_is_rejected_not_written() -> None:
-    """The env file is dot-sourced, so an unsafe prefix must fail loudly here.
+@pytest.mark.parametrize(
+    "api_prefix",
+    [
+        "/api'; touch /tmp/x; '",  # would break out of the env file's quotes
+        "/api$(id)",
+        "api/v1",  # no leading slash
+        "/api v1",
+        "/api\nX=1",
+        "/ap\u00ef",  # non-ASCII
+        "/a?b=c",
+    ],
+)
+def test_a_prefix_the_probe_cannot_use_is_omitted_never_raised(api_prefix: str) -> None:
+    """``api_prefix`` is a free-form ``str`` in the schema; every value above loads.
 
-    Same defence-in-depth contract as the path fields above: a value reaching
-    this function through an unvalidated route still cannot break the file.
+    The entrypoint writes this file under ``set -eu`` and only then execs the
+    rover, so a raise here turns a prefix the rover accepts into a container
+    crash loop. The path is published EMPTY instead -- "cannot vouch", which
+    ``docker_deploy.sh`` reports -- and everything else is still written.
+    """
+    cfg = Settings.model_validate({"mock_hardware": True, "telemetry": {"api_prefix": api_prefix}})
+
+    env = derive_healthcheck_env(cfg)
+
+    assert env[_PATH_KEY] == ""
+    assert env[_PORT_KEY] == "8080"
+    assert all(env[key] for key in _BASE_KEYS)
+
+
+def test_a_prefix_outside_the_old_whitelist_but_url_safe_is_published() -> None:
+    """``~`` is an RFC 3986 unreserved character and the probe accepts it.
+
+    The first version reused the heartbeat-path whitelist, which has no ``~``,
+    and so crashed the entrypoint on a prefix like this one.
+    """
+    cfg = Settings.model_validate({"mock_hardware": True, "telemetry": {"api_prefix": "/~rover"}})
+
+    assert derive_healthcheck_env(cfg)[_PATH_KEY] == "/~rover/health"
+
+
+@pytest.mark.parametrize("strategy", ["fallback_range", "kernel_assigned"])
+def test_the_port_is_omitted_when_the_rover_picks_it_at_startup(strategy: str) -> None:
+    """Only ``fixed`` binds ``telemetry.port`` itself.
+
+    ``fallback_range`` may end on a later port and ``kernel_assigned`` on any
+    port; publishing the configured one would hand the probe a confident wrong
+    answer.
     """
     cfg = Settings.model_validate(
-        {"mock_hardware": True, "telemetry": {"api_prefix": "/api'; touch /tmp/x; '"}}
+        {
+            "mock_hardware": True,
+            "telemetry": {"port": 9191, "port_discovery_strategy": strategy},
+        }
     )
 
-    with pytest.raises(ValueError, match=r"telemetry\.api_prefix"):
-        derive_healthcheck_env(cfg)
+    env = derive_healthcheck_env(cfg)
+
+    assert env[_PORT_KEY] == ""
+    assert env[_PATH_KEY] == "/api/v1/health"
+
+
+class _ShoutingInt(int):
+    """An ``int`` whose ``str()`` is not its digits."""
+
+    def __str__(self) -> str:
+        return "1'; echo INJECTED; '"
+
+    __repr__ = __str__
+
+
+@pytest.mark.parametrize(
+    ("port", "expected"),
+    [
+        pytest.param("1'; echo INJECTED; '", "", id="str-bypassing-validation"),
+        pytest.param(True, "", id="bool"),  # an int subclass; never a port
+        pytest.param(0, "", id="zero"),
+        pytest.param(65536, "", id="above-max"),
+        # Written back through int(), so only its digits reach the file.
+        pytest.param(_ShoutingInt(8080), "8080", id="int-with-hostile-str"),
+    ],
+)
+def test_a_port_that_bypassed_validation_can_only_write_digits(port: object, expected: str) -> None:
+    """Defence in depth, as the module docstring promises for every value.
+
+    ``model_copy(update=...)`` skips validation -- the same route
+    ``model_construct`` or a test double takes.
+    """
+    cfg = Settings.model_validate({"mock_hardware": True})
+    cfg = cfg.model_copy(update={"telemetry": cfg.telemetry.model_copy(update={"port": port})})
+
+    env = derive_healthcheck_env(cfg)
+
+    assert env[_PORT_KEY] == expected
 
 
 def test_stale_threshold_is_interval_times_tolerance() -> None:
@@ -82,7 +172,12 @@ def test_path_passes_through_unchanged() -> None:
 
 
 def test_all_values_are_non_empty_strings() -> None:
-    """Shell cannot distinguish missing vs empty — all values must be set."""
+    """Shell cannot distinguish missing vs empty — all values must be set.
+
+    Holds for every key under a default config. A ``RESOLVED_`` key may be
+    empty, but only when the rover cannot vouch for it (tested above), and
+    the four healthcheck keys never are.
+    """
     env = derive_healthcheck_env(_settings())
     for key, value in env.items():
         assert isinstance(value, str), key

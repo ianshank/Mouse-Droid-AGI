@@ -64,11 +64,24 @@ DOCKER_ENV_FILE="${MOUSEDROID_DOCKER_ENV_FILE:-${CONFIG_DIR}/docker.env}"
 # substitution, and an unparseable line warned about and skipped rather than
 # fatal. Skipping matches systemd, and is what keeps an already-provisioned
 # rover's file loading exactly as it does today.
+#
+# A few names are refused outright, because they are not settings but hooks
+# into how a process STARTS: bash runs the file named by BASH_ENV (and honours
+# SHELLOPTS, BASHOPTS and an xtrace PS4) when it starts, the dynamic loader
+# obeys LD_*, and PATH picks every program this script runs as root. Exported,
+# one line in this file would run code in the next child -- the evaluation this
+# loader exists to rule out, back by another door. The container is unaffected:
+# compose reads env_file itself. The list is not exhaustive; the file's
+# root-only mode remains the control. scripts/mousedroid-docker.service unsets
+# the same names on the boot path (UnsetEnvironment=; PATH excepted, see there).
+# The list lives inside the function so the function stands alone, as
+# tests/unit/scripts/test_docker_deploy_env_loading.py runs it.
 # ---------------------------------------------------------------------------
 _load_env_file_as_data() {
     local file="$1"
     local line trimmed key value
     local lineno=0
+    local -a startup_keys=(BASH_ENV ENV SHELLOPTS BASHOPTS PS4 PROMPT_COMMAND BASH_XTRACEFD PATH)
 
     while IFS= read -r line || [ -n "${line}" ]; do
         lineno=$((lineno + 1))
@@ -109,6 +122,14 @@ _load_env_file_as_data() {
             value="${BASH_REMATCH[1]}"
         elif [[ "${value}" =~ ^\'(.*)\'$ ]]; then
             value="${BASH_REMATCH[1]}"
+        fi
+
+        # `key` is a validated identifier (no blanks, no glob characters), so
+        # the space-delimited membership test cannot be fooled.
+        if [[ "${key}" == LD_* || " ${startup_keys[*]} " == *" ${key} "* ]]; then
+            printf '[WARN]  %s:%s: ignoring %s -- it changes how processes start, not a setting\n' \
+                "${file}" "${lineno}" "${key}" >&2
+            continue
         fi
 
         # Assignment, never evaluation: `key` is validated against a strict
@@ -168,9 +189,25 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-info()  { echo -e "${GREEN}[INFO]${NC}  $*"; }
-warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
-error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+# %b for the colour codes only; the message itself is %s, never escape-
+# interpreted. Several messages carry text read out of the container, and with
+# `echo -e` a printable `\033]52;...` in it became a terminal escape sequence --
+# a cleared screen and a write to the operator's clipboard.
+info()  { printf '%b[INFO]%b  %s\n' "${GREEN}" "${NC}" "$*"; }
+warn()  { printf '%b[WARN]%b  %s\n' "${YELLOW}" "${NC}" "$*"; }
+error() { printf '%b[ERROR]%b %s\n' "${RED}" "${NC}" "$*" >&2; }
+
+# A value that failed validation, quoted for display (printf %q): control
+# characters come out as $'\E...' text instead of reaching the terminal raw.
+_shown() { printf '%q' "$1"; }
+
+# `[[ =~ ]]` under the C locale. Bracket ranges such as [A-Za-z] are then byte
+# ranges, not whatever the operator's locale collates between A and z (older
+# glibc, as on JetPack 4, puts accented letters there). Usage: _matches_c VALUE ERE
+_matches_c() {
+    local LC_ALL=C
+    [[ "$1" =~ $2 ]]
+}
 
 # ---------------------------------------------------------------------------
 # Validate the two values that reach a `docker exec` argument list.
@@ -189,8 +226,8 @@ error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 # unrepresentable, which is also why no `--` end-of-options marker is needed at
 # the call sites.
 # ---------------------------------------------------------------------------
-if [[ ! "${CONTAINER_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
-    error "Refusing to run: container name is not a valid Docker name: ${CONTAINER_NAME}"
+if ! _matches_c "${CONTAINER_NAME}" '^[A-Za-z0-9][A-Za-z0-9_.-]*$'; then
+    error "Refusing to run: container name is not a valid Docker name: $(_shown "${CONTAINER_NAME}")"
     error "Set MOUSEDROID_CONTAINER (or the docker.env key) to [A-Za-z0-9][A-Za-z0-9_.-]*"
     exit 1
 fi
@@ -202,7 +239,7 @@ fi
 case "${DEPLOY_RECORD}" in
     /*) ;;
     *)
-        error "Refusing to run: deploy record must be an absolute path: ${DEPLOY_RECORD}"
+        error "Refusing to run: deploy record must be an absolute path: $(_shown "${DEPLOY_RECORD}")"
         exit 1
         ;;
 esac
@@ -383,66 +420,135 @@ strict_promotion_probe() {
 # re-deriving it here and hoping the two agree.
 #
 # Precedence: MOUSEDROID_HEALTH_PORT / MOUSEDROID_HEALTH_PATH if set; then the
-# container's resolved values; then -- only for an image that predates them --
-# this script's previous fallbacks, announced rather than silent.
+# container's resolved values; then this script's previous fallbacks, announced
+# rather than silent. The rover publishes each resolved key EMPTY when it cannot
+# vouch for it -- the port unless telemetry.port_discovery_strategy is 'fixed'
+# (otherwise the port is chosen at startup), the path when telemetry.api_prefix
+# does not form a plain URL path -- and code older than the keys writes neither.
+# The resolved port is the CONFIGURED port, which under 'fixed' is the bound one.
 # ---------------------------------------------------------------------------
 LEGACY_HEALTH_PORT_FALLBACK=8080
 LEGACY_HEALTH_PATH_FALLBACK=/api/v1/health
+TCP_PORT_MAX=65535
 
-# Print the value of KEY from the container's healthcheck env file, or nothing.
-# Pure bash, no pipeline: under `set -euo pipefail` a SIGPIPE from an early
-# `head` would otherwise abort the whole deploy from inside a command
-# substitution. The file's format is fixed by print_healthcheck_env -- one
-# KEY='value' per line, values already restricted to a shell-safe charset.
-_container_resolved_value() {
-    local key="$1" out line
-    out="$(docker exec "${CONTAINER_NAME}" sh -c \
-        'cat "${MOUSEDROID_HEALTHCHECK_ENV_FILE:-/run/mousedroid.env}"' 2>/dev/null)" || return 0
+# The container's healthcheck env file, or nothing if it cannot be read.
+_container_env_text() {
+    docker exec "${CONTAINER_NAME}" sh -c \
+        'cat "${MOUSEDROID_HEALTHCHECK_ENV_FILE:-/run/mousedroid.env}"' 2>/dev/null || true
+}
+
+# Succeed if env-file TEXT has a line for KEY. The format is fixed by
+# print_healthcheck_env -- one KEY='value' per line.
+_env_text_has() {
+    local text="$1" key="$2" line
+    while IFS= read -r line; do
+        if [[ "${line}" == "${key}='"*"'" ]]; then
+            return 0
+        fi
+    done <<< "${text}"
+    return 1
+}
+
+# Print the value of KEY from env-file TEXT, or nothing. Pure bash, no pipeline:
+# under `set -euo pipefail` a SIGPIPE from an early `head` would otherwise abort
+# the whole deploy from inside a command substitution.
+_env_text_value() {
+    local text="$1" key="$2" line
     while IFS= read -r line; do
         if [[ "${line}" == "${key}='"*"'" ]]; then
             line="${line#"${key}='"}"
             printf '%s' "${line%\'}"
             return 0
         fi
-    done <<< "${out}"
+    done <<< "${text}"
+    return 0
+}
+
+_is_tcp_port() {
+    _matches_c "$1" '^[0-9]{1,5}$' && (( 10#$1 >= 1 && 10#$1 <= TCP_PORT_MAX ))
+}
+
+# The same rule healthcheck_env applies before publishing a path
+# (_RESOLVED_URL_PATH_RE); the two are run against one table of cases in
+# tests/unit/scripts/test_docker_deploy_health_endpoint.py.
+_is_url_path() {
+    _matches_c "$1" '^/[A-Za-z0-9._~/-]*$'
+}
+
+# Say why a resolved value is missing, so the operator is told what to change.
+_explain_missing_endpoint() {
+    local env_text="$1" resolved_port="$2" resolved_path="$3"
+    if ! _env_text_has "${env_text}" MOUSEDROID_HEARTBEAT_PATH; then
+        warn "  Could not read the rover's healthcheck env file from the container (an image built before its entrypoint, #177, has none)."
+        warn "  Falling back to this script's previous defaults."
+        return 0
+    fi
+    if ! _env_text_has "${env_text}" MOUSEDROID_RESOLVED_TELEMETRY_PORT; then
+        warn "  Could not read the rover's resolved telemetry endpoint from the container: the code it started from predates it."
+        warn "  Falling back to this script's previous defaults. Restart the container on current code; its entrypoint writes the endpoint at start."
+        return 0
+    fi
+    if [ -z "${HEALTH_PORT}" ] && [ -z "${resolved_port}" ]; then
+        warn "  The rover did not publish its telemetry port: unless telemetry.port_discovery_strategy is 'fixed' it picks one at startup (logged as telemetry_port_bound)."
+        warn "  Set MOUSEDROID_HEALTH_PORT to probe that port; falling back to this script's previous default."
+    fi
+    if [ -z "${HEALTH_PATH}" ] && [ -z "${resolved_path}" ]; then
+        warn "  The rover did not publish its health path: telemetry.api_prefix does not form a plain absolute URL path."
+        warn "  Set MOUSEDROID_HEALTH_PATH to probe it; falling back to this script's previous default."
+    fi
     return 0
 }
 
 resolve_health_endpoint() {
-    local resolved_port resolved_path
-    resolved_port="$(_container_resolved_value MOUSEDROID_RESOLVED_TELEMETRY_PORT)"
-    resolved_path="$(_container_resolved_value MOUSEDROID_RESOLVED_HEALTH_PATH)"
+    local env_text resolved_port resolved_path
+    env_text="$(_container_env_text)"
+    resolved_port="$(_env_text_value "${env_text}" MOUSEDROID_RESOLVED_TELEMETRY_PORT)"
+    resolved_path="$(_env_text_value "${env_text}" MOUSEDROID_RESOLVED_HEALTH_PATH)"
+
+    # The file is the container's to write, so its values are checked BEFORE
+    # anything prints or uses them. A bad one is unusable: an explicit override
+    # can still stand in for it, a fallback guess cannot.
+    if [ -n "${resolved_port}" ] && ! _is_tcp_port "${resolved_port}"; then
+        error "  The container published a telemetry port that is not a valid TCP port: $(_shown "${resolved_port}")"
+        resolved_port=""
+        if [ -z "${HEALTH_PORT}" ]; then
+            return 1
+        fi
+    fi
+    if [ -n "${resolved_path}" ] && ! _is_url_path "${resolved_path}"; then
+        error "  The container published a health path that is not a safe absolute URL path: $(_shown "${resolved_path}")"
+        resolved_path=""
+        if [ -z "${HEALTH_PATH}" ]; then
+            return 1
+        fi
+    fi
 
     # The template ships MOUSEDROID_TELEMETRY_PORT, and its old comment said it set
     # the endpoint's port. Say so plainly when it disagrees with the rover.
     if [ -n "${MOUSEDROID_TELEMETRY_PORT:-}" ] && [ -n "${resolved_port}" ] \
         && [ "${MOUSEDROID_TELEMETRY_PORT}" != "${resolved_port}" ]; then
-        warn "  MOUSEDROID_TELEMETRY_PORT=${MOUSEDROID_TELEMETRY_PORT} has no effect on the rover, which serves port ${resolved_port}."
+        warn "  MOUSEDROID_TELEMETRY_PORT=$(_shown "${MOUSEDROID_TELEMETRY_PORT}") has no effect on the rover, which serves port ${resolved_port}."
         warn "  It is not a settings key: set MOUSEDROID_TELEMETRY__PORT to move the rover, or MOUSEDROID_HEALTH_PORT to override this probe."
     fi
 
-    if [ -z "${HEALTH_PORT}" ] || [ -z "${HEALTH_PATH}" ]; then
-        if [ -z "${resolved_port}" ] || [ -z "${resolved_path}" ]; then
-            warn "  Could not read the rover's resolved telemetry endpoint from the container."
-            warn "  Falling back to this script's previous defaults; rebuild the image to resolve it from config."
-        fi
-        if [ -z "${HEALTH_PORT}" ]; then
-            HEALTH_PORT="${resolved_port:-${MOUSEDROID_TELEMETRY_PORT:-${LEGACY_HEALTH_PORT_FALLBACK}}}"
-        fi
-        if [ -z "${HEALTH_PATH}" ]; then
-            HEALTH_PATH="${resolved_path:-${LEGACY_HEALTH_PATH_FALLBACK}}"
-        fi
+    if { [ -z "${HEALTH_PORT}" ] && [ -z "${resolved_port}" ]; } \
+        || { [ -z "${HEALTH_PATH}" ] && [ -z "${resolved_path}" ]; }; then
+        _explain_missing_endpoint "${env_text}" "${resolved_port}" "${resolved_path}"
+    fi
+    if [ -z "${HEALTH_PORT}" ]; then
+        HEALTH_PORT="${resolved_port:-${MOUSEDROID_TELEMETRY_PORT:-${LEGACY_HEALTH_PORT_FALLBACK}}}"
+    fi
+    if [ -z "${HEALTH_PATH}" ]; then
+        HEALTH_PATH="${resolved_path:-${LEGACY_HEALTH_PATH_FALLBACK}}"
     fi
 
-    # Both end up in a URL, and the resolved pair came out of a file inside the
-    # container. Validate before use rather than hand curl whatever arrived.
-    if [[ ! "${HEALTH_PORT}" =~ ^[0-9]{1,5}$ ]] \
-        || (( 10#${HEALTH_PORT} < 1 || 10#${HEALTH_PORT} > 65535 )); then
-        error "  Telemetry health port is not a valid TCP port: ${HEALTH_PORT}"
+    # Overrides and fallbacks end up in the same URL, so they meet the same rule.
+    if ! _is_tcp_port "${HEALTH_PORT}"; then
+        error "  Telemetry health port is not a valid TCP port: $(_shown "${HEALTH_PORT}")"
         return 1
     fi
-    if [[ ! "${HEALTH_PATH}" =~ ^/[A-Za-z0-9._~/-]*$ ]]; then
-        error "  Telemetry health path is not a safe absolute URL path: ${HEALTH_PATH}"
+    if ! _is_url_path "${HEALTH_PATH}"; then
+        error "  Telemetry health path is not a safe absolute URL path: $(_shown "${HEALTH_PATH}")"
         return 1
     fi
     return 0

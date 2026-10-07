@@ -45,6 +45,14 @@ Environment=COMPOSE_FILE=/opt/mousedroid/docker-compose.jetson.yml
 
 # Optional environment file (dash prefix = no error if missing)
 EnvironmentFile=-/etc/mousedroid/docker.env
+# docker.env is data, but a few names in it would hook how the shells below
+# START: bash runs the file named by BASH_ENV, honours SHELLOPTS/BASHOPTS and an
+# xtrace PS4, and the dynamic loader obeys LD_*. None is a setting, so drop them
+# (applied after EnvironmentFile=, whatever the line order). scripts/
+# docker_deploy.sh refuses the same names when it loads the file, plus PATH and
+# every LD_* -- PATH is not unset here because that would also remove the PATH
+# systemd gives this unit. The container is unaffected: compose reads env_file.
+UnsetEnvironment=BASH_ENV ENV SHELLOPTS BASHOPTS PS4 PROMPT_COMMAND BASH_XTRACEFD LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT
 
 # Sync production config overlay from repo to /etc/mousedroid (non-fatal).
 # systemd requires an absolute executable path in ExecStartPre, so invoke a

@@ -30,6 +30,7 @@ from pathlib import Path
 
 import pytest
 
+from mousedroid.health.healthcheck_env import _RESOLVED_URL_PATH_RE
 from tests._bash import requires_bash
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -75,8 +76,8 @@ _BASE_KEYS = (
 def _container_env(tmp_path: Path, *, port: str | None, path: str | None) -> Path:
     """Write the healthcheck env file the fake container's entrypoint produced.
 
-    ``None`` omits the key, which is what an image predating the resolved keys
-    looks like.
+    ``None`` omits the key, which is what code predating the resolved keys
+    writes; ``""`` is the rover publishing "cannot vouch for this value".
     """
     lines = list(_BASE_KEYS)
     if port is not None:
@@ -215,11 +216,14 @@ def test_explicit_overrides_win_over_the_resolved_endpoint(tmp_path: Path) -> No
 # ---------------------------------------------------------------------------
 
 
-def test_an_older_image_keeps_the_previous_behaviour_and_says_so(tmp_path: Path) -> None:
-    """``--no-build`` can pull an image whose entrypoint never wrote the keys.
+def test_older_code_keeps_the_previous_behaviour_and_says_so(tmp_path: Path) -> None:
+    """A rover started from code that predates the keys never wrote them.
 
     That case reproduces the previous fallback exactly — it is the only
-    behaviour available without the keys — and is announced, not silent.
+    behaviour available without the keys — and is announced, not silent. The
+    advice is a restart, not a rebuild: the image runs an editable install off
+    the bind-mounted checkout, so its entrypoint writes the keys from current
+    code on its next start.
     """
     container = _container_env(tmp_path, port=None, path=None)
 
@@ -227,6 +231,66 @@ def test_an_older_image_keeps_the_previous_behaviour_and_says_so(tmp_path: Path)
 
     assert probed == ["http://127.0.0.1:8080/api/v1/health"]
     assert "Could not read the rover's resolved telemetry endpoint" in output
+    assert "Restart the container on current code" in output
+    assert "rebuild the image" not in output
+
+
+def test_an_unreadable_env_file_is_reported_as_that(tmp_path: Path) -> None:
+    """No healthcheck env file at all is a different story from older code.
+
+    An image built before the entrypoint existed has none, and saying "restart
+    on current code" there would send the operator the wrong way.
+    """
+    container = tmp_path / "container.env"
+    container.write_text("", encoding="utf-8")
+
+    probed, output = _run(tmp_path, container)
+
+    assert probed == ["http://127.0.0.1:8080/api/v1/health"]
+    assert "Could not read the rover's healthcheck env file" in output
+    assert "Restart the container on current code" not in output
+
+
+# ---------------------------------------------------------------------------
+# A value the rover cannot vouch for is published EMPTY, and said so
+# ---------------------------------------------------------------------------
+
+
+def test_a_port_the_rover_picks_at_startup_falls_back_and_says_why(tmp_path: Path) -> None:
+    """Under ``fallback_range`` / ``kernel_assigned`` the port is unknowable.
+
+    The rover publishes it empty; the probe must say why and what to set,
+    rather than reporting "older code" or probing a confident guess silently.
+    """
+    container = _container_env(tmp_path, port="", path="/api/v1/health")
+
+    probed, output = _run(tmp_path, container)
+
+    assert probed == ["http://127.0.0.1:8080/api/v1/health"]
+    assert "did not publish its telemetry port" in output
+    assert "port_discovery_strategy" in output
+    assert "MOUSEDROID_HEALTH_PORT" in output
+    assert "predates" not in output
+
+
+def test_an_override_stands_in_for_a_port_the_rover_picks_at_startup(tmp_path: Path) -> None:
+    container = _container_env(tmp_path, port="", path="/api/v1/health")
+
+    probed, output = _run(tmp_path, container, MOUSEDROID_HEALTH_PORT="9191")
+
+    assert probed == ["http://127.0.0.1:9191/api/v1/health"]
+    assert "did not publish" not in output
+
+
+def test_a_path_the_rover_cannot_vouch_for_falls_back_and_says_why(tmp_path: Path) -> None:
+    container = _container_env(tmp_path, port="8080", path="")
+
+    probed, output = _run(tmp_path, container)
+
+    assert probed == ["http://127.0.0.1:8080/api/v1/health"]
+    assert "did not publish its health path" in output
+    assert "api_prefix" in output
+    assert "MOUSEDROID_HEALTH_PATH" in output
 
 
 def test_an_older_image_still_honours_the_legacy_port_variable(tmp_path: Path) -> None:
@@ -243,14 +307,14 @@ def test_an_older_image_still_honours_the_legacy_port_variable(tmp_path: Path) -
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("bad_port", ["80;id", "99999", "0", "8080x"])
+@pytest.mark.parametrize("bad_port", ["80;id", "99999", "0", "8080x", "a[$(id)]"])
 def test_an_invalid_resolved_port_never_reaches_curl(tmp_path: Path, bad_port: str) -> None:
     container = _container_env(tmp_path, port=bad_port, path="/api/v1/health")
 
     probed, output = _run(tmp_path, container)
 
     assert probed == [], f"curl was invoked with an unvalidated port: {probed}"
-    assert f"Telemetry health port is not a valid TCP port: {bad_port}" in output
+    assert "The container published a telemetry port that is not a valid TCP port" in output
 
 
 @pytest.mark.parametrize("bad_path", ["api/v1/health", "/api v1/health", "/a?b=c"])
@@ -260,7 +324,89 @@ def test_an_invalid_resolved_path_never_reaches_curl(tmp_path: Path, bad_path: s
     probed, output = _run(tmp_path, container)
 
     assert probed == [], f"curl was invoked with an unvalidated path: {probed}"
-    assert "Telemetry health path is not a safe absolute URL path" in output
+    assert "The container published a health path that is not a safe absolute URL path" in output
+
+
+def test_an_override_stands_in_for_an_invalid_resolved_port(tmp_path: Path) -> None:
+    """A bad published value is unusable, but an explicit override still works.
+
+    It is reported either way: a garbage value in that file is worth knowing.
+    """
+    container = _container_env(tmp_path, port="80;id", path="/api/v1/health")
+
+    probed, output = _run(tmp_path, container, MOUSEDROID_HEALTH_PORT="9191")
+
+    assert probed == ["http://127.0.0.1:9191/api/v1/health"]
+    assert "not a valid TCP port" in output
+
+
+# The colour codes are themselves escape sequences, so the assertion is about
+# the INJECTED sequences, not about ESC in general.
+_INJECTED = ("\x1b[2J", "\x1b]52", "\x07")
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        pytest.param("\\033[2J\\033]52;c;ZXZpbA==\\a", id="printable-escape-text"),
+        pytest.param("\x1b[2J\x1b]52;c;ZXZpbA==\x07", id="raw-control-bytes"),
+    ],
+)
+def test_text_from_the_container_never_reaches_the_terminal_as_escapes(
+    tmp_path: Path, hostile: str
+) -> None:
+    """Printed with ``echo -e``, the printable form cleared the screen and wrote
+    the operator's clipboard (OSC 52). Messages are ``%s`` now, and a rejected
+    value is shown ``%q``-quoted, so neither form arrives as a control sequence.
+    """
+    container = _container_env(tmp_path, port=hostile, path=hostile)
+
+    probed, output = _run(tmp_path, container, MOUSEDROID_TELEMETRY_PORT=hostile)
+
+    assert probed == []
+    for sequence in _INJECTED:
+        assert sequence not in output, f"{sequence!r} reached the terminal"
+
+
+# One table, both rules: what healthcheck_env publishes, the probe accepts, and
+# what it refuses to publish, the probe would refuse too.
+_PATH_CASES = [
+    "/api/v1/health",
+    "/~rover/health",
+    "/",
+    "/a-b_c.d/health",
+    "api/v1/health",
+    "/api v1/health",
+    "/a?b=c",
+    "/a%20b",
+    "/a:b",
+    "/a@b",
+    "/a'b",
+    "/a$b",
+    "/a\\b",
+    "/caf\u00e9/health",
+]
+
+
+@pytest.mark.parametrize("path", _PATH_CASES)
+def test_the_publish_rule_and_the_probe_rule_agree(tmp_path: Path, path: str) -> None:
+    """Pins that the two rules agree, case by case, so neither drifts alone.
+
+    Run under a UTF-8 locale, as an operator's shell usually is. On an older
+    glibc that collates accented letters into ``[A-Za-z]``, the probe's own
+    C-locale matching is what keeps ``/caf\u00e9`` out; C.UTF-8 does not
+    collate that way, so here the case pins agreement, not that locale bug.
+    """
+    published = _RESOLVED_URL_PATH_RE.fullmatch(path) is not None
+    container = _container_env(tmp_path, port="8080", path=path)
+
+    probed, _ = _run(tmp_path, container, LC_ALL="C.UTF-8")
+
+    accepted = probed == [f"http://127.0.0.1:8080{path}"]
+    assert accepted == published, (
+        f"{path!r}: healthcheck_env {'publishes' if published else 'refuses'} it, "
+        f"the deploy probe {'accepts' if accepted else 'refuses'} it"
+    )
 
 
 def test_an_invalid_override_is_refused_the_same_way(tmp_path: Path) -> None:

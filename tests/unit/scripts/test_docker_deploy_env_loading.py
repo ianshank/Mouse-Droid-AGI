@@ -615,3 +615,117 @@ def test_a_container_name_from_the_env_file_is_validated_too(tmp_path: Path) -> 
 
     assert proc.returncode != 0
     assert "container name is not a valid Docker name: -uroot" in proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# Layer 4 — names that hook how a process STARTS are never exported
+# ---------------------------------------------------------------------------
+#
+# Assignment-not-evaluation is not enough on its own. bash runs the file named
+# by BASH_ENV when it starts (and honours SHELLOPTS, BASHOPTS and an xtrace PS4),
+# the dynamic loader obeys LD_*, and PATH picks every program the script runs as
+# root. Exported, a line in docker.env would run code in the next child process.
+
+_STARTUP_HOOKS = {
+    "BASH_ENV": "/nonexistent/hook.sh",
+    "ENV": "/nonexistent/hook.sh",
+    "SHELLOPTS": "xtrace",
+    "BASHOPTS": "extglob",
+    "PS4": "$(touch /nonexistent/x)",
+    "PROMPT_COMMAND": "touch /nonexistent/x",
+    # Distinctive, so "the warning never echoes the value" cannot match a line number.
+    "BASH_XTRACEFD": "8675309",
+    "LD_PRELOAD": "/nonexistent/evil.so",
+    "LD_AUDIT": "/nonexistent/evil.so",
+    "LD_LIBRARY_PATH": "/nonexistent/lib",
+    "PATH": "/nonexistent/bin",
+}
+
+
+def test_names_that_hook_process_startup_are_refused_not_exported(tmp_path: Path) -> None:
+    env = tmp_path / "docker.env"
+    env.write_text(
+        "".join(f"{name}={value}\n" for name, value in _STARTUP_HOOKS.items())
+        + "MOUSEDROID_KEPT=1\n",
+        encoding="utf-8",
+    )
+
+    values, stderr, rc = _load(env, *_STARTUP_HOOKS, "MOUSEDROID_KEPT")
+
+    assert rc == 0
+    assert values["MOUSEDROID_KEPT"] == "1", "refusing one name must not cost the others"
+    for name, value in _STARTUP_HOOKS.items():
+        assert values[name] != value, f"{name} from the env file was exported"
+        assert f"ignoring {name} -- it changes how processes start" in stderr
+        assert value not in stderr, f"the warning echoed {name}'s value"
+
+
+def test_bash_env_in_the_env_file_does_not_run_when_the_deploy_starts_bash(
+    tmp_path: Path,
+) -> None:
+    """The reviewed reproduction, as a test.
+
+    ``docker_deploy.sh`` runs ``bash validate_compose_env.sh`` after loading
+    docker.env, so an exported BASH_ENV ran its file as root. Fails against the
+    loader that exported every key.
+    """
+    sentinel = tmp_path / "HOOK_RAN"
+    hook = tmp_path / "hook.sh"
+    hook.write_text(f"touch '{sentinel}'\n", encoding="utf-8")
+    clean = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
+
+    # Premise: a bash child started with this BASH_ENV does run the hook --
+    # otherwise the assertion below would pass for the wrong reason.
+    subprocess.run(["bash", "-c", "true"], env={**clean, "BASH_ENV": str(hook)}, check=True)
+    assert sentinel.exists(), "premise failed: BASH_ENV did not run the hook"
+    sentinel.unlink()
+
+    env_file = tmp_path / "docker.env"
+    env_file.write_text(f"BASH_ENV={hook}\n", encoding="utf-8")
+    proc = subprocess.run(
+        ["bash", str(_DEPLOY), "--health-only"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            **clean,
+            "MOUSEDROID_INSTALL_DIR": str(tmp_path / "opt"),
+            "MOUSEDROID_CONFIG_DIR": str(tmp_path / "etc"),
+            "MOUSEDROID_DOCKER_ENV_FILE": str(env_file),
+        },
+        cwd=str(_REPO_ROOT),
+    )
+
+    assert not sentinel.exists(), "BASH_ENV from docker.env ran as the deploy started bash"
+    assert "ignoring BASH_ENV" in proc.stderr
+
+
+_UNITS = (
+    _REPO_ROOT / "scripts" / "mousedroid-docker.service",
+    _REPO_ROOT / "scripts" / "mousedroid-trend.service",
+)
+
+
+def _loader_refused_names() -> set[str]:
+    match = re.search(r"local -a startup_keys=\(([^)]*)\)", _extract_loader())
+    assert match is not None, "the loader's startup_keys list was not found"
+    return set(match.group(1).split())
+
+
+@pytest.mark.parametrize("unit", _UNITS, ids=lambda path: path.name)
+def test_the_boot_path_unsets_what_the_deploy_path_refuses(unit: Path) -> None:
+    """Both read docker.env; neither may hand a hook name to the shells it starts.
+
+    PATH is the one deliberate difference: unsetting it in a unit would also
+    remove the PATH systemd gives that unit. Every LD_* name a unit unsets is
+    covered by the loader's LD_* rule.
+    """
+    text = unit.read_text(encoding="utf-8")
+    assert "EnvironmentFile=-/etc/mousedroid/docker.env" in text
+    lines = [line for line in text.splitlines() if line.startswith("UnsetEnvironment=")]
+    assert len(lines) == 1, f"{unit.name}: expected one UnsetEnvironment= line, got {lines}"
+    unset = set(lines[0].removeprefix("UnsetEnvironment=").split())
+
+    refused = _loader_refused_names()
+    assert unset - {n for n in unset if n.startswith("LD_")} == refused - {"PATH"}
+    assert {"LD_PRELOAD", "LD_AUDIT", "LD_LIBRARY_PATH"} <= unset

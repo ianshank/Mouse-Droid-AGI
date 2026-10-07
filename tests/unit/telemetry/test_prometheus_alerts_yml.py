@@ -128,6 +128,33 @@ def _rule(alert: str) -> dict[str, Any]:
     return next(r for r in _all_rules(_load()) if r.get("alert") == alert)
 
 
+def _expr(alert: str) -> str:
+    return " ".join(str(_rule(alert)["expr"]).split())
+
+
+def _assert_counts_new_since_last_seen(expr: str, metric: str, window: str) -> None:
+    """Pin the shape shared by the pure-add event rules (SafetyViolation, OTA).
+
+    ``now - (prev if prev <= now, else 0)``, where both ``now`` and ``prev``
+    are ``last_over_time`` range selectors. Each clause guards one failure that
+    shipped or was found in review, and each is proven by promtool in
+    ``alerts_test.yml``; these pins keep the shape when promtool is absent.
+    """
+    m = re.escape(metric)
+    assert re.search(rf"last_over_time\({m}\[\w+\] offset {window}\)", expr), (
+        f"prev must be the last REAL sample before the {window} window -- a range "
+        "selector skips the staleness marker a failed scrape writes"
+    )
+    assert re.search(rf"last_over_time\({m}\[\w+\]\) \* 0", expr), (
+        "a counter with no earlier sample must count from 0: the counter is "
+        "pure-add, born at 1, and increase() alone never sees it born"
+    )
+    assert re.search(rf"<= last_over_time\({m}\[\w+\]\)", expr), (
+        "prev must be dropped when it exceeds now (a counter reset), or the "
+        "first count after a process restart is never reported"
+    )
+
+
 class TestArtifactIntegrityGroup:
     """F-052 task 6.1: the refusals both counters' docstrings say should page."""
 
@@ -148,20 +175,32 @@ class TestArtifactIntegrityGroup:
         config/prometheus/alerts_test.yml; pinned here so it cannot be
         "corrected" back to the docstring's wording.
         """
-        expr = str(_rule("ModelArtifactDigestMismatch")["expr"])
+        expr = _expr("ModelArtifactDigestMismatch")
         assert "rate(" not in expr
         assert "increase(" not in expr
         assert "mousedroid_model_artifact_sha256_mismatches_total" in expr
+
+    def test_the_boot_path_rule_rides_out_a_scrape_blip(self) -> None:
+        """It stays open for hours, so the bare series is not enough.
+
+        A failed scrape makes the bare series read "absent" for one
+        evaluation; the page would close and re-open on every blip.
+        """
+        assert _expr("ModelArtifactDigestMismatch").startswith(
+            "last_over_time(mousedroid_model_artifact_sha256_mismatches_total["
+        )
 
     def test_the_ota_rule_sees_the_first_refusal(self) -> None:
         """The counter is pure-add, so the first refusal is born at 1.
 
         increase() alone needs two samples of an existing series and never
-        fires on that. The ``unless ... offset`` arm is what catches it.
+        fires on that.
         """
-        expr = " ".join(str(_rule("CloudWeightUpdateDigestMismatch")["expr"]).split())
-        assert "increase(mousedroid_cloud_weight_update_sha256_mismatches_total" in expr
-        assert "unless mousedroid_cloud_weight_update_sha256_mismatches_total offset" in expr
+        _assert_counts_new_since_last_seen(
+            _expr("CloudWeightUpdateDigestMismatch"),
+            "mousedroid_cloud_weight_update_sha256_mismatches_total",
+            "15m",
+        )
 
     def test_both_rules_point_operators_at_a_playbook_that_exists(self) -> None:
         for alert in ("ModelArtifactDigestMismatch", "CloudWeightUpdateDigestMismatch"):
@@ -171,17 +210,36 @@ class TestArtifactIntegrityGroup:
 
 
 class TestSafetyViolationSeesTheFirstViolation:
-    def test_the_rule_has_the_born_non_zero_arm(self) -> None:
+    def test_the_rule_counts_new_violations_from_zero(self) -> None:
         """A bare ``increase(...[1m]) > 0`` missed every rover's FIRST violation.
 
         The counter does not exist until the first violation creates it at 1,
         and increase() never sees a series being born. Proven by promtool in
-        config/prometheus/alerts_test.yml; the arm that fixes it is pinned here.
+        config/prometheus/alerts_test.yml; the shape that fixes it is pinned here.
         """
-        expr = " ".join(str(_rule("SafetyViolation")["expr"]).split())
-        assert "increase(mousedroid_safety_violations_total[1m])" in expr
-        assert "unless mousedroid_safety_violations_total offset 1m" in expr
+        _assert_counts_new_since_last_seen(
+            _expr("SafetyViolation"), "mousedroid_safety_violations_total", "1m"
+        )
         assert _rule("SafetyViolation")["labels"]["severity"] == "critical"
+
+
+class TestNoRuleReadsAScrapeBlipAsABirth:
+    def test_no_rule_tests_presence_with_an_instant_offset_selector(self) -> None:
+        """``m unless m offset W`` pages one window after every failed scrape.
+
+        A failed scrape writes a staleness marker; an instant selector that
+        lands on it reads "absent", so a counter that never moved looks newly
+        born. The first fix for the pure-add problem used exactly this, and
+        promtool reproduced the false critical page ("increased by 3") on a
+        counter that had not changed. Range selectors skip the marker.
+        """
+        idiom = re.compile(r"unless\s+mousedroid_[A-Za-z0-9_]+(\{[^}]*\})?\s+offset\b")
+        offenders = [
+            rule["alert"]
+            for rule in _all_rules(_load())
+            if idiom.search(" ".join(str(rule["expr"]).split()))
+        ]
+        assert not offenders, f"staleness-blind presence test in: {offenders}"
 
 
 _RULE_TESTS = _REPO_ROOT / "config" / "prometheus" / "alerts_test.yml"

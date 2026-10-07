@@ -179,6 +179,13 @@ CONNECTIVITY_CHECK_PORT: int = 80
 LOOPBACK_IP: str = "127.0.0.1"
 """Loopback address returned when no network is available."""
 
+TCP_PORT_MAX: int = 65535
+"""Highest TCP port number -- a protocol fact (16-bit field), not a tunable.
+
+Port 0 is not a destination either: it asks the OS to choose. So a port a probe
+can connect to lies in ``1..TCP_PORT_MAX``.
+"""
+
 # ---------------------------------------------------------------------------
 # Cognitive core timing defaults
 # ---------------------------------------------------------------------------

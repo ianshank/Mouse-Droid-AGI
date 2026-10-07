@@ -32,6 +32,14 @@ Environment=MOUSEDROID_TREND_JOURNAL=/var/lib/mousedroid/trend/preflight.jsonl
 Environment=MOUSEDROID_TREND_JOURNAL_MAX_BYTES=1048576
 Environment=MOUSEDROID_TREND_CHECKS=config,host_env_keys
 EnvironmentFile=-/etc/mousedroid/docker.env
+# docker.env is data, but a few names in it would hook how the shells below
+# START: bash runs the file named by BASH_ENV, honours SHELLOPTS/BASHOPTS and an
+# xtrace PS4, and the dynamic loader obeys LD_*. None is a setting, so drop them
+# (applied after EnvironmentFile=, whatever the line order). scripts/
+# docker_deploy.sh refuses the same names when it loads the file, plus PATH and
+# every LD_* -- PATH is not unset here because that would also remove the PATH
+# systemd gives this unit. The container is unaffected: compose reads env_file.
+UnsetEnvironment=BASH_ENV ENV SHELLOPTS BASHOPTS PS4 PROMPT_COMMAND BASH_XTRACEFD LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT
 ExecStartPre=/bin/bash -lc 'mkdir -p "$(dirname "${MOUSEDROID_TREND_JOURNAL}")"'
 ExecStart=/bin/bash -lc 'exec "${MOUSEDROID_INSTALL_DIR}/venv/bin/python" -m mousedroid.cli.preflight --config "${MOUSEDROID_CONFIG_DIR}/jetson_production.yaml" --checks "${MOUSEDROID_TREND_CHECKS}" --journal-path "${MOUSEDROID_TREND_JOURNAL}" --trend --journal-max-bytes "${MOUSEDROID_TREND_JOURNAL_MAX_BYTES}"'
 SyslogIdentifier=mousedroid-trend

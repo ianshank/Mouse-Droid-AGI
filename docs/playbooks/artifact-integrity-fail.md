@@ -14,7 +14,8 @@ the steps under Remediation, which say so.
   failed its check at boot. With `cognitive.fallback_to_mcts` enabled (the
   production default) the rover **kept running, degraded to the MCTS
   planner**, and stays degraded until it is restarted with verified weights.
-  The alert keeps firing for that whole time by design.
+  The alert keeps firing for that whole time by design, including through
+  scrape gaps of up to 5 minutes.
 - `ModelArtifactDigestMismatch{artifact="world_model_onnx"}` — listed for
   completeness, but **expect it never to fire**. A world-model refusal is not
   caught: the process exits before `/metrics` exists. It shows up instead as
@@ -51,6 +52,7 @@ the steps under Remediation, which say so.
    ```bash
    PORT=$(docker exec mousedroid sh -c 'cat "${MOUSEDROID_HEALTHCHECK_ENV_FILE:-/run/mousedroid.env}"' \
           | sed -n "s/^MOUSEDROID_RESOLVED_TELEMETRY_PORT='\([0-9]*\)'$/\1/p")
+   : "${PORT:?is empty: the rover picks its port at startup (telemetry.port_discovery_strategy is not fixed) -- see its telemetry_port_bound log line}"
    curl -s "http://127.0.0.1:${PORT}/metrics" | grep sha256_mismatches
    ```
 
@@ -72,8 +74,11 @@ did its job; disabling it loads exactly the weights it just refused.
 3. **Manifest wrong** — regenerate and republish `sha256.txt` alongside the
    artifact in its repository, then restart as above. Never edit the cached
    manifest on the rover to match a file you have not independently verified.
-4. `ModelArtifactDigestMismatch` clears only when the process restarts with
-   verified weights, because the counter lives for the life of the process.
+4. `ModelArtifactDigestMismatch` clears only after the process restarts with
+   verified weights, because the counter lives for the life of the process —
+   and up to 5 minutes after that restart, because the rule rides out scrape
+   gaps that long. Still firing 5 minutes after a restart means the new
+   process refused its weights too: go back to First Checks step 1.
    `CloudWeightUpdateDigestMismatch` clears on its own; investigate the
    publishing side before re-publishing.
 

@@ -18,11 +18,14 @@ Real script, real fixture, specific messages — per ``test_deploy_remote_guard.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
+import yaml
 
+from mousedroid.config.schema.world_model import WorldModelConfig
 from tests._bash import requires_bash
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -31,6 +34,8 @@ _VALIDATOR = _SCRIPTS / "validate_compose_env.sh"
 _DEPLOY = _SCRIPTS / "docker_deploy.sh"
 _PREFLIGHT = _SCRIPTS / "preflight_check.sh"
 _UNIT = _SCRIPTS / "mousedroid-docker.service"
+_COMPOSE = _REPO_ROOT / "docker-compose.jetson.yml"
+_DOCKERFILE = _REPO_ROOT / "Dockerfile.jetson"
 _KEY = "MOUSEDROID_JETSON__TENSORRT_CACHE_DIR"
 
 pytestmark = requires_bash()
@@ -59,9 +64,16 @@ def _validate(value: str | None) -> subprocess.CompletedProcess[str]:
     [
         None,  # unset: compose falls back to its own (valid) default
         "/opt/mousedroid/tensorrt_cache",  # the schema and compose default
+        # One trailing '/' names the same directory. Refusing it would stop a
+        # rover booting (the unit's preflight is fatal) on a value that worked
+        # before this check existed.
+        "/opt/mousedroid/tensorrt_cache/",
+        "/opt/mousedroid/trt_cache",  # nested in the source bind mount, as the default is
         "/mnt/nvme/trt_cache",  # a relocation to a bigger disk
         "/data/cache",
         "/var/cache/mousedroid",
+        "/home/jetson/trt_cache",  # a sibling of the experience volume, not inside it
+        "/var/runner/cache",  # starts with "/var/run" as a string, not as a path
     ],
 )
 def test_safe_values_are_accepted(value: str | None) -> None:
@@ -84,16 +96,114 @@ def test_safe_values_are_accepted(value: str | None) -> None:
         ("tensorrt_cache", "must be an absolute path"),
         ("/opt/../etc", "must not contain empty, '.' or '..' components"),
         ("/opt//x", "must not contain empty, '.' or '..' components"),
-        ("/opt/x/", "must not end in '/'"),
+        ("/opt/x//", "must not contain empty, '.' or '..' components"),
         ("/opt/my cache", "only [A-Za-z0-9._/-] is allowed"),
         ("/opt/$HOME", "only [A-Za-z0-9._/-] is allowed"),
+        ("/opt/caf\u00e9", "only [A-Za-z0-9._/-] is allowed"),
+        ("/opt/" + "a" * 256, "must not have a component longer than 255 bytes"),
+        # Links into /run: the runtime resolves them inside the container.
+        ("/var/run/x", "must not be inside /var/run, a link into an OS-image tree"),
+        ("/var/lock/x", "must not be inside /var/lock, a link into an OS-image tree"),
+        # The service's other mounts: neither covered nor nested into.
+        ("/opt/mousedroid", "would cover /opt/mousedroid, which compose also mounts"),
+        ("/home/jetson", "would cover /home/jetson/mousedroid_experience, which compose"),
+        (
+            "/home/jetson/mousedroid_experience/trt",
+            "must not be inside /home/jetson/mousedroid_experience, which compose",
+        ),
+        ("/var/lib/promtail", "would cover /var/lib/promtail, which compose also mounts"),
+        # Inside the source bind mount, what the container runs from.
+        ("/opt/mousedroid/src", "would shadow /opt/mousedroid/src, which the container"),
+        ("/opt/mousedroid/src/mousedroid", "would shadow /opt/mousedroid/src, which"),
+        ("/opt/mousedroid/weights", "would shadow /opt/mousedroid/weights, which"),
     ],
 )
 def test_unsafe_values_are_refused_with_the_reason(value: str, reason: str) -> None:
     proc = _validate(value)
 
     assert proc.returncode == 1
-    assert f"{_KEY}={value} refused: {reason}" in proc.stderr
+    assert f"{_KEY} refused: {reason}" in proc.stderr
+
+
+def test_a_refusal_never_echoes_the_value() -> None:
+    """On the boot path the value comes from systemd's EnvironmentFile parser.
+
+    A value whose quote is left open (``KEY="/data/trt``) has the following
+    lines joined onto it -- and in the shipped template those are the API key
+    and telemetry token. An ExecStartPre's stderr goes to the journal.
+    """
+    sentinel = "do-not-echo-this-sentinel"
+    merged = f"/data/trt\nANTHROPIC_API_KEY={sentinel}\nMOUSEDROID_TELEMETRY_TOKEN={sentinel}"
+
+    proc = _validate(merged)
+
+    assert proc.returncode == 1
+    assert f"{_KEY} refused" in proc.stderr
+    assert sentinel not in proc.stderr
+    assert "/data/trt" not in proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# The validator's lists, pinned to the files they describe
+# ---------------------------------------------------------------------------
+
+
+def _script_array(name: str) -> list[str]:
+    match = re.search(rf"^{name}=\(([^)]*)\)", _VALIDATOR.read_text(encoding="utf-8"), re.M)
+    assert match is not None, f"{name} not found in {_VALIDATOR.name}"
+    return match.group(1).split()
+
+
+def _script_scalar(name: str) -> str:
+    match = re.search(rf"^{name}=(\S+)$", _VALIDATOR.read_text(encoding="utf-8"), re.M)
+    assert match is not None, f"{name} not found in {_VALIDATOR.name}"
+    return match.group(1)
+
+
+_CACHE_VOLUME = "mousedroid_tensorrt_cache"
+
+
+def _compose_volumes() -> list[tuple[str, str]]:
+    """``(source, target)`` for each of the service's short-syntax volumes.
+
+    Each ``${VAR:-default}`` is replaced by its default first -- what compose
+    does with the variable unset -- because a default may itself contain ``:``.
+    """
+    service = yaml.safe_load(_COMPOSE.read_text(encoding="utf-8"))["services"]["mousedroid"]
+    pairs: list[tuple[str, str]] = []
+    for entry in service["volumes"]:
+        resolved = re.sub(r"\$\{[A-Za-z_][A-Za-z0-9_]*:-([^}]*)\}", r"\1", entry)
+        source, target, *_ = resolved.split(":")
+        pairs.append((source, target))
+    return pairs
+
+
+def test_the_mount_targets_are_exactly_the_composes_other_volumes() -> None:
+    """A volume added to compose must be added to the validator too."""
+    targets = {target for source, target in _compose_volumes() if source != _CACHE_VOLUME}
+
+    assert set(_script_array("_COMPOSE_MOUNT_TARGETS")) == targets
+
+
+def test_the_source_bind_mount_is_a_same_path_bind_in_compose() -> None:
+    source_mount = _script_scalar("_SOURCE_BIND_MOUNT")
+
+    assert (source_mount, source_mount) in _compose_volumes()
+
+
+def test_the_paths_in_use_follow_the_image_and_the_schema() -> None:
+    """The package root comes from the Dockerfile; the weights root from the schema."""
+    dockerfile = _DOCKERFILE.read_text(encoding="utf-8")
+    workdir = re.search(r"^WORKDIR (\S+)$", dockerfile, re.M)
+    assert workdir is not None
+    assert re.search(r"^COPY src/ \./src/$", dockerfile, re.M), "the image no longer copies src/"
+    weights_root = PurePosixPath(WorldModelConfig().onnx_cache_dir).parts[0]
+
+    assert workdir.group(1) == _script_scalar("_SOURCE_BIND_MOUNT")
+    assert set(_script_array("_SOURCE_PATHS_IN_USE")) == {
+        f"{workdir.group(1)}/src",
+        f"{workdir.group(1)}/{weights_root}",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +255,7 @@ def test_docker_deploy_refuses_before_compose_ever_runs(tmp_path: Path) -> None:
     proc, docker_calls = _deploy(tmp_path, "/x:ro")
 
     assert proc.returncode != 0
-    assert f"{_KEY}=/x:ro refused" in proc.stderr
+    assert f"{_KEY} refused" in proc.stderr
     assert "compose" not in docker_calls, f"compose ran despite the refusal:\n{docker_calls}"
 
 
@@ -179,7 +289,7 @@ def test_preflight_counts_an_unsafe_value_as_a_critical_failure(tmp_path: Path) 
     proc = _preflight("/etc")
     output = proc.stdout + proc.stderr
 
-    assert f"{_KEY}=/etc refused" in output
+    assert f"{_KEY} refused" in output
     assert "[FAIL] A value compose interpolates into a mount spec was refused" in output
     assert proc.returncode != 0
 

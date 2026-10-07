@@ -20,10 +20,18 @@ dashboard-test whitelist that asserted the name without checking it; that whitel
 `generate_metrics_sample()` now seeds the MCP family. **Breaking for anyone who queried the
 `_total_total` name directly** — nothing in this repository did.
 
-`SafetyViolation` (critical) never fired on a rover's **first** safety violation. Every counter here
-is pure-add — absent from `/metrics` until its first write, so it is born at 1 — and `increase()`
-needs two samples of an existing series, so it never sees one being born. It fired only from the
-second violation. A second `unless ... offset` arm catches the birth.
+`SafetyViolation` (critical) never fired on the **first** safety violation of a process's life —
+the first ever, and the first after every restart, so after every deploy. Every counter here is
+pure-add — absent from `/metrics` until its first write, so it is born at 1 — and `increase()` needs
+two samples of an existing series, so it never sees one being born. It also missed anything counted
+while scrapes failed for longer than its one-minute window. It now pages on the count now minus the
+last count seen before the window, where a counter with no earlier sample counts from 0 and a reset
+drops the earlier count. Both sides are range selectors (`last_over_time`), because a failed scrape
+writes a staleness marker that an instant selector reads as "absent": the obvious fix,
+`m unless m offset 1m`, pages "increased by 3" one minute after a single failed scrape on a counter
+that never moved — reproduced with promtool, and now a test case. The two artifact-integrity rules
+below ride out scrape blips the same way, so a page meant to stay open does not close and reopen.
+These rules need Prometheus 2.26 or later.
 
 The model-artifact digest counter's docstring says operators should page on "any non-zero rate";
 no rule did, and one written that way could not have fired either: both writers run at boot, before
@@ -44,17 +52,33 @@ nested delimiter is `__`). Moving the port the supported way, `MOUSEDROID_TELEME
 probe on 8080; setting the template's `MOUSEDROID_TELEMETRY_PORT` moved only the probe. Either way a
 strict promotion could fail a healthy rover. The container's entrypoint already derives health
 settings from the exact `--config` it hands to the rover, so that derivation now also emits the
-resolved port and health path, and the deploy script reads them from the running container.
-`MOUSEDROID_HEALTH_PORT`/`_PATH` still override; an image that predates the new keys gets the old
-behaviour, announced. The template now says what `MOUSEDROID_TELEMETRY_PORT` really does and points
+resolved port and health path, and the deploy script reads them from the running container. Each
+is published EMPTY when the rover cannot vouch for it — a port chosen at startup
+(`port_discovery_strategy` other than `fixed`), or an `api_prefix` that is not a plain URL path —
+and the probe says which and what to set; it never fails the entrypoint, which runs under `set -eu`
+before the rover starts. `MOUSEDROID_HEALTH_PORT`/`_PATH` still override; a rover started from code
+that predates the keys gets the old behaviour, announced. The template now says what `MOUSEDROID_TELEMETRY_PORT` really does and points
 at the key that moves the rover, and documents the five deploy knobs that genuinely work from
 `docker.env` — explaining why nine others the plan listed would not.
 
 Also: `MOUSEDROID_JETSON__TENSORRT_CACHE_DIR` is validated before compose interpolates it into a
 mount spec (a `:` injected a third mount field; `/etc` shadowed an image directory), on both paths
 that start compose — the deploy script and the systemd unit's preflight. And `deploy_remote.sh`
-derives the remote venv from `MOUSEDROID_INSTALL_DIR` instead of hardcoding it twice, which had made
-an install-dir override silently fall through to a full `deploy_jetson.sh`.
+no longer hardcodes the rover's venv twice: a new `MOUSEDROID_REMOTE_INSTALL_DIR` (default
+`/opt/mousedroid`) sets it, and an override is passed on to the rover's `deploy_jetson.sh`, so the
+venv it looks for is the venv that script creates. It is its own `REMOTE_` knob because
+`MOUSEDROID_INSTALL_DIR` is what the PC's own deploy scripts read.
+
+Hardened in review, before merge. `docker.env` names that hook how a process starts (`BASH_ENV`,
+`SHELLOPTS`, `PS4`, `LD_*`, `PATH` and similar) are no longer exported by the deploy script: a
+`BASH_ENV` there ran as root the moment the new validator started a bash child. Both units that
+read the file unset the same names. Text read out of the container is never escape-interpreted —
+`echo -e` turned a printable `\033]52;…` into a write to the operator's clipboard — and a rejected
+value is shown quoted. The compose-value validator never prints the value it refuses (on the boot
+path a value with an open quote has the following template lines, the API key among them, joined
+onto it), accepts one trailing `/` rather than failing boot on it, and also refuses `/var/run`,
+`/var/lock`, the service's other mount targets, and anything covering `/opt/mousedroid/src` or
+`weights`.
 
 One planned change was **not** made, because it was wrong: routing the strict probe's config through
 the env-var resolver to honour `MOUSEDROID_JETSON_CONFIG`. The rover ignores that key entirely (it
