@@ -434,7 +434,8 @@ strict_promotion_probe() {
 #
 # Precedence: MOUSEDROID_HEALTH_PORT / MOUSEDROID_HEALTH_PATH if set; then the
 # container's resolved values; then this script's previous fallbacks, announced
-# rather than silent. The rover publishes each resolved key EMPTY when it cannot
+# rather than silent -- except under --strict-health, which refuses to probe a
+# guess at all. The rover publishes each resolved key EMPTY when it cannot
 # vouch for it -- the port unless telemetry.port_discovery_strategy is 'fixed'
 # (otherwise the port is chosen at startup), the path when telemetry.api_prefix
 # does not form a plain URL path -- and code older than the keys writes neither.
@@ -482,10 +483,12 @@ _is_tcp_port() {
 }
 
 # The same rule healthcheck_env applies before publishing a path
-# (_RESOLVED_URL_PATH_RE); the two are run against one table of cases in
-# tests/unit/scripts/test_docker_deploy_health_endpoint.py.
+# (_is_probe_safe_url_path); the two are run against one
+# table of cases in tests/unit/scripts/test_docker_deploy_health_endpoint.py.
+# A "." or ".." segment is refused because curl removes it before sending, so
+# the URL would name a different route from the one probed.
 _is_url_path() {
-    _matches_c "$1" '^/[A-Za-z0-9._~/-]*$'
+    _matches_c "$1" '^/[A-Za-z0-9._~/-]*$' && [[ "$1/" != */./* && "$1/" != */../* ]]
 }
 
 # Say why a resolved value is missing, so the operator is told what to change.
@@ -493,21 +496,20 @@ _explain_missing_endpoint() {
     local env_text="$1" resolved_port="$2" resolved_path="$3"
     if ! _env_text_has "${env_text}" MOUSEDROID_HEARTBEAT_PATH; then
         warn "  Could not read the rover's healthcheck env file from the container (an image built before its entrypoint, #177, has none)."
-        warn "  Falling back to this script's previous defaults."
         return 0
     fi
     if ! _env_text_has "${env_text}" MOUSEDROID_RESOLVED_TELEMETRY_PORT; then
         warn "  Could not read the rover's resolved telemetry endpoint from the container: the code it started from predates it."
-        warn "  Falling back to this script's previous defaults. Restart the container on current code; its entrypoint writes the endpoint at start."
+        warn "  Restart the container on current code; its entrypoint writes the endpoint at start."
         return 0
     fi
     if [ -z "${HEALTH_PORT}" ] && [ -z "${resolved_port}" ]; then
         warn "  The rover did not publish its telemetry port: unless telemetry.port_discovery_strategy is 'fixed' it picks one at startup (logged as telemetry_port_bound)."
-        warn "  Set MOUSEDROID_HEALTH_PORT to probe that port; falling back to this script's previous default."
+        warn "  Set MOUSEDROID_HEALTH_PORT to probe that port."
     fi
     if [ -z "${HEALTH_PATH}" ] && [ -z "${resolved_path}" ]; then
         warn "  The rover did not publish its health path: telemetry.api_prefix does not form a plain absolute URL path."
-        warn "  Set MOUSEDROID_HEALTH_PATH to probe it; falling back to this script's previous default."
+        warn "  Set MOUSEDROID_HEALTH_PATH to probe it."
     fi
     return 0
 }
@@ -547,6 +549,16 @@ resolve_health_endpoint() {
     if { [ -z "${HEALTH_PORT}" ] && [ -z "${resolved_port}" ]; } \
         || { [ -z "${HEALTH_PATH}" ] && [ -z "${resolved_path}" ]; }; then
         _explain_missing_endpoint "${env_text}" "${resolved_port}" "${resolved_path}"
+        # A promotion gate does not probe a guess. The probe accepts any 2xx,
+        # and under fallback_range the guessed port is precisely where
+        # something else already listens -- so the wrong service could pass
+        # the rover. Bring-up keeps the old fallback, announced.
+        if [ "${STRICT_HEALTH}" = true ]; then
+            error "  --strict-health: refusing to probe a guessed endpoint -- a 2xx from whatever else answers there would pass the gate."
+            error "  Set MOUSEDROID_HEALTH_PORT / MOUSEDROID_HEALTH_PATH to the rover's endpoint."
+            return 1
+        fi
+        warn "  Falling back to this script's previous defaults."
     fi
     if [ -z "${HEALTH_PORT}" ]; then
         HEALTH_PORT="${resolved_port:-${MOUSEDROID_TELEMETRY_PORT:-${LEGACY_HEALTH_PORT_FALLBACK}}}"

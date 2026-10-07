@@ -216,8 +216,6 @@ class TestTheEnvTemplateOffersOnlyKeysThatWork:
             ("MOUSEDROID_DOCKER_ENV_FILE", "it is the path of this file: circular"),
             ("MOUSEDROID_REMOTE_SRC", "deploy_remote.sh runs on the PC, not the rover"),
             ("MOUSEDROID_REMOTE_USER", "deploy_remote.sh runs on the PC, not the rover"),
-            # Added with the review fix that gave the remote venv its own knob.
-            ("MOUSEDROID_REMOTE_INSTALL_DIR", "deploy_remote.sh runs on the PC, not the rover"),
             ("MOUSEDROID_DEPLOY_ARCHIVE_DIR", "deploy_remote.sh runs on the PC, not the rover"),
             ("MOUSEDROID_DEPLOY_CONFIRM_DIRTY", "deploy_remote.sh runs on the PC, not the rover"),
             ("MOUSEDROID_ROVER_WIP_BRANCH", "deploy_remote.sh runs on the PC, not the rover"),

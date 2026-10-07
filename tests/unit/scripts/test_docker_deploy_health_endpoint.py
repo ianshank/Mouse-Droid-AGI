@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from mousedroid.health.healthcheck_env import _RESOLVED_URL_PATH_RE
+from mousedroid.health.healthcheck_env import _is_probe_safe_url_path
 from tests._bash import requires_bash
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -308,6 +308,50 @@ def test_an_older_image_still_honours_the_legacy_port_variable(tmp_path: Path) -
 
 
 # ---------------------------------------------------------------------------
+# A promotion gate never probes a guess
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("port", "path", "why"),
+    [
+        pytest.param(
+            "", "/api/v1/health", "did not publish its telemetry port", id="port-unknowable"
+        ),
+        pytest.param("8080", "", "did not publish its health path", id="path-unknowable"),
+        pytest.param(None, None, "predates", id="older-code"),
+    ],
+)
+def test_strict_health_refuses_to_probe_a_guessed_endpoint(
+    tmp_path: Path, port: str | None, path: str | None, why: str
+) -> None:
+    """The probe accepts any 2xx, and a guessed port may be someone else's.
+
+    Under ``fallback_range`` the rover binds a later port precisely because
+    something already listens on the configured one -- the very port the old
+    fallback would probe. Bring-up keeps the fallback; a promotion fails.
+    """
+    container = _container_env(tmp_path, port=port, path=path)
+
+    probed, output = _run(tmp_path, container, "--strict-health")
+
+    assert probed == [], f"--strict-health probed a guess: {probed}"
+    assert why in output
+    assert "refusing to probe a guessed endpoint" in output
+
+
+def test_strict_health_accepts_an_explicit_endpoint_for_what_the_rover_cannot_name(
+    tmp_path: Path,
+) -> None:
+    container = _container_env(tmp_path, port="", path="/api/v1/health")
+
+    probed, output = _run(tmp_path, container, "--strict-health", MOUSEDROID_HEALTH_PORT="9191")
+
+    assert probed == ["http://127.0.0.1:9191/api/v1/health"]
+    assert "refusing to probe" not in output
+
+
+# ---------------------------------------------------------------------------
 # Values read out of the container are validated before they reach a URL
 # ---------------------------------------------------------------------------
 
@@ -322,7 +366,9 @@ def test_an_invalid_resolved_port_never_reaches_curl(tmp_path: Path, bad_port: s
     assert "The container published a telemetry port that is not a valid TCP port" in output
 
 
-@pytest.mark.parametrize("bad_path", ["api/v1/health", "/api v1/health", "/a?b=c"])
+@pytest.mark.parametrize(
+    "bad_path", ["api/v1/health", "/api v1/health", "/a?b=c", "/api/../health"]
+)
 def test_an_invalid_resolved_path_never_reaches_curl(tmp_path: Path, bad_path: str) -> None:
     container = _container_env(tmp_path, port="8080", path=bad_path)
 
@@ -420,6 +466,15 @@ _PATH_CASES = [
     "/a$b",
     "/a\\b",
     "/caf\u00e9/health",
+    # Dot segments: curl removes them before sending, so the probe would ask
+    # for a different route from the one the server registered.
+    "/api/../health",
+    "/./health",
+    "/api/./health",
+    "/..",
+    # ...but a name that merely starts with dots is an ordinary segment.
+    "/api/.hidden/health",
+    "/api/..x/health",
 ]
 
 
@@ -432,7 +487,7 @@ def test_the_publish_rule_and_the_probe_rule_agree(tmp_path: Path, path: str) ->
     C-locale matching is what keeps ``/caf\u00e9`` out; C.UTF-8 does not
     collate that way, so here the case pins agreement, not that locale bug.
     """
-    published = _RESOLVED_URL_PATH_RE.fullmatch(path) is not None
+    published = _is_probe_safe_url_path(path)
     container = _container_env(tmp_path, port="8080", path=path)
 
     probed, _ = _run(tmp_path, container, LC_ALL="C.UTF-8")

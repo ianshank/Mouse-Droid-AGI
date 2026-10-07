@@ -36,7 +36,9 @@ that writes the marker also writes `up=0`, a restart does not. The third covers 
 before a fresh process' first successful scrape, which no scrape ever sees absent: while the metrics
 registry holding the counter is younger than the window (`mousedroid_uptime_seconds`, which resets
 with it), every count in it is new. Each case — blip, outage, restart at a lower and an equal
-count, a boot-time violation, Prometheus itself down — is a promtool test. The safety group now
+count, a boot-time violation, Prometheus itself down — is a promtool test. The restart arms come
+first, because `or` keeps the left-hand value and the count comparison understates a restart to a
+higher count ("increased by 1" for old 1, new 2). The safety group now
 evaluates every 15s, not at the server's 1m default, so more than one evaluation sees each violation.
 The two artifact-integrity rules below ride out scrape blips the same way, so a page meant to stay
 open does not close and reopen. These rules need Prometheus 2.26 or later.
@@ -62,20 +64,23 @@ strict promotion could fail a healthy rover. The container's entrypoint already 
 settings from the exact `--config` it hands to the rover, so that derivation now also emits the
 resolved port and health path, and the deploy script reads them from the running container. Each
 is published EMPTY when the rover cannot vouch for it — a port chosen at startup
-(`port_discovery_strategy` other than `fixed`), or an `api_prefix` that is not a plain URL path —
-and the probe says which and what to set; it never fails the entrypoint, which runs under `set -eu`
-before the rover starts. `MOUSEDROID_HEALTH_PORT`/`_PATH` still override; a rover started from code
-that predates the keys gets the old behaviour, announced. The template now says what `MOUSEDROID_TELEMETRY_PORT` really does and points
+(`port_discovery_strategy` other than `fixed`), or an `api_prefix` that is not a plain URL path, a
+`.` or `..` segment included (HTTP clients remove those before sending, so the probe would ask for
+another route) — and the probe says which and what to set; it never fails the entrypoint, which runs
+under `set -eu` before the rover starts. `MOUSEDROID_HEALTH_PORT`/`_PATH` still override. Without
+them, bring-up falls back to the old defaults, announced; `--strict-health` refuses to probe a guess
+at all — the probe accepts any 2xx, and under `fallback_range` the guessed port is exactly where
+something else already listens. The template now says what `MOUSEDROID_TELEMETRY_PORT` really does and points
 at the key that moves the rover, and documents the five deploy knobs that genuinely work from
 `docker.env` — explaining why nine others the plan listed would not.
 
 Also: `MOUSEDROID_JETSON__TENSORRT_CACHE_DIR` is validated before compose interpolates it into a
 mount spec (a `:` injected a third mount field; `/etc` shadowed an image directory), on both paths
 that start compose — the deploy script and the systemd unit's preflight. And `deploy_remote.sh`
-no longer hardcodes the rover's venv twice: a new `MOUSEDROID_REMOTE_INSTALL_DIR` (default
-`/opt/mousedroid`) sets it, and an override is passed on to the rover's `deploy_jetson.sh`, so the
-venv it looks for is the venv that script creates. It is its own `REMOTE_` knob because
-`MOUSEDROID_INSTALL_DIR` is what the PC's own deploy scripts read.
+no longer spells the rover's venv out twice: one constant, pinned to the venv
+`scripts/mousedroid.service` runs. It is deliberately not a knob — the unit (which
+`deploy_jetson.sh` installs as-is) and the compose bind mount fix the install root, so moving only
+the venv would health-check one tree while the service restarted the other.
 
 Hardened in review, before merge. The deploy script now **exports only what it and compose's
 interpolation read** from `docker.env` — `MOUSEDROID_*`, `COMPOSE_FILE` and the two credential paths;

@@ -72,6 +72,9 @@ def test_resolved_health_path_follows_the_api_prefix() -> None:
         "/api\nX=1",
         "/ap\u00ef",  # non-ASCII
         "/a?b=c",
+        # Passes the character rule; HTTP clients drop the ".." before sending.
+        "/api/..",
+        "/api/.",
     ],
 )
 def test_a_prefix_the_probe_cannot_use_is_omitted_never_raised(api_prefix: str) -> None:

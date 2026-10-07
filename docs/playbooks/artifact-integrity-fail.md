@@ -66,10 +66,23 @@ did its job; disabling it loads exactly the weights it just refused.
    `sha256.txt`, the manifest is wrong. The `refusing to load` line from First
    Checks step 1 names both paths.
 2. **Cached file wrong** — delete the cached artifact it names (this is a
-   state change) and restart, so it is fetched and verified again:
+   state change) and restart, so it is fetched and verified again. Paste the
+   path exactly as the `refusing to load ... for '<path>'` line prints it,
+   between the single quotes. Both caches live under `/opt/mousedroid/weights`
+   (`world_model.onnx_cache_dir`, `cognitive.weights_dir`), which the
+   container bind-mounts from the host, so the same path is valid here; the
+   `case` refuses anything outside that tree -- a `..` segment included, which
+   the prefix alone would let through -- rather than delete it:
    ```bash
+   ARTIFACT='/opt/mousedroid/weights/...'   # the path from the refusing-to-load line
+   case "$ARTIFACT" in
+       */../* | */..) echo "the path climbs out with '..': stop and check it" >&2 ;;
+       /opt/mousedroid/weights/*) sudo rm -v -- "$ARTIFACT" ;;
+       *) echo "not under /opt/mousedroid/weights: stop and check the path" >&2 ;;
+   esac
    sudo systemctl restart mousedroid-docker
    ```
+   Restarting alone would refuse the same file again.
 3. **Manifest wrong** — regenerate and republish `sha256.txt` alongside the
    artifact in its repository, then restart as above. Never edit the cached
    manifest on the rover to match a file you have not independently verified.

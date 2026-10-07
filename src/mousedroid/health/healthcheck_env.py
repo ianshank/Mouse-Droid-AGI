@@ -42,6 +42,7 @@ _SAFE_PATH_RE = re.compile(r"^[A-Za-z0-9._/\-:]+$")
 # ``tests/unit/scripts/test_docker_deploy_health_endpoint.py`` runs the shell
 # side against the same cases, so the two cannot drift apart unnoticed.
 _RESOLVED_URL_PATH_RE = re.compile(r"/[A-Za-z0-9._~/-]*")
+_DOT_SEGMENTS = frozenset({".", ".."})
 
 # TCP ports a probe can connect to; see ``TCP_PORT_MAX``.
 _TCP_PORTS = range(1, TCP_PORT_MAX + 1)
@@ -69,6 +70,27 @@ def _validate_path(value: str, field: str) -> str:
         )
         raise ValueError(msg)
     return value
+
+
+def _is_probe_safe_url_path(path: str) -> bool:
+    """Return whether the deploy probe can use ``path`` as the URL it asks for.
+
+    The rule ``scripts/docker_deploy.sh`` applies (``_is_url_path``) to the
+    path it reads back: absolute, RFC 3986 unreserved characters plus ``/``,
+    and no ``.`` or ``..`` segment. A dot segment passes the character rule but
+    not the trip: the server registers the path literally, while HTTP clients
+    (curl, aiohttp) remove dot segments before sending, so the probe would ask
+    for a different route from the one served.
+
+    Args:
+        path: Candidate URL path.
+
+    Returns:
+        ``True`` when the probe would request exactly this path.
+    """
+    if not _RESOLVED_URL_PATH_RE.fullmatch(path):
+        return False
+    return not any(segment in _DOT_SEGMENTS for segment in path.split("/"))
 
 
 def _resolved_telemetry_port(cfg: Settings) -> str | None:
@@ -103,7 +125,8 @@ def _resolved_health_path(cfg: Settings) -> str | None:
 
     ``telemetry.api_prefix`` is a free-form string in the schema, so a prefix
     the rover accepts can still fail the probe's URL rule (a space, a quote, no
-    leading ``/``). Such a path is OMITTED, never raised on: the entrypoint
+    leading ``/``, a ``.`` or ``..`` segment). Such a path is OMITTED, never
+    raised on: the entrypoint
     writes this file under ``set -eu`` before it execs the rover, so raising
     here would turn a prefix the rover itself accepts into a crash loop.
 
@@ -114,9 +137,7 @@ def _resolved_health_path(cfg: Settings) -> str | None:
         The path, or ``None``.
     """
     path = f"{cfg.telemetry.api_prefix}{HEALTH_ROUTE_SUFFIX}"
-    if not _RESOLVED_URL_PATH_RE.fullmatch(path):
-        return None
-    return path
+    return path if _is_probe_safe_url_path(path) else None
 
 
 def derive_healthcheck_env(cfg: Settings) -> dict[str, str]:

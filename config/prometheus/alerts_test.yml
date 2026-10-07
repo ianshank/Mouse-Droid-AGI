@@ -186,6 +186,31 @@ tests:
         alertname: SafetyViolation
         exp_alerts: *safety_law1_new_1
 
+  # A restart from an old count of 1 to a new count of 2. The count comparison
+  # alone reads that as "increased by 1"; the page must say 2.
+  - name: SafetyViolation reports the whole new count after a restart to a higher count
+    interval: 15s
+    input_series:
+      - series: 'mousedroid_safety_violations_total{instance="rover1",job="mousedroid",law="law1"}'
+        values: '1x19 stale _x20 2x20'
+      - series: 'up{instance="rover1",job="mousedroid"}'
+        values: '1x60'
+      - series: 'mousedroid_uptime_seconds{instance="rover1",job="mousedroid"}'
+        values: '0+15x19 15+15x40'
+    alert_rule_test:
+      - eval_time: 10m15s
+        alertname: SafetyViolation
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              instance: rover1
+              job: mousedroid
+              law: law1
+            exp_annotations:
+              summary: "Safety violations detected (law=law1)"
+              description: "Safety violation counter for law=law1 increased by 2 on rover1. Investigate immediately — constitutional safety constraints may be at risk."
+              config_ref: "SafetyConfig (Three Laws enforcement); 1m window, 5m gap tolerance, 1d memory and 15s evaluation are operator defaults"
+
   # A violation before the new process' FIRST successful scrape, at the old
   # count: the restart's own failed scrapes (up=0) hide the absence, so no
   # scrape ever sees the series missing. The registry's uptime is what marks

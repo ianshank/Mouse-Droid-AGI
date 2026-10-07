@@ -26,6 +26,7 @@ by archiving nothing at all.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import tarfile
@@ -495,21 +496,16 @@ def test_deploy_on_a_clean_rover_syncs_without_creating_an_archive(
 
 
 # ---------------------------------------------------------------------------
-# The remote venv follows the install dir (F-052 task 5.7)
+# One remote venv, the one the service runs (F-052 task 5.7)
 # ---------------------------------------------------------------------------
-# deploy_jetson.sh creates the venv at ${MOUSEDROID_INSTALL_DIR:-/opt/mousedroid}/venv.
-# This script hardcoded /opt/mousedroid/venv twice. The knob is
-# MOUSEDROID_REMOTE_INSTALL_DIR -- not MOUSEDROID_INSTALL_DIR, which a PC may
-# export for docker_deploy.sh -- and, when set, it reaches the rover's
-# deploy_jetson.sh too, so the venv looked for is the venv created. Asserted on
-# the commands that actually crossed the ssh boundary, not on the script's text.
+# This script spelt /opt/mousedroid/venv out twice; it is one constant now. It
+# is deliberately not a knob: scripts/mousedroid.service (which deploy_jetson.sh
+# installs as-is) runs that venv from that directory, so a knob moving only the
+# venv would reinstall and health-check one tree while the service restarted
+# the other -- and report success. Asserted on the commands that actually
+# crossed the ssh boundary, not on the script's text.
 
-
-def _remote_commands(deploy_env: dict[str, str], tmp_path: Path, **extra: str) -> str:
-    ssh_log = tmp_path / "ssh.log"
-    result = _run_deploy({**deploy_env, "SSH_LOG": str(ssh_log), **extra}, "--code-only")
-    assert result.returncode == 0, result.stdout + result.stderr
-    return ssh_log.read_text(encoding="utf-8")
+_SERVICE = _SCRIPTS / "mousedroid.service"
 
 
 def _without_install_dirs(env: dict[str, str]) -> dict[str, str]:
@@ -520,101 +516,76 @@ def _without_install_dirs(env: dict[str, str]) -> dict[str, str]:
     }
 
 
-def test_the_remote_venv_follows_the_install_dir_override(
-    rover_repo: Path, tmp_path: Path, deploy_env: dict[str, str]
-) -> None:
-    install = tmp_path / "custom-install"
-    sent = _remote_commands(
-        _without_install_dirs(deploy_env), tmp_path, MOUSEDROID_REMOTE_INSTALL_DIR=str(install)
+def _remote_commands(deploy_env: dict[str, str], tmp_path: Path, *args: str, **extra: str) -> str:
+    ssh_log = tmp_path / "ssh.log"
+    result = _run_deploy(
+        {**deploy_env, "SSH_LOG": str(ssh_log), **extra}, *(args or ("--code-only",))
     )
-
-    assert f"test -d {install}/venv" in sent
-    assert f"{install}/venv/bin/pip install" in sent
-    assert f"{install}/venv/bin/python -m mousedroid.main --health-check" in sent
-    assert "/opt/mousedroid/venv" not in sent, "a hardcoded venv path still crossed"
+    assert result.returncode == 0, result.stdout + result.stderr
+    return ssh_log.read_text(encoding="utf-8")
 
 
-def test_the_remote_venv_defaults_to_where_deploy_jetson_creates_it(
+def _service_venv() -> str:
+    """The venv the bare-metal unit runs, from its own ExecStart line."""
+    match = re.search(r"^ExecStart=(\S+)/bin/python\b", _SERVICE.read_text(encoding="utf-8"), re.M)
+    assert match is not None, "mousedroid.service no longer runs a venv python"
+    return match.group(1)
+
+
+def test_the_remote_venv_is_the_one_the_service_runs(
     rover_repo: Path, tmp_path: Path, deploy_env: dict[str, str]
 ) -> None:
-    """Backwards compatibility: with no override, nothing a rover sees changes."""
+    venv = _service_venv()
     sent = _remote_commands(_without_install_dirs(deploy_env), tmp_path)
 
-    assert "test -d /opt/mousedroid/venv" in sent
-    assert "/opt/mousedroid/venv/bin/pip install" in sent
+    assert f"test -d {venv}" in sent
+    assert f"{venv}/bin/pip install" in sent
+    assert f"{venv}/bin/python -m mousedroid.main --health-check" in sent
 
 
-def test_the_pcs_own_install_dir_does_not_retarget_the_rover(
+def test_the_install_root_is_the_services_working_directory() -> None:
+    working = re.search(r"^WorkingDirectory=(\S+)$", _SERVICE.read_text(encoding="utf-8"), re.M)
+    constant = re.search(r"^REMOTE_INSTALL_DIR=(\S+)$", _DEPLOY.read_text(encoding="utf-8"), re.M)
+    assert working is not None
+    assert constant is not None
+
+    assert constant.group(1) == working.group(1)
+    assert _service_venv() == f"{working.group(1)}/venv"
+
+
+@pytest.mark.parametrize(
+    "knob", ["MOUSEDROID_INSTALL_DIR", "MOUSEDROID_REMOTE_INSTALL_DIR"], ids=["pc-own", "removed"]
+)
+def test_no_variable_on_this_pc_retargets_the_rovers_venv(
+    rover_repo: Path, tmp_path: Path, deploy_env: dict[str, str], knob: str
+) -> None:
+    """Neither the PC's own install dir nor the knob an earlier draft added.
+
+    ``MOUSEDROID_INSTALL_DIR`` belongs to docker_deploy.sh / deploy_jetson.sh on
+    the machine they run on. ``MOUSEDROID_REMOTE_INSTALL_DIR`` existed in a draft
+    of this change and was removed in review: it moved the venv but not the
+    service, so a deploy could pass its health check on one tree while the
+    service restarted the other.
+    """
+    sent = _remote_commands(_without_install_dirs(deploy_env), tmp_path, **{knob: "/srv/elsewhere"})
+
+    assert f"test -d {_service_venv()}" in sent
+    assert "/srv/elsewhere" not in sent
+
+
+def test_a_full_deploy_hands_deploy_jetson_no_install_root(
     rover_repo: Path, tmp_path: Path, deploy_env: dict[str, str]
 ) -> None:
-    """``MOUSEDROID_INSTALL_DIR`` belongs to docker_deploy.sh / deploy_jetson.sh.
-
-    A PC exporting it for those (a local install, a dev shell profile) must not
-    move the rover's venv: before this script read it, nothing did.
-    """
+    """deploy_jetson.sh keeps its own default -- the tree the unit it installs runs."""
     sent = _remote_commands(
-        _without_install_dirs(deploy_env), tmp_path, MOUSEDROID_INSTALL_DIR="/home/dev/mousedroid"
-    )
-
-    assert "test -d /opt/mousedroid/venv" in sent
-    assert "/home/dev/mousedroid" not in sent
-
-
-def test_a_full_deploy_creates_the_venv_where_it_is_then_looked_for(
-    rover_repo: Path, tmp_path: Path, deploy_env: dict[str, str]
-) -> None:
-    """The override has to reach deploy_jetson.sh, or the two disagree forever.
-
-    Without it the rover's deploy_jetson.sh builds ``/opt/mousedroid/venv``
-    while this script keeps looking in the override, misses, and falls back to
-    another full deploy -- on every run.
-    """
-    install = tmp_path / "custom-install"
-    ssh_log = tmp_path / "ssh.log"
-    result = _run_deploy(
-        {
-            **_without_install_dirs(deploy_env),
-            "SSH_LOG": str(ssh_log),
-            "MOUSEDROID_REMOTE_INSTALL_DIR": str(install),
-        },
+        _without_install_dirs(deploy_env),
+        tmp_path,
         "--full",
+        MOUSEDROID_REMOTE_INSTALL_DIR="/srv/elsewhere",
     )
-    sent = ssh_log.read_text(encoding="utf-8")
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert f"sudo -- env MOUSEDROID_INSTALL_DIR={install} bash " in sent
-    assert "scripts/deploy_jetson.sh" in sent
-
-
-def test_a_full_deploy_without_an_override_sends_the_same_command_as_before(
-    rover_repo: Path, tmp_path: Path, deploy_env: dict[str, str]
-) -> None:
-    ssh_log = tmp_path / "ssh.log"
-    result = _run_deploy(
-        {**_without_install_dirs(deploy_env), "SSH_LOG": str(ssh_log)},
-        "--full",
-    )
-    sent = ssh_log.read_text(encoding="utf-8")
-
-    assert result.returncode == 0, result.stdout + result.stderr
     assert "scripts/deploy_jetson.sh" in sent
     assert "MOUSEDROID_INSTALL_DIR" not in sent
-
-
-@pytest.mark.parametrize("payload", ["/opt/mouse droid", "/opt/x;id", "relative/install"])
-def test_an_unsafe_install_dir_is_refused_before_any_ssh(payload: str) -> None:
-    """The derived venv crosses the ssh boundary, so its root gets the same guard."""
-    env = dict(os.environ, MOUSEDROID_REMOTE_INSTALL_DIR=payload)
-    result = subprocess.run(
-        ["bash", str(_DEPLOY), "--help"],
-        capture_output=True,
-        text=True,
-        env=env,
-        check=False,
-    )
-
-    assert result.returncode != 0, f"accepted an unsafe install dir: {payload!r}"
-    assert "MOUSEDROID_REMOTE_INSTALL_DIR" in result.stderr, result.stderr
 
 
 # ---------------------------------------------------------------------------

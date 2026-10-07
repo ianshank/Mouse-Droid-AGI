@@ -591,11 +591,15 @@ defects were real, and the task wording around them was not.
   reproduced with the ssh shim: that name is what `docker_deploy.sh` and `deploy_jetson.sh` read
   on the machine they run on, so a PC exporting it for those retargeted the rover; and the value
   never reached the rover, so after a full deploy built `/opt/mousedroid/venv` this script went on
-  looking elsewhere and fell back to a full deploy every run. Now `MOUSEDROID_REMOTE_INSTALL_DIR`
-  (default `/opt/mousedroid`, validated and `%q`-quoted like its siblings), passed to the rover's
-  `deploy_jetson.sh` when set; with it unset, every command the rover receives is unchanged. The
-  legacy bare-metal `mousedroid.service` still hardcodes `/opt/mousedroid/venv`, so relocating an
-  install means editing that unit too — stated in the script's help rather than widened into here.
+  looking elsewhere and fell back to a full deploy every run. The second version gave it a
+  dedicated `MOUSEDROID_REMOTE_INSTALL_DIR`, passed to the rover's `deploy_jetson.sh`. The PR's
+  Copilot review then found the deeper fault, confirmed against the tree: `deploy_jetson.sh`
+  installs `scripts/mousedroid.service` as-is, and that unit's `WorkingDirectory`/`ExecStart` name
+  `/opt/mousedroid` and its venv — so any knob that moves only the venv reinstalls and
+  health-checks one tree while `restart_service` restarts the other, and reports success. The
+  install root is not relocatable in this system (the unit and the compose bind mount fix it), so
+  there is no knob: one constant, pinned by a test to the unit's own `WorkingDirectory` and
+  `ExecStart`. The duplicated literal — the defect the task named — is gone either way.
 
 ### Review corrections to 5.3 and 5.6 — found by peer and security review, each reproduced
 
@@ -652,6 +656,31 @@ defects were real, and the task wording around them was not.
   the control — `MOUSEDROID_INSTALL_DIR` and `COMPOSE_FILE` choose what root runs by design. The doc
   snippets' empty-port guard moved inside the URL: on its own line an interactive shell printed the
   error and ran curl anyway (checked).
+
+### Third review round — Copilot's review of the PR, each finding verified first
+
+- **Dot segments.** The URL rule accepted `.`/`..` segments. With a schema-valid `api_prefix`
+  such as `/api/..`, the server registers `/api/../health` literally, while curl and aiohttp
+  remove dot segments before sending — checked: the route is unreachable and the probe asks for
+  `/health`. Both rules (the Python publisher, now one shared `_is_probe_safe_url_path`, and the
+  shell probe) refuse them, with the cases added to the shared parity table.
+- **A promotion gate probed a guess.** When the rover publishes an endpoint value empty (it cannot
+  vouch for it), `--strict-health` still fell back to 8080 and `/api/v1/health` — and the probe
+  accepts any 2xx, while under `fallback_range` the guessed port is exactly where something else
+  listens. Strict mode now refuses a guess (published-empty, older code, or no env file) and fails
+  closed unless `MOUSEDROID_HEALTH_PORT`/`_PATH` name the endpoint; bring-up keeps the announced
+  fallback.
+- **The install-root knob.** See the 5.7 entry above: removed, and the constant pinned to the unit.
+- **Second pass — the count after a restart.** PromQL `or` keeps the left-hand sample when arms
+  match the same labels, and the count arm came first: a restart from old 1 to new 2 paged
+  "increased by 1" while the restart arms knew it was 2 (reproduced). The restart arms now come
+  first, pinned by that case.
+- **Second pass — the playbook's remediation.** It said to delete the refused cached file but gave
+  only the restart, which would refuse the same file again. It now deletes the exact path from the
+  refusal line — both caches live under the `/opt/mousedroid` bind mount, so the container's path
+  is the host's — behind a `case` guard that refuses anything outside `/opt/mousedroid/weights`.
+  A dry run of that first guard showed `weights/../src/x` matching the prefix; it now refuses `..`
+  before the prefix test.
 
 ## Phase 6 — Documentation, and the alert that does not exist
 

@@ -108,7 +108,11 @@ groups:
     rules:
       # Any new violation — alert immediately (for: 0s). Safety violations
       # are critical; no debounce delay. Fires for 1m after the counter rises;
-      # $value is the number of new violations. Three arms:
+      # $value is the number of new violations. Three arms, written restart
+      # arms first: PromQL `or` keeps the LEFT sample when arms match the same
+      # labels, and after a restart the count comparison understates (old 1,
+      # new 2 reads as "increased by 1") while arms 2 and 3 report the whole
+      # new count.
       #
       #   now  = last_over_time(m[5m])            latest real sample
       #   prev = last_over_time(m[1d] offset 1m)  latest real sample >1m old
@@ -159,6 +163,14 @@ groups:
       - alert: SafetyViolation
         expr: >-
           (
+            mousedroid_safety_violations_total
+              unless mousedroid_safety_violations_total offset 1m
+          ) and on (instance, job) (up offset 1m == 1)
+          or
+          mousedroid_safety_violations_total
+            and on (instance, job) (mousedroid_uptime_seconds < 60)
+          or
+          (
             last_over_time(mousedroid_safety_violations_total[5m])
             - (
               last_over_time(mousedroid_safety_violations_total[1d] offset 1m)
@@ -167,14 +179,6 @@ groups:
               last_over_time(mousedroid_safety_violations_total[5m]) * 0
             )
           ) > 0
-          or
-          (
-            mousedroid_safety_violations_total
-              unless mousedroid_safety_violations_total offset 1m
-          ) and on (instance, job) (up offset 1m == 1)
-          or
-          mousedroid_safety_violations_total
-            and on (instance, job) (mousedroid_uptime_seconds < 60)
         for: 0s
         labels:
           severity: critical
@@ -621,6 +625,14 @@ groups:
       - alert: CloudWeightUpdateDigestMismatch
         expr: >-
           (
+            mousedroid_cloud_weight_update_sha256_mismatches_total
+              unless mousedroid_cloud_weight_update_sha256_mismatches_total offset 15m
+          ) and on (instance, job) (up offset 15m == 1)
+          or
+          mousedroid_cloud_weight_update_sha256_mismatches_total
+            and on (instance, job) (mousedroid_uptime_seconds < 900)
+          or
+          (
             last_over_time(mousedroid_cloud_weight_update_sha256_mismatches_total[5m])
             - (
               last_over_time(mousedroid_cloud_weight_update_sha256_mismatches_total[1d] offset 15m)
@@ -629,14 +641,6 @@ groups:
               last_over_time(mousedroid_cloud_weight_update_sha256_mismatches_total[5m]) * 0
             )
           ) > 0
-          or
-          (
-            mousedroid_cloud_weight_update_sha256_mismatches_total
-              unless mousedroid_cloud_weight_update_sha256_mismatches_total offset 15m
-          ) and on (instance, job) (up offset 15m == 1)
-          or
-          mousedroid_cloud_weight_update_sha256_mismatches_total
-            and on (instance, job) (mousedroid_uptime_seconds < 900)
         for: 0s
         labels:
           severity: page
