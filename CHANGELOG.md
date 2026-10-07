@@ -24,14 +24,19 @@ dashboard-test whitelist that asserted the name without checking it; that whitel
 the first ever, and the first after every restart, so after every deploy. Every counter here is
 pure-add — absent from `/metrics` until its first write, so it is born at 1 — and `increase()` needs
 two samples of an existing series, so it never sees one being born. It also missed anything counted
-while scrapes failed for longer than its one-minute window. It now pages on the count now minus the
-last count seen before the window, where a counter with no earlier sample counts from 0 and a reset
-drops the earlier count. Both sides are range selectors (`last_over_time`), because a failed scrape
-writes a staleness marker that an instant selector reads as "absent": the obvious fix,
-`m unless m offset 1m`, pages "increased by 3" one minute after a single failed scrape on a counter
-that never moved — reproduced with promtool, and now a test case. The two artifact-integrity rules
-below ride out scrape blips the same way, so a page meant to stay open does not close and reopen.
-These rules need Prometheus 2.26 or later.
+while scrapes failed for longer than its one-minute window. It now has two arms. One pages on the
+count now minus the last count seen before the window — a counter with no earlier sample counts from
+0, a reset drops the earlier count — with range selectors (`last_over_time`) on both sides, because a
+failed scrape writes a staleness marker that an instant selector reads as "absent": the obvious fix,
+`m unless m offset 1m`, alone pages "increased by 3" one minute after a single failed scrape on a
+counter that never moved. The other catches what counts cannot: a restart whose new count equals the
+old process' last one, which — counters being born at 1 — is the usual restart. It is that same
+`unless … offset` test, made sound by `and on (instance, job) (up offset 1m == 1)`: the failed scrape
+that writes the marker also writes `up=0`, a restart does not. Each case — blip, outage, restart at
+a lower and an equal count, Prometheus itself down — is a promtool test. The safety group now
+evaluates every 15s, not at the server's 1m default, so more than one evaluation sees each violation.
+The two artifact-integrity rules below ride out scrape blips the same way, so a page meant to stay
+open does not close and reopen. These rules need Prometheus 2.26 or later.
 
 The model-artifact digest counter's docstring says operators should page on "any non-zero rate";
 no rule did, and one written that way could not have fired either: both writers run at boot, before
@@ -69,16 +74,21 @@ no longer hardcodes the rover's venv twice: a new `MOUSEDROID_REMOTE_INSTALL_DIR
 venv it looks for is the venv that script creates. It is its own `REMOTE_` knob because
 `MOUSEDROID_INSTALL_DIR` is what the PC's own deploy scripts read.
 
-Hardened in review, before merge. `docker.env` names that hook how a process starts (`BASH_ENV`,
-`SHELLOPTS`, `PS4`, `LD_*`, `PATH` and similar) are no longer exported by the deploy script: a
-`BASH_ENV` there ran as root the moment the new validator started a bash child. Both units that
-read the file unset the same names. Text read out of the container is never escape-interpreted —
-`echo -e` turned a printable `\033]52;…` into a write to the operator's clipboard — and a rejected
-value is shown quoted. The compose-value validator never prints the value it refuses (on the boot
+Hardened in review, before merge. The deploy script now **exports only what it and compose's
+interpolation read** from `docker.env` — `MOUSEDROID_*`, `COMPOSE_FILE` and the two credential paths;
+the container still gets every key through `env_file:`. Exporting every key ran them in the script's
+own shell, where a line could overwrite its variables (`lineno=…[$(cmd)]` was evaluated
+arithmetically; `SCRIPT_DIR=` chose which validator ran as root) and process hooks (`BASH_ENV`,
+`LD_*`, `PATH`, `DOCKER_CONFIG`, …) reached every child — each reproduced as code running as root.
+Both units that read the file unset the shell-startup names; for them the file's root-only mode is
+the control, and they now say so. Text from the container is never escape-interpreted — `echo -e`
+turned a printable `\033]52;…` into a write to the operator's clipboard — its raw control characters
+are stripped, and a rejected value is shown quoted. Neither the compose-value validator nor
+`preflight_check.sh` (the same boot step) prints a value that is not one plain path: on the boot
 path a value with an open quote has the following template lines, the API key among them, joined
-onto it), accepts one trailing `/` rather than failing boot on it, and also refuses `/var/run`,
-`/var/lock`, the service's other mount targets, and anything covering `/opt/mousedroid/src` or
-`weights`.
+onto it. The validator accepts one trailing `/` rather than failing boot on it, and also refuses
+`/var/run`, `/var/lock`, the service's other mount targets, and anything covering
+`/opt/mousedroid/src`, `weights`, `config` or `models`.
 
 One planned change was **not** made, because it was wrong: routing the strict probe's config through
 the env-var resolver to honour `MOUSEDROID_JETSON_CONFIG`. The rover ignores that key entirely (it

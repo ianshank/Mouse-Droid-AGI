@@ -25,6 +25,8 @@ from pathlib import Path, PurePosixPath
 import pytest
 import yaml
 
+from mousedroid.config import loader as config_loader
+from mousedroid.config.schema.llm import LLMConfig
 from mousedroid.config.schema.world_model import WorldModelConfig
 from tests._bash import requires_bash
 
@@ -116,6 +118,8 @@ def test_safe_values_are_accepted(value: str | None) -> None:
         ("/opt/mousedroid/src", "would shadow /opt/mousedroid/src, which the container"),
         ("/opt/mousedroid/src/mousedroid", "would shadow /opt/mousedroid/src, which"),
         ("/opt/mousedroid/weights", "would shadow /opt/mousedroid/weights, which"),
+        ("/opt/mousedroid/config", "would shadow /opt/mousedroid/config, which"),
+        ("/opt/mousedroid/models/trt", "would shadow /opt/mousedroid/models, which"),
     ],
 )
 def test_unsafe_values_are_refused_with_the_reason(value: str, reason: str) -> None:
@@ -192,17 +196,27 @@ def test_the_source_bind_mount_is_a_same_path_bind_in_compose() -> None:
 
 
 def test_the_paths_in_use_follow_the_image_and_the_schema() -> None:
-    """The package root comes from the Dockerfile; the weights root from the schema."""
+    """Each reserved path is derived from where it actually comes from.
+
+    The package root from the Dockerfile; the weights root from the world-model
+    schema default (relative to WORKDIR); the base config directory from the
+    config loader (repo-relative, so WORKDIR-relative in the image); the model
+    directory from the LLM schema default.
+    """
     dockerfile = _DOCKERFILE.read_text(encoding="utf-8")
     workdir = re.search(r"^WORKDIR (\S+)$", dockerfile, re.M)
     assert workdir is not None
     assert re.search(r"^COPY src/ \./src/$", dockerfile, re.M), "the image no longer copies src/"
     weights_root = PurePosixPath(WorldModelConfig().onnx_cache_dir).parts[0]
+    config_dir = config_loader._DEFAULT_CONFIG_DIR.relative_to(_REPO_ROOT).as_posix()
+    model_dir = PurePosixPath(LLMConfig().model_path).parent.as_posix()
 
     assert workdir.group(1) == _script_scalar("_SOURCE_BIND_MOUNT")
     assert set(_script_array("_SOURCE_PATHS_IN_USE")) == {
         f"{workdir.group(1)}/src",
         f"{workdir.group(1)}/{weights_root}",
+        f"{workdir.group(1)}/{config_dir}",
+        model_dir,
     }
 
 
@@ -298,6 +312,41 @@ def test_preflight_passes_the_check_for_a_safe_value(tmp_path: Path) -> None:
     proc = _preflight("/opt/mousedroid/tensorrt_cache")
 
     assert "[OK] Compose-interpolated values are safe" in proc.stdout + proc.stderr
+
+
+def _preflight_with(**env: str) -> str:
+    proc = subprocess.run(
+        ["bash", str(_PREFLIGHT), "--skip-models"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, **env},
+    )
+    return proc.stdout + proc.stderr
+
+
+def test_preflight_never_prints_lines_joined_onto_a_value() -> None:
+    """The same leak as the validator's, one step over in the same ExecStartPre.
+
+    preflight prints device and config paths it reads from the environment;
+    on the boot path systemd joins the next lines onto a value whose quote is
+    left open, and the template's next lines down are the API key and token.
+    """
+    sentinel = "do-not-echo-this-sentinel"
+    merged = f"/dev/ttyUSB1\nANTHROPIC_API_KEY={sentinel}"
+
+    output = _preflight_with(MOUSEDROID_LIDAR_DEV=merged, MOUSEDROID_CONFIG=merged)
+
+    assert sentinel not in output
+    assert "LiDAR UART missing: <withheld: not a plain path>" in output
+    assert "Config file missing: <withheld: not a plain path>" in output
+
+
+def test_preflight_still_names_a_plain_path() -> None:
+    """...and an ordinary value is still shown: it is what the operator needs."""
+    output = _preflight_with(MOUSEDROID_LIDAR_DEV="/dev/does-not-exist-lidar")
+
+    assert "LiDAR UART missing: /dev/does-not-exist-lidar" in output
 
 
 def test_the_unit_runs_preflight_fatally_and_before_compose() -> None:

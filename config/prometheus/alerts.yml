@@ -100,14 +100,21 @@ groups:
   # SafetyViolation — any safety law violation detected
   # ------------------------------------------------------------------
   - name: mousedroid_safety
+    # Evaluated every 15s rather than at the server's default (1m when unset,
+    # as in config/prometheus/scrape_*.yml): at 1m each violation would be
+    # visible to exactly one evaluation, and one skipped or late evaluation
+    # would lose the page.
+    interval: 15s
     rules:
       # Any new violation — alert immediately (for: 0s). Safety violations
       # are critical; no debounce delay. Fires for 1m after the counter rises;
-      # $value is the number of new violations:
+      # $value is the number of new violations. Two arms:
       #
       #   now  = last_over_time(m[5m])            latest real sample
       #   prev = last_over_time(m[1d] offset 1m)  latest real sample >1m old
-      #   new  = now - (prev if prev <= now, else 0)
+      #   1. new = now - (prev if prev <= now, else 0)
+      #   2. m is present now, was absent 1m ago, and the target WAS scraped
+      #      1m ago (up offset 1m == 1) -- the counter was born, for real.
       #
       # Not increase(m[1m]) > 0 (the original): the counter is pure-add. It
       # does not exist until the first violation creates it at 1, and
@@ -116,18 +123,28 @@ groups:
       # gap longer than the window. Here a counter with no earlier sample has
       # prev = 0, and prev survives a gap.
       #
-      # Not `m unless m offset 1m` either: a failed scrape writes a staleness
-      # marker, which an instant selector reads as "absent", so a counter that
-      # had not moved looked newly born one window after every scrape blip
-      # and paged. Range selectors skip staleness markers, so a blip changes
-      # neither now nor prev; now's 5m range is the instant selector's own
-      # default lookback. `prev <= now` drops prev after a counter reset (the
-      # process restarted), so the new process' count is all new.
+      # Arm 1 uses range selectors because a failed scrape writes a staleness
+      # marker, which an instant selector reads as "absent": on its own,
+      # `m unless m offset 1m` made a counter that had not moved look newly
+      # born one window after every scrape blip, and paged. Range selectors
+      # skip staleness markers, so a blip changes neither now nor prev; now's
+      # 5m range is the instant selector's own default lookback. `prev <= now`
+      # drops prev after a counter reset (the process restarted), so the new
+      # process' count is all new.
+      #
+      # Arm 2 exists because arm 1 cannot see a restart whose new count EQUALS
+      # the old process' last one -- and counters are born at 1, so "old 1,
+      # restart, new 1" is the usual case, not a corner. A restart leaves the
+      # series absent while the target is up; a failed scrape leaves it
+      # absent while the target is down. The `up` guard is what tells them
+      # apart, so arm 2 cannot page on a blip. Arm 1 covers what arm 2 cannot
+      # see: anything counted while scraping was down for the whole window.
       #
       # Limits, both rare: a scrape gap longer than 1d over an unchanged,
       # non-zero counter pages once when scraping resumes (prev has aged
-      # out); a restart whose new count equals the old one within one window
-      # is missed. Every case is proven in alerts_test.yml.
+      # out); a restart during an outage longer than the window, whose new
+      # count equals the old one, is missed. Every case is proven in
+      # alerts_test.yml.
       - alert: SafetyViolation
         expr: >-
           (
@@ -139,6 +156,11 @@ groups:
               last_over_time(mousedroid_safety_violations_total[5m]) * 0
             )
           ) > 0
+          or
+          (
+            mousedroid_safety_violations_total
+              unless mousedroid_safety_violations_total offset 1m
+          ) and on (instance, job) (up offset 1m == 1)
         for: 0s
         labels:
           severity: critical
@@ -148,7 +170,7 @@ groups:
             Safety violation counter for law={{ $labels.law }} increased by
             {{ $value | printf "%.0f" }} on {{ $labels.instance }}.
             Investigate immediately — constitutional safety constraints may be at risk.
-          config_ref: "SafetyConfig (Three Laws enforcement); 1m window, 5m gap tolerance and 1d memory are operator defaults"
+          config_ref: "SafetyConfig (Three Laws enforcement); 1m window, 5m gap tolerance, 1d memory and 15s evaluation are operator defaults"
 
   # ------------------------------------------------------------------
   # HighGPUTemp — GPU thermal alerts
@@ -577,10 +599,11 @@ groups:
       # swap was refused. The rover keeps its previous weights, so this is an
       # EVENT, not a degraded state: it fires for 15 minutes and resolves.
       #
-      # Same shape as SafetyViolation, for the same reasons, over a 15m
+      # Same two arms as SafetyViolation, for the same reasons, over a 15m
       # window: the counter is pure-add, so the first refusal creates the
-      # series already at 1 (increase() alone would miss it), and a scrape
-      # blip must neither re-open the page nor fake a new refusal.
+      # series already at 1 (increase() alone would miss it), a refusal after
+      # a restart usually equals the old count, and a scrape blip must
+      # neither re-open the page nor fake a new refusal.
       - alert: CloudWeightUpdateDigestMismatch
         expr: >-
           (
@@ -592,6 +615,11 @@ groups:
               last_over_time(mousedroid_cloud_weight_update_sha256_mismatches_total[5m]) * 0
             )
           ) > 0
+          or
+          (
+            mousedroid_cloud_weight_update_sha256_mismatches_total
+              unless mousedroid_cloud_weight_update_sha256_mismatches_total offset 15m
+          ) and on (instance, job) (up offset 15m == 1)
         for: 0s
         labels:
           severity: page

@@ -153,6 +153,15 @@ def _assert_counts_new_since_last_seen(expr: str, metric: str, window: str) -> N
         "prev must be dropped when it exceeds now (a counter reset), or the "
         "first count after a process restart is never reported"
     )
+    assert re.search(
+        rf"\( {m} unless {m} offset {window} \) and on \(instance, job\) "
+        rf"\(up offset {window} == 1\)",
+        expr,
+    ), (
+        "a restart whose new count equals the old one (born at 1, so the usual "
+        "case) is invisible to the count comparison; the up-guarded birth arm "
+        "is what catches it"
+    )
 
 
 class TestArtifactIntegrityGroup:
@@ -223,22 +232,52 @@ class TestSafetyViolationSeesTheFirstViolation:
         assert _rule("SafetyViolation")["labels"]["severity"] == "critical"
 
 
+def _seconds(duration: str) -> int:
+    match = re.fullmatch(r"(\d+)([smh])", duration)
+    assert match is not None, duration
+    return int(match.group(1)) * {"s": 1, "m": 60, "h": 3600}[match.group(2)]
+
+
+class TestTheSafetyGroupIsEvaluatedOftenEnough:
+    def test_more_than_one_evaluation_sees_each_violation(self) -> None:
+        """The rule fires for one 1m window after each violation.
+
+        With no group interval Prometheus uses its global evaluation_interval,
+        and the scrape configs here set none, so the default (1m) applies:
+        exactly one evaluation per violation, and one late or skipped
+        evaluation loses the page.
+        """
+        group = next(g for g in _load()["groups"] if g["name"] == "mousedroid_safety")
+        window = re.search(r"offset (\w+)\)", _expr("SafetyViolation"))
+        assert window is not None
+
+        assert "interval" in group, "the safety group falls back to the server default"
+        assert _seconds(group["interval"]) * 2 <= _seconds(window.group(1))
+
+
 class TestNoRuleReadsAScrapeBlipAsABirth:
-    def test_no_rule_tests_presence_with_an_instant_offset_selector(self) -> None:
-        """``m unless m offset W`` pages one window after every failed scrape.
+    def test_every_instant_offset_presence_test_is_guarded_by_up(self) -> None:
+        """``m unless m offset W`` alone pages one window after every failed scrape.
 
         A failed scrape writes a staleness marker; an instant selector that
         lands on it reads "absent", so a counter that never moved looks newly
         born. The first fix for the pure-add problem used exactly this, and
         promtool reproduced the false critical page ("increased by 3") on a
-        counter that had not changed. Range selectors skip the marker.
+        counter that had not changed. The same scrape writes up=0, so the idiom
+        is only sound guarded by ``up offset W == 1`` (a real absence: the
+        target was scraped and the series was not there).
         """
-        idiom = re.compile(r"unless\s+mousedroid_[A-Za-z0-9_]+(\{[^}]*\})?\s+offset\b")
-        offenders = [
-            rule["alert"]
-            for rule in _all_rules(_load())
-            if idiom.search(" ".join(str(rule["expr"]).split()))
-        ]
+        idiom = re.compile(r"unless (mousedroid_\w+) offset (\w+) \)")
+        # Matched on text with every parenthesis padded by a space, below.
+        guarded = re.compile(
+            r"\( (mousedroid_\w+) unless \1 offset (\w+) \) "
+            r"and on \( instance, job \) \( up offset \2 == 1 \)"
+        )
+        offenders = []
+        for rule in _all_rules(_load()):
+            expr = " ".join(str(rule["expr"]).replace("(", "( ").replace(")", " )").split())
+            if len(idiom.findall(expr)) != len(guarded.findall(expr)):
+                offenders.append(rule["alert"])
         assert not offenders, f"staleness-blind presence test in: {offenders}"
 
 

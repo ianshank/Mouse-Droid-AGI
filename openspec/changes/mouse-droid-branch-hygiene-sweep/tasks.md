@@ -631,6 +631,28 @@ defects were real, and the task wording around them was not.
   commands; `print_healthcheck_env --config x "$@"` passed it. It now compares the interpreter and
   the full argument lists.
 
+### Second review round — the loader allow-list, and what the first round missed
+
+- **The deny-list was the wrong shape.** The security re-scan reproduced code execution as root
+  through the deploy script's own namespace: the loader exported every key into the script's shell,
+  so `lineno=BASH_VERSINFO[$(cmd)0]` ran on the next line's arithmetic (present since the loader
+  landed), `IFS=` or the deny-list's own name switched the deny-list off, and `SCRIPT_DIR=` chose
+  which validator ran as root. A deny-list cannot close that class; the loader now exports only an
+  allow-list — `MOUSEDROID_*`, `COMPOSE_FILE`, and the two credential paths compose interpolates —
+  pinned against every `${VAR}` in the compose file, with each reproduction a test.
+- **Raw control bytes.** `printf %s` stops escapes being interpreted, but raw ESC/BEL/CR in container
+  output (command output, probe output, compose's table, logs) still reached the terminal; they are
+  stripped now, and the text itself still shown.
+- **The same leak one step over.** `preflight_check.sh`, in the same fatal `ExecStartPre` as the
+  validator, printed device and config paths verbatim; a value with the template's next lines joined
+  on printed the API key. It now withholds any value that is not one plain path.
+- **Smaller.** The validator also reserves `/opt/mousedroid/config` (the base `default.yaml`; covered,
+  the rover runs on schema defaults with only a debug line) and `models` (the LLM default), each
+  pinned to the loader or schema it comes from. Both units now say the file's 0600 root-only mode is
+  the control — `MOUSEDROID_INSTALL_DIR` and `COMPOSE_FILE` choose what root runs by design. The doc
+  snippets' empty-port guard moved inside the URL: on its own line an interactive shell printed the
+  error and ran curl anyway (checked).
+
 ## Phase 6 — Documentation, and the alert that does not exist
 
 - [x] 6.1 Add a `ModelArtifactDigestMismatch` rule to `config/prometheus/alerts.yml` for
@@ -675,6 +697,16 @@ defects were real, and the task wording around them was not.
   docstring instruction, and `generate_metrics_sample` claimed rules referenced it; none did. Added
   as an event alert (fires on the first refusal, resolves after 15 minutes), since the rover keeps
   its previous weights.
+- **Second review round: the restart that counts alone cannot see.** The re-review found the
+  count comparison blind to a restart whose new count EQUALS the old process' last one — born at 1,
+  so "old 1, restart, new 1" is the usual case, for the whole 1d memory, not "within one window" as
+  the rule's comment then claimed (the restart test used 3→1, which hid it). Reproduced with promtool,
+  then fixed with a second arm: the same `unless … offset` birth test the first version used, made
+  sound by `and on (instance, job) (up offset W == 1)` — a failed scrape writes `up=0` beside its
+  staleness marker, a restart does not. Every gap case now carries the `up` series a real scrape
+  writes; with the guard removed they all page falsely, which is what pins it. The re-review also
+  noted the scrape configs set no `global:`, so the server's 1m evaluation default equalled the 1m
+  window — one evaluation per violation. The safety group now evaluates every 15s, pinned.
 - **The semantics are now gated, not argued.** `config/prometheus/alerts_test.yml` runs under
   `promtool test rules` in the `prometheus-check` job. With only the expressions swapped back, it
   fails exactly where each older rule was wrong: the original `increase()` rule on the first

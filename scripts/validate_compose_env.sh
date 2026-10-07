@@ -75,10 +75,13 @@ _COMPOSE_MOUNT_TARGETS=(
 )
 _SOURCE_BIND_MOUNT=/opt/mousedroid
 
-# Inside that bind mount, what the container runs from: the editable install's
-# package root, and the default ONNX weights cache (which, per the compose
-# file, a volume would silently orphan). Neither may be covered or nested into.
-_SOURCE_PATHS_IN_USE=(/opt/mousedroid/src /opt/mousedroid/weights)
+# Inside that bind mount, what the container runs from, none of which may be
+# covered or nested into: the editable install's package root; the default ONNX
+# weights cache (which, per the compose file, a volume would silently orphan);
+# the base config directory, whose default.yaml the loader reads under every
+# overlay -- covered, the rover would run on schema defaults with only a debug
+# line to say so; and the default LLM model directory.
+_SOURCE_PATHS_IN_USE=(/opt/mousedroid/src /opt/mousedroid/weights /opt/mousedroid/config /opt/mousedroid/models)
 
 # Linux NAME_MAX and PATH_MAX (less the terminating NUL), in bytes.
 _NAME_MAX=255

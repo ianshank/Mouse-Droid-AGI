@@ -76,8 +76,7 @@ telemetry endpoint rather than re-timing by hand:
 # not a settings key, so it does not say where the rover is listening.
 PORT=$(docker exec mousedroid sh -c 'cat "${MOUSEDROID_HEALTHCHECK_ENV_FILE:-/run/mousedroid.env}"' \
        | sed -n "s/^MOUSEDROID_RESOLVED_TELEMETRY_PORT='\([0-9]*\)'$/\1/p")
-: "${PORT:?is empty: the rover picks its port at startup (telemetry.port_discovery_strategy is not fixed) -- see its telemetry_port_bound log line}"
-curl -sf "http://127.0.0.1:${PORT}/metrics" \
+curl -sf "http://127.0.0.1:${PORT:?is empty: the rover picks its port at startup (telemetry.port_discovery_strategy is not fixed) -- see its telemetry_port_bound log line}/metrics" \
   | grep mousedroid_world_model_observe_step_seconds
 ```
 

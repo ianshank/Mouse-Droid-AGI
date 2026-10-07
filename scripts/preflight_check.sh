@@ -57,6 +57,20 @@ PASS=0
 FAIL=0
 WARN=0
 
+# An env-sourced value, fit to print. On the boot path these come from
+# systemd's EnvironmentFile parser, which joins the following lines onto a
+# value whose quote is left open -- in docker.env.example the API key and token
+# sit a few lines below -- and this output goes to the journal. Anything that is
+# not one plain path-like token is withheld rather than printed.
+_printable() {
+    local LC_ALL=C
+    if [[ "$1" =~ ^[A-Za-z0-9._/@:+,=*-]*$ ]]; then
+        printf '%s' "$1"
+    else
+        printf '%s' '<withheld: not a plain path>'
+    fi
+}
+
 ok()   { echo "  [OK] $1"; PASS=$((PASS + 1)); }
 fail() { echo "  [FAIL] $1" >&2; FAIL=$((FAIL + 1)); }
 warn() { echo "  [WARN] $1"; WARN=$((WARN + 1)); }
@@ -65,9 +79,9 @@ check_device() {
     local dev="$1"
     local label="$2"
     if [ -e "$dev" ]; then
-        ok "$label ($dev)"
+        ok "$label ($(_printable "$dev"))"
     else
-        fail "$label missing: $dev"
+        fail "$label missing: $(_printable "$dev")"
     fi
 }
 
@@ -108,18 +122,18 @@ if [ -f "$CONFIG_FILE" ]; then
     if command -v "$PY" >/dev/null 2>&1; then
         if "$PY" -c "import yaml" >/dev/null 2>&1; then
             if "$PY" -c "import sys, yaml; yaml.safe_load(open(sys.argv[1], encoding='utf-8'))" "$CONFIG_FILE" 2>/dev/null; then
-                ok "Config YAML valid ($CONFIG_FILE)"
+                ok "Config YAML valid ($(_printable "$CONFIG_FILE"))"
             else
-                fail "Config YAML parse error: $CONFIG_FILE"
+                fail "Config YAML parse error: $(_printable "$CONFIG_FILE")"
             fi
         else
-            warn "PyYAML not installed - skipping YAML syntax check for $CONFIG_FILE"
+            warn "PyYAML not installed - skipping YAML syntax check for $(_printable "$CONFIG_FILE")"
         fi
     else
-        ok "Config file exists ($CONFIG_FILE) - YAML validation skipped (no python3)"
+        ok "Config file exists ($(_printable "$CONFIG_FILE")) - YAML validation skipped (no python3)"
     fi
 else
-    fail "Config file missing: $CONFIG_FILE"
+    fail "Config file missing: $(_printable "$CONFIG_FILE")"
 fi
 
 # ---------------------------------------------------------------------------
@@ -134,21 +148,21 @@ else
     if [ -d "$WEIGHTS_DIR" ]; then
         WEIGHT_COUNT=$(find "$WEIGHTS_DIR" -type f 2>/dev/null | wc -l)
         if [ "$WEIGHT_COUNT" -gt 0 ]; then
-            ok "BDI/RSSM weights ($WEIGHT_COUNT files in $WEIGHTS_DIR)"
+            ok "BDI/RSSM weights ($WEIGHT_COUNT files in $(_printable "$WEIGHTS_DIR"))"
         else
-            warn "Weights directory empty: $WEIGHTS_DIR (run scripts/download_weights.sh)"
+            warn "Weights directory empty: $(_printable "$WEIGHTS_DIR") (run scripts/download_weights.sh)"
         fi
     else
-        warn "Weights directory missing: $WEIGHTS_DIR (run scripts/download_weights.sh)"
+        warn "Weights directory missing: $(_printable "$WEIGHTS_DIR") (run scripts/download_weights.sh)"
     fi
 
     # LLM model (optional but large)
     LLM_PATTERN="$MODEL_DIR/*.gguf"
     # shellcheck disable=SC2086
     if compgen -G $LLM_PATTERN >/dev/null 2>&1; then
-        ok "LLM model found in $MODEL_DIR"
+        ok "LLM model found in $(_printable "$MODEL_DIR")"
     else
-        warn "LLM model not found ($LLM_PATTERN) - run scripts/download_model.sh"
+        warn "LLM model not found ($(_printable "$LLM_PATTERN")) - run scripts/download_model.sh"
     fi
 fi
 
@@ -162,9 +176,9 @@ AVAIL_KB=$(df -P "$INSTALL_DIR" 2>/dev/null | awk 'NR==2 {print $4}' || echo "0"
 AVAIL_GB=$((AVAIL_KB / 1048576))
 
 if [ "$AVAIL_GB" -ge "$MIN_DISK_GB" ]; then
-    ok "Disk space: ${AVAIL_GB}GB available (min: ${MIN_DISK_GB}GB)"
+    ok "Disk space: ${AVAIL_GB}GB available (min: $(_printable "$MIN_DISK_GB")GB)"
 else
-    fail "Insufficient disk space: ${AVAIL_GB}GB < ${MIN_DISK_GB}GB required"
+    fail "Insufficient disk space: ${AVAIL_GB}GB < $(_printable "$MIN_DISK_GB")GB required"
 fi
 
 # Swap check

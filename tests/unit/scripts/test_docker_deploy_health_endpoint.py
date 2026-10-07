@@ -48,10 +48,15 @@ case "$1" in
     exec)
         if [[ "$*" == *HEALTHCHECK_ENV_FILE* ]]; then
             cat "${FAKE_CONTAINER_ENV:-/dev/null}"
+        elif [ "$2" = "-i" ]; then
+            printf '%s\\n' "${FAKE_PROBE_OUTPUT:-provider OK}"
+        elif [[ "$*" == *torch* ]]; then
+            printf '%s\\n' "${FAKE_TORCH_OUTPUT:-torch=2.1, CUDA=True}"
         else
             echo "OK"
         fi
         ;;
+    compose) printf '%s\\n' "${FAKE_COMPOSE_OUTPUT:-}" ;;
     *) : ;;
 esac
 exit 0
@@ -366,6 +371,36 @@ def test_text_from_the_container_never_reaches_the_terminal_as_escapes(
     assert probed == []
     for sequence in _INJECTED:
         assert sequence not in output, f"{sequence!r} reached the terminal"
+
+
+_HOSTILE_TEXT = "torch=2.1\x1b[2J\x1b]52;c;ZXZpbA==\x07\rCUDA=True"
+_CLEANED_TEXT = "torch=2.1[2J]52;c;ZXZpbA==CUDA=True"
+
+
+@pytest.mark.parametrize(
+    ("knob", "args"),
+    [
+        pytest.param("FAKE_TORCH_OUTPUT", (), id="cuda-probe-line"),
+        pytest.param("FAKE_COMPOSE_OUTPUT", (), id="compose-ps"),
+        pytest.param("FAKE_PROBE_OUTPUT", ("--strict-health",), id="strict-probe"),
+    ],
+)
+def test_raw_control_bytes_in_container_output_never_reach_the_terminal(
+    tmp_path: Path, knob: str, args: tuple[str, ...]
+) -> None:
+    """Printing with %s stops escapes being interpreted; raw ones still pass.
+
+    Command output, probe output and compose's table are the container's to
+    write, so their control characters are stripped before they are shown --
+    and the text itself still arrives, which is what the operator needs.
+    """
+    container = _container_env(tmp_path, port="8080", path="/api/v1/health")
+
+    _, output = _run(tmp_path, container, *args, **{knob: _HOSTILE_TEXT})
+
+    for sequence in (*_INJECTED, "\r"):
+        assert sequence not in output, f"{sequence!r} reached the terminal via {knob}"
+    assert _CLEANED_TEXT in output, f"the {knob} text itself was lost:\n{output}"
 
 
 # One table, both rules: what healthcheck_env publishes, the probe accepts, and

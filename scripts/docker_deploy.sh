@@ -65,23 +65,28 @@ DOCKER_ENV_FILE="${MOUSEDROID_DOCKER_ENV_FILE:-${CONFIG_DIR}/docker.env}"
 # fatal. Skipping matches systemd, and is what keeps an already-provisioned
 # rover's file loading exactly as it does today.
 #
-# A few names are refused outright, because they are not settings but hooks
-# into how a process STARTS: bash runs the file named by BASH_ENV (and honours
-# SHELLOPTS, BASHOPTS and an xtrace PS4) when it starts, the dynamic loader
-# obeys LD_*, and PATH picks every program this script runs as root. Exported,
-# one line in this file would run code in the next child -- the evaluation this
-# loader exists to rule out, back by another door. The container is unaffected:
-# compose reads env_file itself. The list is not exhaustive; the file's
-# root-only mode remains the control. scripts/mousedroid-docker.service unsets
-# the same names on the boot path (UnsetEnvironment=; PATH excepted, see there).
-# The list lives inside the function so the function stands alone, as
+# Only the names this script or compose's interpolation actually read are
+# EXPORTED: MOUSEDROID_* (this script's inputs, and every ${MOUSEDROID_*} in
+# docker-compose.jetson.yml), COMPOSE_FILE, and the two credential paths compose
+# interpolates. Every other line is parsed -- so a malformed one still warns --
+# and left alone. The container still receives every key: compose reads
+# env_file itself.
+#
+# An allow-list, not a deny-list, because exporting runs in THIS shell. Every
+# key used to be exported, so a line could overwrite the loader's own locals
+# or this script's globals: `lineno=` is evaluated arithmetically on the next
+# line, which runs any `$(...)` in its subscript; `IFS=` or the deny-list's own
+# name switched the deny-list off; `SCRIPT_DIR=` chose which validator ran as
+# root. And process hooks -- BASH_ENV, LD_*, PATH, DOCKER_CONFIG, CURL_HOME --
+# reached every child. All reproduced against this script; none is a setting.
+# The pattern lives inside the function so the function stands alone, as
 # tests/unit/scripts/test_docker_deploy_env_loading.py runs it.
 # ---------------------------------------------------------------------------
 _load_env_file_as_data() {
     local file="$1"
     local line trimmed key value
     local lineno=0
-    local -a startup_keys=(BASH_ENV ENV SHELLOPTS BASHOPTS PS4 PROMPT_COMMAND BASH_XTRACEFD PATH)
+    local exported='^(MOUSEDROID_[A-Z0-9_]+|COMPOSE_FILE|GCP_CREDENTIALS_FILE|GOOGLE_APPLICATION_CREDENTIALS)$'
 
     while IFS= read -r line || [ -n "${line}" ]; do
         lineno=$((lineno + 1))
@@ -124,11 +129,10 @@ _load_env_file_as_data() {
             value="${BASH_REMATCH[1]}"
         fi
 
-        # `key` is a validated identifier (no blanks, no glob characters), so
-        # the space-delimited membership test cannot be fooled.
-        if [[ "${key}" == LD_* || " ${startup_keys[*]} " == *" ${key} "* ]]; then
-            printf '[WARN]  %s:%s: ignoring %s -- it changes how processes start, not a setting\n' \
-                "${file}" "${lineno}" "${key}" >&2
+        # Matched against a pattern held in a local the file cannot reach:
+        # an allowed name never collides with this function's lower-case
+        # locals or with any variable this script defines.
+        if [[ ! "${key}" =~ ${exported} ]]; then
             continue
         fi
 
@@ -200,6 +204,15 @@ error() { printf '%b[ERROR]%b %s\n' "${RED}" "${NC}" "$*" >&2; }
 # A value that failed validation, quoted for display (printf %q): control
 # characters come out as $'\E...' text instead of reaching the terminal raw.
 _shown() { printf '%q' "$1"; }
+
+# Free text from the container -- command output, probe output, logs -- with
+# its C0 control characters other than tab and newline (ESC, BEL, CR, ...) and
+# DEL removed. %s above stops escapes being INTERPRETED; this stops raw ones
+# in the text reaching the terminal. A filter: _strip_controls < in > out.
+_strip_controls() { LC_ALL=C tr -d '\000-\010\013-\037\177'; }
+
+# The same, for one value: "$(_clean "$text")".
+_clean() { printf '%s' "$1" | _strip_controls; }
 
 # `[[ =~ ]]` under the C locale. Bracket ranges such as [A-Za-z] are then byte
 # ranges, not whatever the operator's locale collates between A and z (older
@@ -390,12 +403,12 @@ strict_promotion_probe() {
     local probe_out
     if probe_out="$(docker exec -i "${CONTAINER_NAME}" python3 - "${DEPLOY_RECORD}" \
             <<<"${STRICT_PROBE_PY}" 2>&1)"; then
-        echo "$probe_out" | sed 's/^/    /'
+        printf '%s\n' "$probe_out" | _strip_controls | sed 's/^/    /'
         info "  Strict promotion probe: OK"
         return 0
     fi
     error "  Strict promotion probe: FAILED"
-    echo "$probe_out" | sed 's/^/    /' >&2
+    printf '%s\n' "$probe_out" | _strip_controls | sed 's/^/    /' >&2
     return 1
 }
 
@@ -572,7 +585,7 @@ health_check() {
     local cuda_check
     cuda_check=$(docker exec "${CONTAINER_NAME}" python3 -c \
         "import torch; print(f'torch={torch.__version__}, CUDA={torch.cuda.is_available()}')" 2>&1) || true
-    info "  $cuda_check"
+    info "  $(_clean "$cuda_check")"
 
     if echo "$cuda_check" | grep -q "CUDA=True"; then
         info "  GPU acceleration: ENABLED"
@@ -586,7 +599,7 @@ health_check() {
     if [ "$import_check" = "OK" ]; then
         info "  mousedroid import: OK"
     else
-        error "  mousedroid import: FAILED — $import_check"
+        error "  mousedroid import: FAILED — $(_clean "$import_check")"
         return 1
     fi
 
@@ -625,7 +638,7 @@ health_check() {
     # Check compose service status
     info "  Compose services:"
     docker compose -f "${COMPOSE_FILE}" ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null | \
-        sed 's/^/    /' || true
+        _strip_controls | sed 's/^/    /' || true
 
     if [ "$failures" -gt 0 ]; then
         error "  ${failures} strict health check(s) failed"
@@ -755,7 +768,7 @@ done
 if ! docker ps --filter "name=${CONTAINER_NAME}" --filter "status=running" -q | grep -q .; then
     error "Container failed to start within ${HEALTH_TIMEOUT}s"
     error "Logs:"
-    docker compose -f "${COMPOSE_FILE}" logs --tail=20 2>&1 | sed 's/^/  /'
+    docker compose -f "${COMPOSE_FILE}" logs --tail=20 2>&1 | _strip_controls | sed 's/^/  /'
     exit 1
 fi
 

@@ -18,6 +18,9 @@
 #     instant selector reads as "absent". A rule that treats absence as "not
 #     yet born" (`m unless m offset W`) therefore pages one window after every
 #     scrape blip, on a counter that never moved. A rover on Wi-Fi blips often.
+#     A failed scrape also writes up=0, which is what tells a blip from a
+#     restart, so every gap case below carries the `up` series a real scrape
+#     would have produced.
 #
 # '_' is a scrape that produced no sample for the series; 'stale' is the
 # marker Prometheus writes when a series vanishes or its scrape fails.
@@ -57,7 +60,7 @@ tests:
             exp_annotations:
               summary: "Safety violations detected (law=law1)"
               description: "Safety violation counter for law=law1 increased by 1 on rover1. Investigate immediately — constitutional safety constraints may be at risk."
-              config_ref: "SafetyConfig (Three Laws enforcement); 1m window, 5m gap tolerance and 1d memory are operator defaults"
+              config_ref: "SafetyConfig (Three Laws enforcement); 1m window, 5m gap tolerance, 1d memory and 15s evaluation are operator defaults"
       - eval_time: 2m45s
         alertname: SafetyViolation
         exp_alerts: *safety_law1_new_1
@@ -87,6 +90,8 @@ tests:
     input_series:
       - series: 'mousedroid_safety_violations_total{instance="rover1",job="mousedroid",law="law1"}'
         values: '3x40 stale 3x40'
+      - series: 'up{instance="rover1",job="mousedroid"}'
+        values: '1x40 0 1x40'
     alert_rule_test:
       - eval_time: 10m15s
         alertname: SafetyViolation
@@ -108,6 +113,8 @@ tests:
     input_series:
       - series: 'mousedroid_safety_violations_total{instance="rover1",job="mousedroid",law="law1"}'
         values: '3x19 stale _x8 3x20'
+      - series: 'up{instance="rover1",job="mousedroid"}'
+        values: '1x19 0x8 1x20'
     alert_rule_test:
       - eval_time: 6m
         alertname: SafetyViolation
@@ -128,6 +135,8 @@ tests:
     input_series:
       - series: 'mousedroid_safety_violations_total{instance="rover1",job="mousedroid",law="law1"}'
         values: '1x19 stale _x8 2x20'
+      - series: 'up{instance="rover1",job="mousedroid"}'
+        values: '1x19 0x8 1x20'
     alert_rule_test:
       - eval_time: 6m
         alertname: SafetyViolation
@@ -145,6 +154,8 @@ tests:
     input_series:
       - series: 'mousedroid_safety_violations_total{instance="rover1",job="mousedroid",law="law1"}'
         values: '3x19 stale _x20 1x20'
+      - series: 'up{instance="rover1",job="mousedroid"}'
+        values: '1x60'
     alert_rule_test:
       - eval_time: 10m
         alertname: SafetyViolation
@@ -152,6 +163,40 @@ tests:
       - eval_time: 10m15s
         alertname: SafetyViolation
         exp_alerts: *safety_law1_new_1
+
+  # The usual restart: the old process had ONE violation, so did the new one.
+  # Comparing counts alone sees 1 then 1 and stays silent; the series having
+  # been absent while the target was up is what marks the new process.
+  - name: SafetyViolation fires on a restart whose new count equals the old one
+    interval: 15s
+    input_series:
+      - series: 'mousedroid_safety_violations_total{instance="rover1",job="mousedroid",law="law1"}'
+        values: '1x19 stale _x20 1x20'
+      - series: 'up{instance="rover1",job="mousedroid"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SafetyViolation
+        exp_alerts: []
+      - eval_time: 10m15s
+        alertname: SafetyViolation
+        exp_alerts: *safety_law1_new_1
+
+  # Prometheus itself was down for 10m: no samples at all, not even up=0.
+  - name: SafetyViolation stays silent when Prometheus comes back
+    interval: 15s
+    input_series:
+      - series: 'mousedroid_safety_violations_total{instance="rover1",job="mousedroid",law="law1"}'
+        values: '3x20 _x40 3x20'
+      - series: 'up{instance="rover1",job="mousedroid"}'
+        values: '1x20 _x40 1x20'
+    alert_rule_test:
+      - eval_time: 15m15s
+        alertname: SafetyViolation
+        exp_alerts: []
+      - eval_time: 16m15s
+        alertname: SafetyViolation
+        exp_alerts: []
 
   # ---------------------------------------------------------------------------
   # ModelArtifactDigestMismatch (page): written once, at boot, before the
@@ -260,6 +305,8 @@ tests:
     input_series:
       - series: 'mousedroid_cloud_weight_update_sha256_mismatches_total{instance="rover1",job="mousedroid",repo_id="ianshank/mousedroid-policy-v2"}'
         values: '_x10 1x3 stale 1x30'
+      - series: 'up{instance="rover1",job="mousedroid"}'
+        values: '1x13 0 1x30'
     alert_rule_test:
       - eval_time: 14m
         alertname: CloudWeightUpdateDigestMismatch
@@ -272,6 +319,8 @@ tests:
     input_series:
       - series: 'mousedroid_cloud_weight_update_sha256_mismatches_total{instance="rover1",job="mousedroid",repo_id="ianshank/mousedroid-policy-v2"}'
         values: '1x40 stale 1x40'
+      - series: 'up{instance="rover1",job="mousedroid"}'
+        values: '1x40 0 1x40'
     alert_rule_test:
       - eval_time: 41m
         alertname: CloudWeightUpdateDigestMismatch
@@ -285,6 +334,22 @@ tests:
       - eval_time: 57m
         alertname: CloudWeightUpdateDigestMismatch
         exp_alerts: []
+
+  # A refusal, a restart, and a refusal again: 1 then 1. Must page again.
+  - name: CloudWeightUpdateDigestMismatch fires on a refusal after a restart at the same count
+    interval: 1m
+    input_series:
+      - series: 'mousedroid_cloud_weight_update_sha256_mismatches_total{instance="rover1",job="mousedroid",repo_id="ianshank/mousedroid-policy-v2"}'
+        values: '1x30 stale _x20 1x30'
+      - series: 'up{instance="rover1",job="mousedroid"}'
+        values: '1x81'
+    alert_rule_test:
+      - eval_time: 51m
+        alertname: CloudWeightUpdateDigestMismatch
+        exp_alerts: []
+      - eval_time: 52m
+        alertname: CloudWeightUpdateDigestMismatch
+        exp_alerts: *ota_refused_1
 
   # ---------------------------------------------------------------------------
   # MCP: both rules queried `mousedroid_mcp_tool_calls{...}`, which nothing
