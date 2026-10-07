@@ -107,24 +107,15 @@ class TestPanelExpressionsReferenceKnownMetrics:
     ) -> None:
         panels = dashboard["panels"]
         assert isinstance(panels, list)
-        # Whitelist of metric names that appear in panel expressions but
-        # aren't emitted in the sample (e.g. metrics whose render path is
-        # gated on a feature flag the sample doesn't enable). Each entry
-        # is the bare query name without a Prometheus suffix.
-        # Whitelist must use the *rendered* metric names (with the suffix
-        # Prometheus actually emits) so the test catches dashboards that
-        # reference unsuffixed counter base names. Counters render with
-        # ``_total``; histograms render base + ``_bucket`` / ``_sum`` /
-        # ``_count``. The MCP family is gated on ``track_mcp=True`` plus
-        # an actual request having fired — the default sample exercises
-        # neither, but the rendered names are these:
-        sample_omits: set[str] = {
-            "mousedroid_mcp_requests_total",
-            "mousedroid_mcp_tool_calls_total",
-            "mousedroid_mcp_request_latency_ms_bucket",
-            "mousedroid_mcp_request_latency_ms_sum",
-            "mousedroid_mcp_request_latency_ms_count",
-        }
+        # No exemptions. This used to whitelist the MCP family as "not in the
+        # sample, but the rendered names are these" -- and one of those
+        # asserted names was wrong: the counter rendered
+        # ``mousedroid_mcp_tool_calls_total_total``, so the MCP panel queried
+        # a series nothing emitted and this test, by construction, could not
+        # notice. generate_metrics_sample() now seeds the MCP family, so every
+        # panel expression is checked against what is really rendered. A
+        # family that genuinely cannot be seeded should be fixed in the
+        # sample, not exempted here by an unverified name (F-052 task 6.1).
         for panel in panels:
             assert isinstance(panel, dict)
             for target in panel.get("targets", []):
@@ -133,7 +124,7 @@ class TestPanelExpressionsReferenceKnownMetrics:
                     continue
                 # Extract every ``mousedroid_*`` identifier from the expr.
                 referenced = set(re.findall(r"mousedroid_[A-Za-z0-9_]+", expr))
-                unknown = referenced - known_metric_names - sample_omits
+                unknown = referenced - known_metric_names
                 assert not unknown, (
                     f"panel id={panel['id']} title={panel['title']!r} references "
                     f"unknown metric(s): {sorted(unknown)}. Either rename the "

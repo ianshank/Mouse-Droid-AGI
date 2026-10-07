@@ -37,6 +37,16 @@ REMOTE_USER="${MOUSEDROID_REMOTE_USER:-jetson}"
 # tests/unit/scripts/test_deploy_remote_guard.py instead of only on a rover.
 REMOTE_SRC="${MOUSEDROID_REMOTE_SRC:-/opt/mousedroid/src}"
 REMOTE_CONFIG="${MOUSEDROID_CONFIG_DIR:-/etc/mousedroid}"
+# The rover's install root, and the venv deploy_jetson.sh creates under it. One
+# constant instead of the literal repeated at each use. It is deliberately NOT a
+# knob: the install that actually runs is fixed by scripts/mousedroid.service
+# (WorkingDirectory and ExecStart name /opt/mousedroid and its venv, and
+# deploy_jetson.sh installs that unit as-is) and by the compose bind mount. A
+# knob that moved only the venv would reinstall and health-check one tree while
+# restart_service restarted the other, and report success. Pinned to the
+# unit's ExecStart by tests/unit/scripts/test_deploy_remote_guard.py.
+REMOTE_INSTALL_DIR=/opt/mousedroid
+REMOTE_VENV="${REMOTE_INSTALL_DIR}/venv"
 DEPLOY_MODE="code-only"
 HOST=""
 WIP_GUARD="${SCRIPT_DIR}/rover_wip_guard.sh"
@@ -122,6 +132,7 @@ require_safe_remote_path "MOUSEDROID_CONFIG_DIR" "${REMOTE_CONFIG}"
 # not the raw variables, anywhere the value crosses into a shell on the rover.
 REMOTE_SRC_Q="$(printf '%q' "${REMOTE_SRC}")"
 REMOTE_CONFIG_Q="$(printf '%q' "${REMOTE_CONFIG}")"
+REMOTE_VENV_Q="$(printf '%q' "${REMOTE_VENV}")"
 
 remote_cmd() {
     ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
@@ -407,11 +418,10 @@ run_deploy() {
 
 pip_reinstall() {
     log_section "Reinstalling mousedroid package"
-    local venv="/opt/mousedroid/venv"
-    if remote_cmd "test -d ${venv}"; then
+    if remote_cmd "test -d ${REMOTE_VENV_Q}"; then
         local pip_target_q
         pip_target_q="$(printf '%q' "${REMOTE_SRC}[hardware,jetson]")"
-        remote_sudo "${venv}/bin/pip" install --quiet -e "${pip_target_q}"
+        remote_sudo "${REMOTE_VENV_Q}/bin/pip" install --quiet -e "${pip_target_q}"
     else
         log_step "Venv not found — running full deploy_jetson.sh"
         run_deploy
@@ -444,9 +454,8 @@ restart_service() {
 
 run_health_check() {
     log_section "Running remote health check"
-    local venv="/opt/mousedroid/venv"
-    if remote_cmd "test -d ${venv}"; then
-        remote_cmd "MOUSEDROID_MOCK_HARDWARE=false ${venv}/bin/python -m mousedroid.main --health-check" || {
+    if remote_cmd "test -d ${REMOTE_VENV_Q}"; then
+        remote_cmd "MOUSEDROID_MOCK_HARDWARE=false ${REMOTE_VENV_Q}/bin/python -m mousedroid.main --health-check" || {
             echo "WARNING: Health check returned non-zero exit code"
         }
     else

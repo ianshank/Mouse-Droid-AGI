@@ -24,7 +24,9 @@
 #   MOUSEDROID_CONFIG_DIR    Config file dir (default: /etc/mousedroid)
 #   MOUSEDROID_COMPOSE_FILE  Compose file path (default: <install_dir>/docker-compose.jetson.yml)
 #   MOUSEDROID_CONTAINER     Container name (default: mousedroid)
-#   MOUSEDROID_HEALTH_PORT   Telemetry health port (default: 8080)
+#   MOUSEDROID_HEALTH_PORT   Override the probed telemetry port (default: the port the
+#                            running rover resolved from its own config)
+#   MOUSEDROID_HEALTH_PATH   Override the probed health path (default: resolved likewise)
 #   MOUSEDROID_HEALTH_TIMEOUT  Health check timeout secs (default: 30)
 #   MOUSEDROID_STRICT_HEALTH   Set to 1/true for --strict-health without the flag
 #   MOUSEDROID_DEPLOY_RECORD   Deploy record holding the expected model digest
@@ -62,11 +64,34 @@ DOCKER_ENV_FILE="${MOUSEDROID_DOCKER_ENV_FILE:-${CONFIG_DIR}/docker.env}"
 # substitution, and an unparseable line warned about and skipped rather than
 # fatal. Skipping matches systemd, and is what keeps an already-provisioned
 # rover's file loading exactly as it does today.
+#
+# Only the names this script or compose's interpolation actually read are
+# EXPORTED: MOUSEDROID_* (this script's inputs, and every ${MOUSEDROID_*} in
+# docker-compose.jetson.yml), COMPOSE_FILE, and the two credential paths compose
+# interpolates. Every other line is parsed -- so a malformed one still warns --
+# and left alone. The container still receives every key: compose reads
+# env_file itself.
+#
+# An allow-list, not a deny-list, because exporting runs in THIS shell. Every
+# key used to be exported, so a line could overwrite the loader's own locals
+# or this script's globals: `lineno=` is evaluated arithmetically on the next
+# line, which runs any `$(...)` in its subscript; `IFS=` or the deny-list's own
+# name switched the deny-list off; `SCRIPT_DIR=` chose which validator ran as
+# root. And process hooks -- BASH_ENV, LD_*, PATH, DOCKER_CONFIG, CURL_HOME --
+# reached every child. All reproduced against this script; none is a setting.
+# The pattern lives inside the function so the function stands alone, as
+# tests/unit/scripts/test_docker_deploy_env_loading.py runs it.
 # ---------------------------------------------------------------------------
 _load_env_file_as_data() {
     local file="$1"
     local line trimmed key value
     local lineno=0
+    local exported='^(MOUSEDROID_[A-Z0-9_]+|COMPOSE_FILE|GCP_CREDENTIALS_FILE|GOOGLE_APPLICATION_CREDENTIALS)$'
+    # Byte semantics for both patterns below, as _matches_c gives the rest of
+    # this script: a locale that collates accented letters into [A-Z] (older
+    # glibc) would pass a non-ASCII key on to `export`, which refuses it -- and
+    # under `set -e` that aborts the deploy. Restored when the function returns.
+    local LC_ALL=C
 
     while IFS= read -r line || [ -n "${line}" ]; do
         lineno=$((lineno + 1))
@@ -109,6 +134,13 @@ _load_env_file_as_data() {
             value="${BASH_REMATCH[1]}"
         fi
 
+        # Matched against a pattern held in a local the file cannot reach:
+        # an allowed name never collides with this function's lower-case
+        # locals or with any variable this script defines.
+        if [[ ! "${key}" =~ ${exported} ]]; then
+            continue
+        fi
+
         # Assignment, never evaluation: `key` is validated against a strict
         # identifier pattern above and `value` is assigned verbatim.
         export "${key}=${value}"
@@ -123,8 +155,10 @@ INSTALL_DIR="${MOUSEDROID_INSTALL_DIR:-/opt/mousedroid}"
 CONFIG_DIR="${MOUSEDROID_CONFIG_DIR:-/etc/mousedroid}"
 COMPOSE_FILE="${MOUSEDROID_COMPOSE_FILE:-${COMPOSE_FILE:-${INSTALL_DIR}/docker-compose.jetson.yml}}"
 CONTAINER_NAME="${MOUSEDROID_CONTAINER:-mousedroid}"
-HEALTH_PORT="${MOUSEDROID_HEALTH_PORT:-${MOUSEDROID_TELEMETRY_PORT:-8080}}"
-HEALTH_PATH="${MOUSEDROID_HEALTH_PATH:-/api/v1/health}"
+# Explicit operator overrides only. Left empty, the endpoint is resolved from
+# the RUNNING container at health-check time -- see resolve_health_endpoint.
+HEALTH_PORT="${MOUSEDROID_HEALTH_PORT:-}"
+HEALTH_PATH="${MOUSEDROID_HEALTH_PATH:-}"
 HEALTH_TIMEOUT="${MOUSEDROID_HEALTH_TIMEOUT:-30}"
 DEPLOY_RECORD="${MOUSEDROID_DEPLOY_RECORD:-${INSTALL_DIR}/deployments/jetson-image.json}"
 
@@ -164,9 +198,34 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-info()  { echo -e "${GREEN}[INFO]${NC}  $*"; }
-warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
-error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+# %b for the colour codes only; the message itself is %s, never escape-
+# interpreted. Several messages carry text read out of the container, and with
+# `echo -e` a printable `\033]52;...` in it became a terminal escape sequence --
+# a cleared screen and a write to the operator's clipboard.
+info()  { printf '%b[INFO]%b  %s\n' "${GREEN}" "${NC}" "$*"; }
+warn()  { printf '%b[WARN]%b  %s\n' "${YELLOW}" "${NC}" "$*"; }
+error() { printf '%b[ERROR]%b %s\n' "${RED}" "${NC}" "$*" >&2; }
+
+# A value that failed validation, quoted for display (printf %q): control
+# characters come out as $'\E...' text instead of reaching the terminal raw.
+_shown() { printf '%q' "$1"; }
+
+# Free text from the container -- command output, probe output, logs -- with
+# its C0 control characters other than tab and newline (ESC, BEL, CR, ...) and
+# DEL removed. %s above stops escapes being INTERPRETED; this stops raw ones
+# in the text reaching the terminal. A filter: _strip_controls < in > out.
+_strip_controls() { LC_ALL=C tr -d '\000-\010\013-\037\177'; }
+
+# The same, for one value: "$(_clean "$text")".
+_clean() { printf '%s' "$1" | _strip_controls; }
+
+# `[[ =~ ]]` under the C locale. Bracket ranges such as [A-Za-z] are then byte
+# ranges, not whatever the operator's locale collates between A and z (older
+# glibc, as on JetPack 4, puts accented letters there). Usage: _matches_c VALUE ERE
+_matches_c() {
+    local LC_ALL=C
+    [[ "$1" =~ $2 ]]
+}
 
 # ---------------------------------------------------------------------------
 # Validate the two values that reach a `docker exec` argument list.
@@ -185,9 +244,9 @@ error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 # unrepresentable, which is also why no `--` end-of-options marker is needed at
 # the call sites.
 # ---------------------------------------------------------------------------
-if [[ ! "${CONTAINER_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
-    error "Refusing to run: container name is not a valid Docker name: ${CONTAINER_NAME}"
-    error "Set MOUSEDROID_CONTAINER (or the docker.env key) to [A-Za-z0-9][A-Za-z0-9_.-]*"
+if ! _matches_c "${CONTAINER_NAME}" '^[A-Za-z0-9][A-Za-z0-9_.-]*$'; then
+    error "Refusing to run: container name is not a valid Docker name: $(_shown "${CONTAINER_NAME}")"
+    error "Remove MOUSEDROID_CONTAINER (from this shell and ${DOCKER_ENV_FILE}) to use the container compose creates, or set it to [A-Za-z0-9][A-Za-z0-9_.-]*"
     exit 1
 fi
 
@@ -198,10 +257,29 @@ fi
 case "${DEPLOY_RECORD}" in
     /*) ;;
     *)
-        error "Refusing to run: deploy record must be an absolute path: ${DEPLOY_RECORD}"
+        error "Refusing to run: deploy record must be an absolute path: $(_shown "${DEPLOY_RECORD}")"
         exit 1
         ;;
 esac
+
+# Values compose interpolates into a mount spec, checked before ANY compose
+# command parses the file (F-052 task 5.6). Shared with preflight_check.sh,
+# which the systemd unit runs as a fatal ExecStartPre, so the boot path applies
+# the identical rule rather than a copy of it.
+if ! bash "${SCRIPT_DIR}/validate_compose_env.sh"; then
+    error "Refusing to run: fix the value(s) above in ${DOCKER_ENV_FILE} first"
+    exit 1
+fi
+
+# Every compose call below goes through here. Without --env-file, compose also
+# reads <project dir>/.env and any COMPOSE_ENV_FILES for interpolation --
+# sources the check above never sees, so a developer .env rsync'd into the
+# checkout could still move the cache mount onto /etc. An empty env file
+# replaces both: compose interpolates from this process's environment only, the
+# one just validated. mousedroid-docker.service passes the same flag.
+_compose() {
+    docker compose --env-file /dev/null -f "${COMPOSE_FILE}" "$@"
+}
 
 # ---------------------------------------------------------------------------
 # Strict promotion probe (--strict-health only)
@@ -340,13 +418,181 @@ strict_promotion_probe() {
     local probe_out
     if probe_out="$(docker exec -i "${CONTAINER_NAME}" python3 - "${DEPLOY_RECORD}" \
             <<<"${STRICT_PROBE_PY}" 2>&1)"; then
-        echo "$probe_out" | sed 's/^/    /'
+        printf '%s\n' "$probe_out" | _strip_controls | sed 's/^/    /'
         info "  Strict promotion probe: OK"
         return 0
     fi
     error "  Strict promotion probe: FAILED"
-    echo "$probe_out" | sed 's/^/    /' >&2
+    printf '%s\n' "$probe_out" | _strip_controls | sed 's/^/    /' >&2
     return 1
+}
+
+# ---------------------------------------------------------------------------
+# Resolve the telemetry health endpoint from the RUNNING container.
+#
+# The rover serves cfg.telemetry.port (compose runs network_mode: host) at
+# f"{cfg.telemetry.api_prefix}/health". This script used to probe
+# ${MOUSEDROID_TELEMETRY_PORT:-8080} -- but that is not a settings key: the
+# nested delimiter is `__`, so the real key is MOUSEDROID_TELEMETRY__PORT. Moving
+# the port the supported way left this probe on 8080, and setting the template's
+# MOUSEDROID_TELEMETRY_PORT moved only the probe. Either way the health check and
+# the rover could disagree, and a strict promotion would fail a healthy rover.
+#
+# The container's entrypoint already resolves Settings from the exact `--config`
+# it then hands to mousedroid.main, and writes values derived from them to its
+# healthcheck env file (print_healthcheck_env). Reading the endpoint from there
+# makes the probe follow the config the rover runs by construction, instead of
+# re-deriving it here and hoping the two agree.
+#
+# Precedence: MOUSEDROID_HEALTH_PORT / MOUSEDROID_HEALTH_PATH if set; then the
+# container's resolved values; then this script's previous fallbacks, announced
+# rather than silent -- except under --strict-health, which refuses to probe a
+# guess at all. The rover publishes each resolved key EMPTY when it cannot
+# vouch for it -- the port unless telemetry.port_discovery_strategy is 'fixed'
+# (otherwise the port is chosen at startup), the path when telemetry.api_prefix
+# does not form a plain URL path -- and code older than the keys writes neither.
+# The resolved port is the CONFIGURED port, which under 'fixed' is the bound one.
+# ---------------------------------------------------------------------------
+# The fallback is the schema's default endpoint -- TelemetryConfig.port, then
+# api_prefix + HEALTH_ROUTE_SUFFIX -- which is what this probe used before it
+# read the rover. TCP_PORT_MAX is mousedroid.constants.TCP_PORT_MAX. All three
+# are pinned to those sources by test_docker_deploy_health_endpoint.py.
+LEGACY_HEALTH_PORT_FALLBACK=8080
+LEGACY_HEALTH_PATH_FALLBACK=/api/v1/health
+TCP_PORT_MAX=65535
+
+# The container's healthcheck env file, or nothing if it cannot be read.
+_container_env_text() {
+    docker exec "${CONTAINER_NAME}" sh -c \
+        'cat "${MOUSEDROID_HEALTHCHECK_ENV_FILE:-/run/mousedroid.env}"' 2>/dev/null || true
+}
+
+# Succeed if env-file TEXT has a line for KEY. The format is fixed by
+# print_healthcheck_env -- one KEY='value' per line.
+_env_text_has() {
+    local text="$1" key="$2" line
+    while IFS= read -r line; do
+        if [[ "${line}" == "${key}='"*"'" ]]; then
+            return 0
+        fi
+    done <<< "${text}"
+    return 1
+}
+
+# Print the value of KEY from env-file TEXT, or nothing. Pure bash, no pipeline:
+# under `set -euo pipefail` a SIGPIPE from an early `head` would otherwise abort
+# the whole deploy from inside a command substitution.
+_env_text_value() {
+    local text="$1" key="$2" line
+    while IFS= read -r line; do
+        if [[ "${line}" == "${key}='"*"'" ]]; then
+            line="${line#"${key}='"}"
+            printf '%s' "${line%\'}"
+            return 0
+        fi
+    done <<< "${text}"
+    return 0
+}
+
+_is_tcp_port() {
+    _matches_c "$1" '^[0-9]{1,5}$' && (( 10#$1 >= 1 && 10#$1 <= TCP_PORT_MAX ))
+}
+
+# The same rule healthcheck_env applies before publishing a path
+# (_is_probe_safe_url_path); the two are run against one
+# table of cases in tests/unit/scripts/test_docker_deploy_health_endpoint.py.
+# A "." or ".." segment is refused because curl removes it before sending, so
+# the URL would name a different route from the one probed.
+_is_url_path() {
+    _matches_c "$1" '^/[A-Za-z0-9._~/-]*$' && [[ "$1/" != */./* && "$1/" != */../* ]]
+}
+
+# Say why a resolved value is missing, so the operator is told what to change.
+_explain_missing_endpoint() {
+    local env_text="$1" resolved_port="$2" resolved_path="$3"
+    if ! _env_text_has "${env_text}" MOUSEDROID_HEARTBEAT_PATH; then
+        warn "  Could not read the rover's healthcheck env file from the container (an image built before its entrypoint, #177, has none)."
+        return 0
+    fi
+    if ! _env_text_has "${env_text}" MOUSEDROID_RESOLVED_TELEMETRY_PORT; then
+        warn "  Could not read the rover's resolved telemetry endpoint from the container: the code it started from predates it."
+        warn "  Restart the container on current code; its entrypoint writes the endpoint at start."
+        return 0
+    fi
+    if [ -z "${HEALTH_PORT}" ] && [ -z "${resolved_port}" ]; then
+        warn "  The rover did not publish its telemetry port: unless telemetry.port_discovery_strategy is 'fixed' it picks one at startup (logged as telemetry_port_bound)."
+        warn "  Set MOUSEDROID_HEALTH_PORT to probe that port."
+    fi
+    if [ -z "${HEALTH_PATH}" ] && [ -z "${resolved_path}" ]; then
+        warn "  The rover did not publish its health path: telemetry.api_prefix does not form a plain absolute URL path."
+        warn "  Set MOUSEDROID_HEALTH_PATH to probe it."
+    fi
+    return 0
+}
+
+resolve_health_endpoint() {
+    local env_text resolved_port resolved_path
+    env_text="$(_container_env_text)"
+    resolved_port="$(_env_text_value "${env_text}" MOUSEDROID_RESOLVED_TELEMETRY_PORT)"
+    resolved_path="$(_env_text_value "${env_text}" MOUSEDROID_RESOLVED_HEALTH_PATH)"
+
+    # The file is the container's to write, so its values are checked BEFORE
+    # anything prints or uses them. A bad one is unusable: an explicit override
+    # can still stand in for it, a fallback guess cannot.
+    if [ -n "${resolved_port}" ] && ! _is_tcp_port "${resolved_port}"; then
+        error "  The container published a telemetry port that is not a valid TCP port: $(_shown "${resolved_port}")"
+        resolved_port=""
+        if [ -z "${HEALTH_PORT}" ]; then
+            return 1
+        fi
+    fi
+    if [ -n "${resolved_path}" ] && ! _is_url_path "${resolved_path}"; then
+        error "  The container published a health path that is not a safe absolute URL path: $(_shown "${resolved_path}")"
+        resolved_path=""
+        if [ -z "${HEALTH_PATH}" ]; then
+            return 1
+        fi
+    fi
+
+    # The template ships MOUSEDROID_TELEMETRY_PORT, and its old comment said it set
+    # the endpoint's port. Say so plainly when it disagrees with the rover.
+    if [ -n "${MOUSEDROID_TELEMETRY_PORT:-}" ] && [ -n "${resolved_port}" ] \
+        && [ "${MOUSEDROID_TELEMETRY_PORT}" != "${resolved_port}" ]; then
+        warn "  MOUSEDROID_TELEMETRY_PORT=$(_shown "${MOUSEDROID_TELEMETRY_PORT}") has no effect on the rover, which serves port ${resolved_port}."
+        warn "  It is not a settings key: set MOUSEDROID_TELEMETRY__PORT to move the rover, or MOUSEDROID_HEALTH_PORT to override this probe."
+    fi
+
+    if { [ -z "${HEALTH_PORT}" ] && [ -z "${resolved_port}" ]; } \
+        || { [ -z "${HEALTH_PATH}" ] && [ -z "${resolved_path}" ]; }; then
+        _explain_missing_endpoint "${env_text}" "${resolved_port}" "${resolved_path}"
+        # A promotion gate does not probe a guess. The probe accepts any 2xx,
+        # and under fallback_range the guessed port is precisely where
+        # something else already listens -- so the wrong service could pass
+        # the rover. Bring-up keeps the old fallback, announced.
+        if [ "${STRICT_HEALTH}" = true ]; then
+            error "  --strict-health: refusing to probe a guessed endpoint -- a 2xx from whatever else answers there would pass the gate."
+            error "  Set MOUSEDROID_HEALTH_PORT / MOUSEDROID_HEALTH_PATH to the rover's endpoint."
+            return 1
+        fi
+        warn "  Falling back to this script's previous defaults."
+    fi
+    if [ -z "${HEALTH_PORT}" ]; then
+        HEALTH_PORT="${resolved_port:-${MOUSEDROID_TELEMETRY_PORT:-${LEGACY_HEALTH_PORT_FALLBACK}}}"
+    fi
+    if [ -z "${HEALTH_PATH}" ]; then
+        HEALTH_PATH="${resolved_path:-${LEGACY_HEALTH_PATH_FALLBACK}}"
+    fi
+
+    # Overrides and fallbacks end up in the same URL, so they meet the same rule.
+    if ! _is_tcp_port "${HEALTH_PORT}"; then
+        error "  Telemetry health port is not a valid TCP port: $(_shown "${HEALTH_PORT}")"
+        return 1
+    fi
+    if ! _is_url_path "${HEALTH_PATH}"; then
+        error "  Telemetry health path is not a safe absolute URL path: $(_shown "${HEALTH_PATH}")"
+        return 1
+    fi
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -370,7 +616,7 @@ health_check() {
     local cuda_check
     cuda_check=$(docker exec "${CONTAINER_NAME}" python3 -c \
         "import torch; print(f'torch={torch.__version__}, CUDA={torch.cuda.is_available()}')" 2>&1) || true
-    info "  $cuda_check"
+    info "  $(_clean "$cuda_check")"
 
     if echo "$cuda_check" | grep -q "CUDA=True"; then
         info "  GPU acceleration: ENABLED"
@@ -384,7 +630,7 @@ health_check() {
     if [ "$import_check" = "OK" ]; then
         info "  mousedroid import: OK"
     else
-        error "  mousedroid import: FAILED — $import_check"
+        error "  mousedroid import: FAILED — $(_clean "$import_check")"
         return 1
     fi
 
@@ -395,8 +641,16 @@ health_check() {
     # the default stays a warn, word for word. For a promotion it is a
     # release-blocking failure: an unreachable health endpoint means no
     # observability on the thing that just replaced a working rover.
-    local health_url="http://127.0.0.1:${HEALTH_PORT}${HEALTH_PATH}"
-    if curl -sf --max-time 5 "$health_url" >/dev/null 2>&1; then
+    local health_url=""
+    if resolve_health_endpoint; then
+        health_url="http://127.0.0.1:${HEALTH_PORT}${HEALTH_PATH}"
+    fi
+    if [ -z "${health_url}" ]; then
+        # resolve_health_endpoint has already said why.
+        if [ "$STRICT_HEALTH" = true ]; then
+            failures=$((failures + 1))
+        fi
+    elif curl -sf --max-time 5 "$health_url" >/dev/null 2>&1; then
         info "  Telemetry health endpoint: OK (${health_url})"
     elif [ "$STRICT_HEALTH" = true ]; then
         error "  Telemetry health endpoint: not responding (${health_url})"
@@ -414,8 +668,8 @@ health_check() {
 
     # Check compose service status
     info "  Compose services:"
-    docker compose -f "${COMPOSE_FILE}" ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null | \
-        sed 's/^/    /' || true
+    _compose ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null | \
+        _strip_controls | sed 's/^/    /' || true
 
     if [ "$failures" -gt 0 ]; then
         error "  ${failures} strict health check(s) failed"
@@ -508,12 +762,12 @@ fi
 # ---------------------------------------------------------------------------
 if [ "$NO_BUILD" = true ]; then
     info "Step 3: Pulling container image (--no-build)"
-    docker compose -f "${COMPOSE_FILE}" pull 2>&1 | tail -5
+    _compose pull 2>&1 | tail -5
 else
     info "Step 3: Building mousedroid:jetson container image"
     info "  This will pull the L4T base image (~10 GB) on first run..."
     cd "${INSTALL_DIR}"
-    docker compose -f "${COMPOSE_FILE}" build --no-cache 2>&1 | tail -5
+    _compose build --no-cache 2>&1 | tail -5
 fi
 
 # ---------------------------------------------------------------------------
@@ -521,7 +775,7 @@ fi
 # ---------------------------------------------------------------------------
 if docker ps -q --filter "name=${CONTAINER_NAME}" | grep -q .; then
     info "Step 4: Stopping existing container"
-    docker compose -f "${COMPOSE_FILE}" down --timeout 30
+    _compose down --timeout 30
 else
     info "Step 4: No existing container running"
 fi
@@ -530,7 +784,7 @@ fi
 # Step 5: Start the container
 # ---------------------------------------------------------------------------
 info "Step 5: Starting mousedroid container"
-docker compose -f "${COMPOSE_FILE}" up -d
+_compose up -d
 
 # Wait for container to be healthy with timeout
 info "  Waiting for container to start (timeout: ${HEALTH_TIMEOUT}s)..."
@@ -545,7 +799,7 @@ done
 if ! docker ps --filter "name=${CONTAINER_NAME}" --filter "status=running" -q | grep -q .; then
     error "Container failed to start within ${HEALTH_TIMEOUT}s"
     error "Logs:"
-    docker compose -f "${COMPOSE_FILE}" logs --tail=20 2>&1 | sed 's/^/  /'
+    _compose logs --tail=20 2>&1 | _strip_controls | sed 's/^/  /'
     exit 1
 fi
 
@@ -590,7 +844,7 @@ if [ "$INSTALL_SERVICE" = true ]; then
 
     # Stop the manually-started compose and let systemd manage it
     info "  Stopping manual compose (systemd will manage lifecycle)..."
-    docker compose -f "${COMPOSE_FILE}" down --timeout 30
+    _compose down --timeout 30
     systemctl start mousedroid-docker
     info "  Service started via systemd"
 
@@ -621,8 +875,8 @@ echo ""
 info "Commands:"
 info "  Logs:       docker logs -f ${CONTAINER_NAME}"
 info "  Shell:      docker exec -it ${CONTAINER_NAME} bash"
-info "  Stop:       docker compose -f ${COMPOSE_FILE} down"
-info "  Restart:    docker compose -f ${COMPOSE_FILE} restart"
+info "  Stop:       docker compose --env-file /dev/null -f ${COMPOSE_FILE} down"
+info "  Restart:    docker compose --env-file /dev/null -f ${COMPOSE_FILE} restart"
 info "  Health:     bash $0 --health-only"
 info "  Promote:    bash $0 --health-only --strict-health   # fails on provider/digest/telemetry"
 if [ "$INSTALL_SERVICE" = true ]; then

@@ -72,7 +72,11 @@ The stage's own instrumentation is the Prometheus family
 telemetry endpoint rather than re-timing by hand:
 
 ```bash
-curl -sf "http://127.0.0.1:${MOUSEDROID_TELEMETRY_PORT:-8080}/metrics" \
+# The port the rover resolved from its own config. MOUSEDROID_TELEMETRY_PORT is
+# not a settings key, so it does not say where the rover is listening.
+PORT=$(docker exec mousedroid sh -c 'cat "${MOUSEDROID_HEALTHCHECK_ENV_FILE:-/run/mousedroid.env}"' \
+       | sed -n "s/^MOUSEDROID_RESOLVED_TELEMETRY_PORT='\([0-9]*\)'$/\1/p")
+curl -sf "http://127.0.0.1:${PORT:?is empty: the rover picks its port at startup (telemetry.port_discovery_strategy is not fixed) -- see its telemetry_port_bound log line}/metrics" \
   | grep mousedroid_world_model_observe_step_seconds
 ```
 

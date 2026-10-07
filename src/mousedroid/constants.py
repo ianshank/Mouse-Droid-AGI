@@ -67,6 +67,14 @@ DEFAULT_LIDAR_MIN_RANGE_M: float = 0.15
 MILLISECONDS_PER_SECOND: float = 1000.0
 """Conversion factor from seconds to milliseconds."""
 
+HEALTH_ROUTE_SUFFIX: str = "/health"
+"""Suffix of the telemetry health route under ``TelemetryConfig.api_prefix``.
+
+Definitional, not tunable: the server registers ``f"{api_prefix}{suffix}"`` and
+``health.healthcheck_env`` derives the same path for the deploy probe, so both
+build the route from this one name rather than each spelling ``"/health"``.
+"""
+
 LOG_PRECISION_DP: int = 3
 """Decimal places for distance and elapsed-time values in log events.
 
@@ -170,6 +178,13 @@ CONNECTIVITY_CHECK_PORT: int = 80
 
 LOOPBACK_IP: str = "127.0.0.1"
 """Loopback address returned when no network is available."""
+
+TCP_PORT_MAX: int = 65535
+"""Highest TCP port number -- a protocol fact (16-bit field), not a tunable.
+
+Port 0 is not a destination either: it asks the OS to choose. So a port a probe
+can connect to lies in ``1..TCP_PORT_MAX``.
+"""
 
 # ---------------------------------------------------------------------------
 # Cognitive core timing defaults

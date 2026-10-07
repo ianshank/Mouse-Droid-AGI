@@ -323,9 +323,9 @@ mousedroid_cloud_experience_queue_depth 7
 # TYPE mousedroid_mcp_requests_total counter
 mousedroid_mcp_requests_total 1
 
-# HELP mousedroid_mcp_tool_calls_total_total MCP tool call outcomes (labels: tool, result)
-# TYPE mousedroid_mcp_tool_calls_total_total counter
-mousedroid_mcp_tool_calls_total_total{tool="calibrate",result="ok"} 1
+# HELP mousedroid_mcp_tool_calls_total MCP tool call outcomes (labels: tool, result)
+# TYPE mousedroid_mcp_tool_calls_total counter
+mousedroid_mcp_tool_calls_total{tool="calibrate",result="ok"} 1
 
 # HELP mousedroid_mcp_request_latency_ms MCP request end-to-end latency in milliseconds
 # TYPE mousedroid_mcp_request_latency_ms histogram

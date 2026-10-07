@@ -13,6 +13,7 @@ from typing import Final, Literal
 from pydantic import Field, model_validator
 
 from mousedroid.config.schema._primitives import ESP32CommandSetLiteral, Self, StrictBaseModel
+from mousedroid.constants import TCP_PORT_MAX
 
 #: Inclusive bounds for a Broadcom (BCM) GPIO pin number.
 #:
@@ -196,7 +197,7 @@ class ESP32Config(StrictBaseModel):
         description="Serial baud rate (Wave Rover default)",
     )
     wifi_host: str = Field("192.168.4.1", description="ESP32 WiFi AP IP address")
-    wifi_port: int = Field(80, gt=0, le=65535, description="ESP32 HTTP port")
+    wifi_port: int = Field(80, gt=0, le=TCP_PORT_MAX, description="ESP32 HTTP port")
     command_timeout_s: float = Field(0.5, gt=0, description="Command ACK timeout (s)")
     keepalive_hz: float = Field(10.0, gt=0, description="Motor command keepalive rate (Hz)")
     max_velocity_mps: float = Field(0.5, gt=0, description="Max velocity magnitude (m/s)")

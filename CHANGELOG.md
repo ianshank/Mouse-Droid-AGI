@@ -8,6 +8,118 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — the nightly Spec Harness, red every night since 2026-09-08
+
+`validate-slow` runs `--strict-git`, which needs every `done` feature's `implemented_in` to resolve.
+Seventeen did not: F-036–F-042, F-043–F-046, F-048 and F-054–F-058 were pinned to commits on their
+PR branches, and those PRs were squash-merged and the branches deleted, so the commits exist nowhere
+a clone can fetch. Pull-request CI skips that job, so every PR stayed green while the nightly failed.
+Each is now pinned to its PR's merge commit (#222, #224, #242), all ancestors of the default branch
+— the follow-up step `.claude/skills/feature-closeout/SKILL.md` prescribes.
+
+### Fixed — three alerts that could never fire, and the two the docstrings promised
+
+`promtool check rules` validates syntax, not whether a rule can ever be true, and three rules
+passed it while dead. `MCPCircuitOpen` (severity `page`) and `MCPRateLimitedSurge` queried
+`mousedroid_mcp_tool_calls{...}`, a series nothing emits: the registry declared the family name with
+its own `_total` and the renderer appended another, so it exposed `..._total_total` — matched by no
+alert, no dashboard panel and no doc, all of which expected `mousedroid_mcp_tool_calls_total`. The
+emitter now renders that name. The Grafana MCP panel had been dead for the same reason, hidden by a
+dashboard-test whitelist that asserted the name without checking it; that whitelist is gone, because
+`generate_metrics_sample()` now seeds the MCP family. **Breaking for anyone who queried the
+`_total_total` name directly** — nothing in this repository did.
+
+`SafetyViolation` (critical) never fired on the **first** safety violation of a process's life —
+the first ever, and the first after every restart, so after every deploy. Every counter here is
+pure-add — absent from `/metrics` until its first write, so it is born at 1 — and `increase()` needs
+two samples of an existing series, so it never sees one being born. It also missed anything counted
+while scrapes failed for longer than its one-minute window. It now has three arms. One pages on the
+count now minus the last count seen before the window — a counter with no earlier sample counts from
+0, a reset drops the earlier count — with range selectors (`last_over_time`) on both sides, because a
+failed scrape writes a staleness marker that an instant selector reads as "absent": the obvious fix,
+`m unless m offset 1m`, alone pages "increased by 3" one minute after a single failed scrape on a
+counter that never moved. The other catches what counts cannot: a restart whose new count equals the
+old process' last one, which — counters being born at 1 — is the usual restart. It is that same
+`unless … offset` test, made sound by `and on (instance, job) (up offset 1m == 1)`: the failed scrape
+that writes the marker also writes `up=0`, a restart does not. The third covers a violation recorded
+before a fresh process' first successful scrape, which no scrape ever sees absent: while the metrics
+registry holding the counter is younger than the window (`mousedroid_uptime_seconds`, which resets
+with it), every count in it is new. Each case — blip, outage, restart at a lower and an equal
+count, a boot-time violation, Prometheus itself down — is a promtool test. The restart arms come
+first, because `or` keeps the left-hand value and the count comparison understates a restart to a
+higher count ("increased by 1" for old 1, new 2). The safety group now
+evaluates every 15s, not at the server's 1m default, so more than one evaluation sees each violation.
+The two artifact-integrity rules below ride out scrape blips the same way, so a page meant to stay
+open does not close and reopen. These rules need Prometheus 2.26 or later.
+
+The model-artifact digest counter's docstring says operators should page on "any non-zero rate";
+no rule did, and one written that way could not have fired either: both writers run at boot, before
+the telemetry server exists, so the value never changes after the first scrape and its rate is 0
+forever. `ModelArtifactDigestMismatch` checks the value instead. `CloudWeightUpdateDigestMismatch`
+covers the OTA sibling, which carried the same instruction and was also unalerted. Both page and
+link `docs/playbooks/artifact-integrity-fail.md`.
+
+None of this is argued any more. `config/prometheus/alerts_test.yml` evaluates the rules against
+series shaped like the real ones under `promtool test rules`, now part of CI's `prometheus-check`
+job, and a pytest gate requires every metric any alert references — in every group, not only the
+LLM one it used to check — to be rendered by the sample.
+
+### Fixed — the deploy health check probes the port the rover actually serves
+
+`docker_deploy.sh` probed `${MOUSEDROID_TELEMETRY_PORT:-8080}`, but that is not a settings key (the
+nested delimiter is `__`). Moving the port the supported way, `MOUSEDROID_TELEMETRY__PORT`, left the
+probe on 8080; setting the template's `MOUSEDROID_TELEMETRY_PORT` moved only the probe. Either way a
+strict promotion could fail a healthy rover. The container's entrypoint already derives health
+settings from the exact `--config` it hands to the rover, so that derivation now also emits the
+resolved port and health path, and the deploy script reads them from the running container. Each
+is published EMPTY when the rover cannot vouch for it — a port chosen at startup
+(`port_discovery_strategy` other than `fixed`), or an `api_prefix` that is not a plain URL path, a
+`.` or `..` segment included (HTTP clients remove those before sending, so the probe would ask for
+another route) — and the probe says which and what to set; it never fails the entrypoint, which runs
+under `set -eu` before the rover starts. `MOUSEDROID_HEALTH_PORT`/`_PATH` still override. Without
+them, bring-up falls back to the old defaults, announced; `--strict-health` refuses to probe a guess
+at all — the probe accepts any 2xx, and under `fallback_range` the guessed port is exactly where
+something else already listens. The template now says what `MOUSEDROID_TELEMETRY_PORT` really does and points
+at the key that moves the rover, and documents the five deploy knobs that genuinely work from
+`docker.env` — explaining why nine others the plan listed would not.
+
+Also: `MOUSEDROID_JETSON__TENSORRT_CACHE_DIR` is validated before compose interpolates it into a
+mount spec (a `:` injected a third mount field; `/etc` shadowed an image directory), on both paths
+that start compose — the deploy script and the systemd unit's preflight. And `deploy_remote.sh`
+no longer spells the rover's venv out twice: one constant, pinned to the venv
+`scripts/mousedroid.service` runs. It is deliberately not a knob — the unit (which
+`deploy_jetson.sh` installs as-is) and the compose bind mount fix the install root, so moving only
+the venv would health-check one tree while the service restarted the other.
+
+Hardened in review, before merge. The deploy script now **exports only what it and compose's
+interpolation read** from `docker.env` — `MOUSEDROID_*`, `COMPOSE_FILE` and the two credential paths;
+the container still gets every key through `env_file:`. Exporting every key ran them in the script's
+own shell, where a line could overwrite its variables (`lineno=…[$(cmd)]` was evaluated
+arithmetically; `SCRIPT_DIR=` chose which validator ran as root) and process hooks (`BASH_ENV`,
+`LD_*`, `PATH`, `DOCKER_CONFIG`, …) reached every child — each reproduced as code running as root.
+Both units that read the file unset the shell-startup names; for them the file's root-only mode is
+the control, and they now say so. Text from the container is never escape-interpreted — `echo -e`
+turned a printable `\033]52;…` into a write to the operator's clipboard — its raw control characters
+are stripped, and a rejected value is shown quoted. Neither the compose-value validator nor
+`preflight_check.sh` (the same boot step) prints a value that is not one plain path: on the boot
+path a value with an open quote has the following template lines, the API key among them, joined
+onto it. The validator accepts one trailing `/` rather than failing boot on it, and also refuses
+`/var/run`, `/var/lock`, the service's other mount targets, and anything covering or nested
+inside `/opt/mousedroid/src`, `weights`, `config` or `models`. **Behaviour change:** both paths now
+run compose with `--env-file /dev/null`, so it no longer reads a project `.env` (or
+`COMPOSE_ENV_FILES`) for interpolation. Those sources reached compose without passing the check:
+`deploy_remote.sh` rsyncs the working tree, untracked `.env` included, into the rover's checkout,
+and a `MOUSEDROID_JETSON__TENSORRT_CACHE_DIR=/etc:ro` there mounted the cache read-only over `/etc`
+(reproduced with `compose config`). Interpolation values belong in `docker.env`, which both paths
+load into the environment the check reads.
+
+One planned change was **not** made, because it was wrong: routing the strict probe's config through
+the env-var resolver to honour `MOUSEDROID_JETSON_CONFIG`. The rover ignores that key entirely (it
+loads only its explicit `--config`), and that resolver ranks the `MOUSEDROID_CONFIGS` CSV lists
+above `MOUSEDROID_CONFIG`, so the change would have let the probe evaluate an overlay the rover never
+loads. The invariant it was after — the gate and the rover read the same config — is pinned instead.
+
+
 ### Security — `docker_deploy.sh` stopped executing `/etc/mousedroid/docker.env`, and stopped leaving it world-readable
 
 Two defects in the same file, both confirmed on the tree before anything changed.

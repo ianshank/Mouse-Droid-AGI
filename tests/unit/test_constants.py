@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import pytest
+from pydantic import BaseModel, ValidationError
+
+from mousedroid.config.schema.hardware import ESP32Config
+from mousedroid.config.schema.harness_mcp import MCPConfig
+from mousedroid.config.schema.telemetry import TelemetryConfig
 from mousedroid.constants import (
     AFFECT_ESTIMATOR_SEED,
     BELIEF_ENCODER_SEED,
@@ -23,9 +29,22 @@ from mousedroid.constants import (
     N_SENSOR_MODALITIES_WITH_IMU,
     N_SENSOR_MODALITIES_WITH_LIDAR,
     POLICY_MLP_SEED,
+    TCP_PORT_MAX,
     VALUE_MLP_SEED,
     WEIGHT_INIT_SCALE,
 )
+
+
+@pytest.mark.parametrize(
+    ("model", "field"),
+    [(TelemetryConfig, "port"), (ESP32Config, "wifi_port"), (MCPConfig, "port")],
+    ids=["telemetry", "esp32-wifi", "mcp"],
+)
+def test_tcp_port_max_bounds_every_port_field(model: type[BaseModel], field: str) -> None:
+    """Inclusive at the constant, and not one port further."""
+    assert getattr(model.model_validate({field: TCP_PORT_MAX}), field) == TCP_PORT_MAX
+    with pytest.raises(ValidationError):
+        model.model_validate({field: TCP_PORT_MAX + 1})
 
 
 def test_dimension_constants_positive():

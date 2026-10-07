@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from mousedroid.common.async_utils import cancel_and_drain, spawn_tracked
 from mousedroid.common.rate_limit import TokenBucket
-from mousedroid.constants import MDNS_SERVICE_TYPE
+from mousedroid.constants import HEALTH_ROUTE_SUFFIX, MDNS_SERVICE_TYPE
 from mousedroid.logging.setup import get_logger
 from mousedroid.telemetry.protocol import LidarRawScan, TelemetryFrame
 from mousedroid.telemetry.server._state import _TelemetryServerState
@@ -418,7 +418,7 @@ class _LifecycleMixin(_TelemetryServerState):
 
         app.router.add_get(f"{prefix}/status", self._handle_status)
         app.router.add_get(f"{prefix}/sensors", self._handle_sensors)
-        app.router.add_get(f"{prefix}/health", self._handle_health)
+        app.router.add_get(f"{prefix}{HEALTH_ROUTE_SUFFIX}", self._handle_health)
         app.router.add_get(f"{prefix}/logs", self._handle_logs)
         app.router.add_get(f"{prefix}/network", self._handle_network)
         if self._mission_route_enabled:

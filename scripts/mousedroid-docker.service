@@ -45,6 +45,20 @@ Environment=COMPOSE_FILE=/opt/mousedroid/docker-compose.jetson.yml
 
 # Optional environment file (dash prefix = no error if missing)
 EnvironmentFile=-/etc/mousedroid/docker.env
+# docker.env is data, but a few names in it would hook how the shells below
+# START: bash runs the file named by BASH_ENV, honours SHELLOPTS/BASHOPTS and an
+# xtrace PS4, and the dynamic loader obeys LD_*. None is a setting, so drop them
+# (applied after EnvironmentFile=, whatever the line order). The container is
+# unaffected: compose reads env_file itself.
+#
+# This is defence in depth, not the control. systemd has no allow-list for an
+# EnvironmentFile (scripts/docker_deploy.sh exports only the names it and
+# compose read), so other names still reach these processes -- HOME and PATH
+# among them, kept because unsetting them would also drop systemd's own -- and
+# MOUSEDROID_INSTALL_DIR / COMPOSE_FILE choose what runs here BY DESIGN. The
+# control is the file's mode: root-owned, 0600 (host_bootstrap.sh,
+# docker_deploy.sh). Whoever can write it already decides what root runs.
+UnsetEnvironment=BASH_ENV ENV SHELLOPTS BASHOPTS PS4 PROMPT_COMMAND BASH_XTRACEFD LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT
 
 # Sync production config overlay from repo to /etc/mousedroid (non-fatal).
 # systemd requires an absolute executable path in ExecStartPre, so invoke a
@@ -58,9 +72,12 @@ ExecStartPre=/bin/bash -lc 'exec "${MOUSEDROID_INSTALL_DIR}/scripts/preflight_ch
 # Non-fatal dash prefix: the mousedroid:jetson image is built locally on the
 # rover (compose `build:`, no registry), so `pull` always errors — without the
 # dash that error aborts every service start.
-ExecStartPre=-/usr/bin/docker compose -f ${COMPOSE_FILE} pull --quiet
-ExecStart=/usr/bin/docker compose -f ${COMPOSE_FILE} up --abort-on-container-exit
-ExecStop=/usr/bin/docker compose -f ${COMPOSE_FILE} down --timeout 30
+# --env-file /dev/null: compose interpolates from this unit's environment only
+# -- the one preflight_check.sh just validated -- never from a project .env or
+# COMPOSE_ENV_FILES, which that check cannot see (scripts/validate_compose_env.sh).
+ExecStartPre=-/usr/bin/docker compose --env-file /dev/null -f ${COMPOSE_FILE} pull --quiet
+ExecStart=/usr/bin/docker compose --env-file /dev/null -f ${COMPOSE_FILE} up --abort-on-container-exit
+ExecStop=/usr/bin/docker compose --env-file /dev/null -f ${COMPOSE_FILE} down --timeout 30
 
 # Restart policy
 Restart=on-failure

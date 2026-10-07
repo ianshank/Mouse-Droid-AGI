@@ -57,9 +57,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", type=Path, nargs="*", default=[])
     args = parser.parse_args(argv)
     cfg = load_settings(*args.config)
-    # ``_validate_path`` inside ``derive_healthcheck_env`` rejects values
-    # containing characters that would break single-quoted shell strings,
-    # so wrapping with single quotes here is safe to dot-source.
+    # No value can contain a single quote, so wrapping each in single quotes
+    # is safe to dot-source: ``derive_healthcheck_env`` passes the two paths
+    # through ``_validate_path``, formats the two durations itself, writes
+    # the port as digits only, and publishes a health path only if it
+    # passes the URL-path rule.
     for key, value in derive_healthcheck_env(cfg).items():
         sys.stdout.write(f"{key}='{value}'\n")
     return 0

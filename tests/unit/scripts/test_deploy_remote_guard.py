@@ -26,6 +26,7 @@ by archiving nothing at all.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import tarfile
@@ -377,6 +378,7 @@ def test_the_guard_runs_before_the_destructive_rsync_in_source_order() -> None:
 # else leaves the machine.
 _SSH_SHIM = """#!/usr/bin/env bash
 set -uo pipefail
+if [ -n "${SSH_LOG:-}" ]; then printf '%s\\n' "$*" >> "$SSH_LOG"; fi
 cmd="${!#}"
 case "$cmd" in
     *"bash -s --"*) exec bash -c "$cmd" ;;
@@ -491,6 +493,97 @@ def test_deploy_on_a_clean_rover_syncs_without_creating_an_archive(
     archives = tmp_path / "archives"
     assert not archives.exists() or not list(archives.iterdir())
     assert _git(rover_repo, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+
+
+# ---------------------------------------------------------------------------
+# One remote venv, the one the service runs (F-052 task 5.7)
+# ---------------------------------------------------------------------------
+# This script spelt /opt/mousedroid/venv out twice; it is one constant now. It
+# is deliberately not a knob: scripts/mousedroid.service (which deploy_jetson.sh
+# installs as-is) runs that venv from that directory, so a knob moving only the
+# venv would reinstall and health-check one tree while the service restarted
+# the other -- and report success. Asserted on the commands that actually
+# crossed the ssh boundary, not on the script's text.
+
+_SERVICE = _SCRIPTS / "mousedroid.service"
+
+
+def _without_install_dir(env: dict[str, str]) -> dict[str, str]:
+    return {k: v for k, v in env.items() if k != "MOUSEDROID_INSTALL_DIR"}
+
+
+def _remote_commands(deploy_env: dict[str, str], tmp_path: Path, *args: str, **extra: str) -> str:
+    ssh_log = tmp_path / "ssh.log"
+    result = _run_deploy(
+        {**deploy_env, "SSH_LOG": str(ssh_log), **extra}, *(args or ("--code-only",))
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return ssh_log.read_text(encoding="utf-8")
+
+
+def _service_venv() -> str:
+    """The venv the bare-metal unit runs, from its own ExecStart line."""
+    match = re.search(r"^ExecStart=(\S+)/bin/python\b", _SERVICE.read_text(encoding="utf-8"), re.M)
+    assert match is not None, "mousedroid.service no longer runs a venv python"
+    return match.group(1)
+
+
+def test_the_remote_venv_is_the_one_the_service_runs(
+    rover_repo: Path, tmp_path: Path, deploy_env: dict[str, str]
+) -> None:
+    venv = _service_venv()
+    sent = _remote_commands(_without_install_dir(deploy_env), tmp_path)
+
+    assert f"test -d {venv}" in sent
+    assert f"{venv}/bin/pip install" in sent
+    assert f"{venv}/bin/python -m mousedroid.main --health-check" in sent
+
+
+def test_the_install_root_is_the_services_working_directory() -> None:
+    working = re.search(r"^WorkingDirectory=(\S+)$", _SERVICE.read_text(encoding="utf-8"), re.M)
+    constant = re.search(r"^REMOTE_INSTALL_DIR=(\S+)$", _DEPLOY.read_text(encoding="utf-8"), re.M)
+    assert working is not None
+    assert constant is not None
+
+    assert constant.group(1) == working.group(1)
+    assert _service_venv() == f"{working.group(1)}/venv"
+
+
+def test_the_pcs_own_install_dir_never_retargets_the_rovers_venv(
+    rover_repo: Path, tmp_path: Path, deploy_env: dict[str, str]
+) -> None:
+    """``MOUSEDROID_INSTALL_DIR`` is for the scripts that run where it is set.
+
+    docker_deploy.sh and deploy_jetson.sh read it on the machine they run on;
+    an operator who set it on this PC for a local run must not move the
+    rover's tree.
+    """
+    sent = _remote_commands(
+        _without_install_dir(deploy_env), tmp_path, MOUSEDROID_INSTALL_DIR="/srv/elsewhere"
+    )
+
+    assert f"test -d {_service_venv()}" in sent
+    assert "/srv/elsewhere" not in sent
+
+
+def test_a_full_deploy_hands_deploy_jetson_no_install_root(
+    rover_repo: Path, tmp_path: Path, deploy_env: dict[str, str]
+) -> None:
+    """deploy_jetson.sh keeps its own default -- the tree the unit it installs runs.
+
+    Driven with this PC's own ``MOUSEDROID_INSTALL_DIR`` set, because that is
+    the value a pass-through would carry to the rover.
+    """
+    sent = _remote_commands(
+        _without_install_dir(deploy_env),
+        tmp_path,
+        "--full",
+        MOUSEDROID_INSTALL_DIR="/srv/elsewhere",
+    )
+
+    assert "scripts/deploy_jetson.sh" in sent
+    assert "MOUSEDROID_INSTALL_DIR" not in sent
+    assert "/srv/elsewhere" not in sent
 
 
 # ---------------------------------------------------------------------------
@@ -690,7 +783,7 @@ def test_every_pre_quoted_form_is_used() -> None:
 def test_no_remote_command_string_interpolates_a_raw_validated_path() -> None:
     """Widened from `${REMOTE_SRC}` alone, which is how hole 4 stayed invisible."""
     source = _DEPLOY.read_text(encoding="utf-8")
-    raw_forms = ("${REMOTE_SRC}", "${REMOTE_CONFIG}")
+    raw_forms = ("${REMOTE_SRC}", "${REMOTE_CONFIG}", "${REMOTE_INSTALL_DIR}", "${REMOTE_VENV}")
     offenders = [
         line.strip()
         for line in source.splitlines()
