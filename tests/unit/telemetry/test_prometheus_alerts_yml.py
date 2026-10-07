@@ -162,6 +162,14 @@ def _assert_counts_new_since_last_seen(expr: str, metric: str, window: str) -> N
         "case) is invisible to the count comparison; the up-guarded birth arm "
         "is what catches it"
     )
+    young = re.search(rf"{m} and on \(instance, job\) \(mousedroid_uptime_seconds < (\d+)\)", expr)
+    assert young is not None, (
+        "a count recorded before the new process' first successful scrape is "
+        "never seen absent; only the registry's uptime marks it new"
+    )
+    assert int(young.group(1)) == _seconds(window), (
+        f"the uptime threshold must be the {window} window in seconds"
+    )
 
 
 class TestArtifactIntegrityGroup:

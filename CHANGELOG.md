@@ -24,7 +24,7 @@ dashboard-test whitelist that asserted the name without checking it; that whitel
 the first ever, and the first after every restart, so after every deploy. Every counter here is
 pure-add — absent from `/metrics` until its first write, so it is born at 1 — and `increase()` needs
 two samples of an existing series, so it never sees one being born. It also missed anything counted
-while scrapes failed for longer than its one-minute window. It now has two arms. One pages on the
+while scrapes failed for longer than its one-minute window. It now has three arms. One pages on the
 count now minus the last count seen before the window — a counter with no earlier sample counts from
 0, a reset drops the earlier count — with range selectors (`last_over_time`) on both sides, because a
 failed scrape writes a staleness marker that an instant selector reads as "absent": the obvious fix,
@@ -32,8 +32,11 @@ failed scrape writes a staleness marker that an instant selector reads as "absen
 counter that never moved. The other catches what counts cannot: a restart whose new count equals the
 old process' last one, which — counters being born at 1 — is the usual restart. It is that same
 `unless … offset` test, made sound by `and on (instance, job) (up offset 1m == 1)`: the failed scrape
-that writes the marker also writes `up=0`, a restart does not. Each case — blip, outage, restart at
-a lower and an equal count, Prometheus itself down — is a promtool test. The safety group now
+that writes the marker also writes `up=0`, a restart does not. The third covers a violation recorded
+before a fresh process' first successful scrape, which no scrape ever sees absent: while the metrics
+registry holding the counter is younger than the window (`mousedroid_uptime_seconds`, which resets
+with it), every count in it is new. Each case — blip, outage, restart at a lower and an equal
+count, a boot-time violation, Prometheus itself down — is a promtool test. The safety group now
 evaluates every 15s, not at the server's 1m default, so more than one evaluation sees each violation.
 The two artifact-integrity rules below ride out scrape blips the same way, so a page meant to stay
 open does not close and reopen. These rules need Prometheus 2.26 or later.

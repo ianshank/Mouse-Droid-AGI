@@ -108,13 +108,16 @@ groups:
     rules:
       # Any new violation — alert immediately (for: 0s). Safety violations
       # are critical; no debounce delay. Fires for 1m after the counter rises;
-      # $value is the number of new violations. Two arms:
+      # $value is the number of new violations. Three arms:
       #
       #   now  = last_over_time(m[5m])            latest real sample
       #   prev = last_over_time(m[1d] offset 1m)  latest real sample >1m old
       #   1. new = now - (prev if prev <= now, else 0)
       #   2. m is present now, was absent 1m ago, and the target WAS scraped
       #      1m ago (up offset 1m == 1) -- the counter was born, for real.
+      #   3. m is present and the metrics registry holding it is younger than
+      #      the window (mousedroid_uptime_seconds < 60): every count in a
+      #      registry that young is new.
       #
       # Not increase(m[1m]) > 0 (the original): the counter is pure-add. It
       # does not exist until the first violation creates it at 1, and
@@ -140,11 +143,19 @@ groups:
       # apart, so arm 2 cannot page on a blip. Arm 1 covers what arm 2 cannot
       # see: anything counted while scraping was down for the whole window.
       #
+      # Arm 3 covers the restart arm 2 cannot see: a violation recorded before
+      # the new process' first successful scrape, so no scrape ever saw the
+      # counter absent -- the restart's own failed scrapes hide it. A violation
+      # that recurs at every boot would hit this about half the time. The
+      # uptime gauge counts from the creation of the very registry that holds
+      # the counter, so the two reset together, and the threshold is the
+      # window in seconds.
+      #
       # Limits, both rare: a scrape gap longer than 1d over an unchanged,
       # non-zero counter pages once when scraping resumes (prev has aged
-      # out); a restart during an outage longer than the window, whose new
-      # count equals the old one, is missed. Every case is proven in
-      # alerts_test.yml.
+      # out); and a first violation that comes later than one window after a
+      # restart, while scraping is down, at exactly the old count, is missed.
+      # Every case is proven in alerts_test.yml.
       - alert: SafetyViolation
         expr: >-
           (
@@ -161,6 +172,9 @@ groups:
             mousedroid_safety_violations_total
               unless mousedroid_safety_violations_total offset 1m
           ) and on (instance, job) (up offset 1m == 1)
+          or
+          mousedroid_safety_violations_total
+            and on (instance, job) (mousedroid_uptime_seconds < 60)
         for: 0s
         labels:
           severity: critical
@@ -599,11 +613,11 @@ groups:
       # swap was refused. The rover keeps its previous weights, so this is an
       # EVENT, not a degraded state: it fires for 15 minutes and resolves.
       #
-      # Same two arms as SafetyViolation, for the same reasons, over a 15m
-      # window: the counter is pure-add, so the first refusal creates the
-      # series already at 1 (increase() alone would miss it), a refusal after
-      # a restart usually equals the old count, and a scrape blip must
-      # neither re-open the page nor fake a new refusal.
+      # Same three arms as SafetyViolation, for the same reasons, over a 15m
+      # window (so 900s of uptime): the counter is pure-add, so the first
+      # refusal creates the series already at 1 (increase() alone would miss
+      # it), a refusal after a restart usually equals the old count, and a
+      # scrape blip must neither re-open the page nor fake a new refusal.
       - alert: CloudWeightUpdateDigestMismatch
         expr: >-
           (
@@ -620,6 +634,9 @@ groups:
             mousedroid_cloud_weight_update_sha256_mismatches_total
               unless mousedroid_cloud_weight_update_sha256_mismatches_total offset 15m
           ) and on (instance, job) (up offset 15m == 1)
+          or
+          mousedroid_cloud_weight_update_sha256_mismatches_total
+            and on (instance, job) (mousedroid_uptime_seconds < 900)
         for: 0s
         labels:
           severity: page

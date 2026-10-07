@@ -707,6 +707,13 @@ defects were real, and the task wording around them was not.
   writes; with the guard removed they all page falsely, which is what pins it. The re-review also
   noted the scrape configs set no `global:`, so the server's 1m evaluation default equalled the 1m
   window — one evaluation per violation. The safety group now evaluates every 15s, pinned.
+  Re-tracing the second arm before merge found one more restart it cannot see: a violation recorded
+  before the new process' first successful scrape, at the old count — the restart's own failed
+  scrapes (`up=0`) hide the absence, so no scrape ever sees the series missing; a violation that
+  recurs at every boot would hit it about half the time. Reproduced with promtool, and covered by a
+  third arm: while the metrics registry holding the counter is younger than the window
+  (`mousedroid_uptime_seconds`, which counts from that registry's creation), every count in it is
+  new. Its threshold is pinned to equal the window in seconds.
 - **The semantics are now gated, not argued.** `config/prometheus/alerts_test.yml` runs under
   `promtool test rules` in the `prometheus-check` job. With only the expressions swapped back, it
   fails exactly where each older rule was wrong: the original `increase()` rule on the first

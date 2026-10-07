@@ -156,6 +156,8 @@ tests:
         values: '3x19 stale _x20 1x20'
       - series: 'up{instance="rover1",job="mousedroid"}'
         values: '1x60'
+      - series: 'mousedroid_uptime_seconds{instance="rover1",job="mousedroid"}'
+        values: '0+15x19 15+15x40'
     alert_rule_test:
       - eval_time: 10m
         alertname: SafetyViolation
@@ -174,6 +176,8 @@ tests:
         values: '1x19 stale _x20 1x20'
       - series: 'up{instance="rover1",job="mousedroid"}'
         values: '1x60'
+      - series: 'mousedroid_uptime_seconds{instance="rover1",job="mousedroid"}'
+        values: '0+15x19 15+15x40'
     alert_rule_test:
       - eval_time: 10m
         alertname: SafetyViolation
@@ -181,6 +185,31 @@ tests:
       - eval_time: 10m15s
         alertname: SafetyViolation
         exp_alerts: *safety_law1_new_1
+
+  # A violation before the new process' FIRST successful scrape, at the old
+  # count: the restart's own failed scrapes (up=0) hide the absence, so no
+  # scrape ever sees the series missing. The registry's uptime is what marks
+  # every count in it as new, for one window.
+  - name: SafetyViolation fires on a boot-time violation that repeats the old count
+    interval: 15s
+    input_series:
+      - series: 'mousedroid_safety_violations_total{instance="rover1",job="mousedroid",law="law1"}'
+        values: '1x19 stale _x3 1x40'
+      - series: 'up{instance="rover1",job="mousedroid"}'
+        values: '1x19 0x3 1x40'
+      - series: 'mousedroid_uptime_seconds{instance="rover1",job="mousedroid"}'
+        values: '0+15x19 stale _x3 5+15x40'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: SafetyViolation
+        exp_alerts: *safety_law1_new_1
+      - eval_time: 6m45s
+        alertname: SafetyViolation
+        exp_alerts: *safety_law1_new_1
+      # One window of uptime later, it is an old count.
+      - eval_time: 7m
+        alertname: SafetyViolation
+        exp_alerts: []
 
   # Prometheus itself was down for 10m: no samples at all, not even up=0.
   - name: SafetyViolation stays silent when Prometheus comes back
@@ -350,6 +379,31 @@ tests:
       - eval_time: 52m
         alertname: CloudWeightUpdateDigestMismatch
         exp_alerts: *ota_refused_1
+
+  # The OTA poller refuses again right after a restart, before the first good
+  # scrape, at the old count.
+  - name: CloudWeightUpdateDigestMismatch fires on a refusal before the first scrape after a restart
+    interval: 1m
+    input_series:
+      - series: 'mousedroid_cloud_weight_update_sha256_mismatches_total{instance="rover1",job="mousedroid",repo_id="ianshank/mousedroid-policy-v2"}'
+        values: '1x30 stale _x2 1x40'
+      - series: 'up{instance="rover1",job="mousedroid"}'
+        values: '1x30 0x2 1x40'
+      - series: 'mousedroid_uptime_seconds{instance="rover1",job="mousedroid"}'
+        values: '0+60x30 stale _x2 10+60x40'
+    alert_rule_test:
+      - eval_time: 33m
+        alertname: CloudWeightUpdateDigestMismatch
+        exp_alerts: []
+      - eval_time: 34m
+        alertname: CloudWeightUpdateDigestMismatch
+        exp_alerts: *ota_refused_1
+      - eval_time: 48m
+        alertname: CloudWeightUpdateDigestMismatch
+        exp_alerts: *ota_refused_1
+      - eval_time: 49m
+        alertname: CloudWeightUpdateDigestMismatch
+        exp_alerts: []
 
   # ---------------------------------------------------------------------------
   # MCP: both rules queried `mousedroid_mcp_tool_calls{...}`, which nothing
