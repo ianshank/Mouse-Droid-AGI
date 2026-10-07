@@ -67,6 +67,14 @@ DEFAULT_LIDAR_MIN_RANGE_M: float = 0.15
 MILLISECONDS_PER_SECOND: float = 1000.0
 """Conversion factor from seconds to milliseconds."""
 
+HEALTH_ROUTE_SUFFIX: str = "/health"
+"""Suffix of the telemetry health route under ``TelemetryConfig.api_prefix``.
+
+Definitional, not tunable: the server registers ``f"{api_prefix}{suffix}"`` and
+``health.healthcheck_env`` derives the same path for the deploy probe, so both
+build the route from this one name rather than each spelling ``"/health"``.
+"""
+
 LOG_PRECISION_DP: int = 3
 """Decimal places for distance and elapsed-time values in log events.
 

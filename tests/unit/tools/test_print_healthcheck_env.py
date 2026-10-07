@@ -6,16 +6,24 @@ from pathlib import Path
 
 import pytest
 
+from mousedroid.config.loader import load_settings
+from mousedroid.health.healthcheck_env import derive_healthcheck_env
 from mousedroid.tools.print_healthcheck_env import main
 
 
 def test_main_returns_zero_with_default_config(capsys: pytest.CaptureFixture[str]) -> None:
-    """Default Settings render to four KEY='VALUE' lines, exit 0."""
+    """Default Settings render one KEY='VALUE' line per derived key, exit 0.
+
+    The count is read from ``derive_healthcheck_env`` rather than hardcoded, so
+    this pins the rendering (every key, one line each) while the key-set
+    contract itself stays pinned exactly once, in ``test_healthcheck_env.py``.
+    """
     rc = main([])
     assert rc == 0
     out = capsys.readouterr().out
     lines = [line for line in out.splitlines() if line.strip()]
-    assert len(lines) == 4
+    expected = derive_healthcheck_env(load_settings())
+    assert len(lines) == len(expected)
     for line in lines:
         # KEY='value' shape — single-quoted so shell can dot-source safely
         assert "='" in line, line

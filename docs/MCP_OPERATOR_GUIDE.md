@@ -160,10 +160,13 @@ the rover environment is safe.
 
 ## Telemetry the operator should watch
 
+Names are the series exactly as `/metrics` exposes them, so they can be pasted
+into a query. Counters carry `_total`; the histogram is queried through `_bucket`.
+
 | Metric                                           | Meaning                                             |
 |--------------------------------------------------|-----------------------------------------------------|
-| `mousedroid_mcp_requests`                        | Total MCP requests served.                          |
-| `mousedroid_mcp_tool_calls{tool, result}`        | Tool dispatch outcomes (ok/error/denied/refused/…). |
+| `mousedroid_mcp_requests_total`                  | Total MCP requests served.                          |
+| `mousedroid_mcp_tool_calls_total{tool, result}`  | Tool dispatch outcomes (ok/error/denied/refused/…). |
 | `mousedroid_mcp_request_latency_ms_bucket`       | Histogram for p50/p95/p99 latency dashboards.       |
 
 Three Grafana panels and a `mousedroid_mcp` alert group are shipped

@@ -97,10 +97,25 @@ groups:
   # ------------------------------------------------------------------
   - name: mousedroid_safety
     rules:
-      # Any increase in safety_violations_total — alert immediately (for: 0s)
-      # Safety violations are critical; no debounce delay.
+      # Any new violation — alert immediately (for: 0s). Safety violations
+      # are critical; no debounce delay.
+      #
+      # Two arms, because the counter is pure-add: it does not exist until the
+      # first violation, which creates it already at 1. increase() needs two
+      # samples of an EXISTING series, so on its own it never sees one being
+      # born -- the previous `increase(...[1m]) > 0` was blind to a rover's
+      # FIRST violation and fired only from the second (proven in
+      # alerts_test.yml). The second arm catches a series born non-zero within
+      # the window. `max without ()` drops only __name__, so both arms carry
+      # identical labels and `or` yields one alert, never a duplicate.
       - alert: SafetyViolation
-        expr: increase(mousedroid_safety_violations_total[1m]) > 0
+        expr: >-
+          max without () (increase(mousedroid_safety_violations_total[1m])) > 0
+          or
+          max without () (
+            mousedroid_safety_violations_total
+              unless mousedroid_safety_violations_total offset 1m
+          ) > 0
         for: 0s
         labels:
           severity: critical
@@ -224,8 +239,14 @@ groups:
 
       # Page: any circuit breaker trip on a tool call indicates an
       # underlying handler failing repeatedly inside the bridge.
+      # Both MCP rules below queried `mousedroid_mcp_tool_calls{...}`, a series
+      # nothing emits: the registry rendered `..._total_total` (the family
+      # name already ended in _total and the renderer appended another), and
+      # the dashboard expected `..._total`. Neither rule could ever fire. The
+      # emitter now renders `mousedroid_mcp_tool_calls_total`, which these
+      # query and test_prometheus_alerts_yml.py pins for every group.
       - alert: MCPCircuitOpen
-        expr: rate(mousedroid_mcp_tool_calls{result="circuit_open"}[1m]) > 1
+        expr: rate(mousedroid_mcp_tool_calls_total{result="circuit_open"}[1m]) > 1
         for: 1m
         labels:
           severity: page
@@ -233,7 +254,7 @@ groups:
         annotations:
           summary: "MCP tool circuit breaker tripping"
           description: >-
-            mousedroid_mcp_tool_calls{result="circuit_open"} is rising at
+            mousedroid_mcp_tool_calls_total{result="circuit_open"} is rising at
             {{ $value | printf "%.2f" }} per second on tool {{ $labels.tool }}.
             Inspect the handler and the upstream driver (ESP32, LLM gateway,
             TensorRT compiler) for cascading failures.
@@ -242,7 +263,7 @@ groups:
       # Warning: rate limiter sustained activation suggests a misbehaving
       # client or undersized rate budget for the workload.
       - alert: MCPRateLimitedSurge
-        expr: rate(mousedroid_mcp_tool_calls{result="rate_limited"}[5m]) > 5
+        expr: rate(mousedroid_mcp_tool_calls_total{result="rate_limited"}[5m]) > 5
         for: 5m
         labels:
           severity: warning
@@ -250,7 +271,7 @@ groups:
         annotations:
           summary: "MCP rate limiter sustained activation"
           description: >-
-            mousedroid_mcp_tool_calls{result="rate_limited"} = {{ $value }} /s
+            mousedroid_mcp_tool_calls_total{result="rate_limited"} = {{ $value }} /s
             on {{ $labels.instance }}. Consider raising
             MCPConfig.rate_limit_rps or throttling the offending client.
           config_ref: "MCPConfig.rate_limit_rps"
@@ -483,3 +504,73 @@ groups:
             {{ $value | printf "%.1f" }} tokens/s over 30m on
             {{ $labels.instance }} - worth a look at mission volume / WAN cost.
           config_ref: "operator-tunable threshold (default 2 tokens/s sustained; no schema field - cost policy, not a runtime limit)"
+
+  # ------------------------------------------------------------------
+  # Artifact integrity (F-052 task 6.1). Model weights refused by a SHA-256
+  # gate. Both counters' docstrings say "operator alert rules should page on
+  # any non-zero rate" -- and until this group no rule referenced either.
+  # Wrong weights mean wrong inference, silently, so both page.
+  # ------------------------------------------------------------------
+  - name: mousedroid_artifact_integrity
+    rules:
+      # A boot-path artifact (the BDI weight set or the world-model ONNX)
+      # failed its SHA-256 manifest check.
+      #
+      # A VALUE check, deliberately not rate()/increase(). Both writers run
+      # inside build_orchestrator BEFORE the telemetry server exists, so the
+      # first scrape already sees the final count and it never changes for the
+      # life of the process: rate() over it is 0 forever, and "page on any
+      # non-zero rate" could never fire (proven in alerts_test.yml).
+      #
+      # In practice this fires for artifact="bdi_weights": with
+      # cognitive.fallback_to_mcts the rover keeps running on the MCTS planner
+      # after the refusal and stays degraded until restarted with verified
+      # weights -- so it correctly keeps firing that whole time. A
+      # world_model_onnx refusal is not caught: the process exits before
+      # /metrics exists, and it surfaces as TelemetryDown plus a crash loop.
+      - alert: ModelArtifactDigestMismatch
+        expr: max without () (mousedroid_model_artifact_sha256_mismatches_total) > 0
+        for: 0s
+        labels:
+          severity: page
+          subsystem: artifact_integrity
+        annotations:
+          summary: "Model artifact {{ $labels.artifact }} refused by its SHA-256 gate"
+          description: >-
+            {{ $labels.artifact }} failed its SHA-256 manifest check at boot on
+            {{ $labels.instance }} and was refused. For bdi_weights the rover is
+            still running but degraded to the MCTS planner, and stays degraded
+            until restarted with verified weights. See
+            docs/playbooks/artifact-integrity-fail.md.
+          config_ref: "cognitive.require_sha256_manifest / world_model.onnx_require_sha256_manifest"
+
+      # A cloud OTA weight update failed its SHA-256 manifest check and the
+      # swap was refused. The rover keeps its previous weights, so this is an
+      # EVENT, not a degraded state: it fires for 15 minutes and resolves.
+      #
+      # Same two-arm shape as SafetyViolation, for the same reason: the counter
+      # is pure-add, so the first refusal creates the series already at 1 and
+      # increase() alone would miss it.
+      - alert: CloudWeightUpdateDigestMismatch
+        expr: >-
+          max without () (
+            increase(mousedroid_cloud_weight_update_sha256_mismatches_total[15m])
+          ) > 0
+          or
+          max without () (
+            mousedroid_cloud_weight_update_sha256_mismatches_total
+              unless mousedroid_cloud_weight_update_sha256_mismatches_total offset 15m
+          ) > 0
+        for: 0s
+        labels:
+          severity: page
+          subsystem: artifact_integrity
+        annotations:
+          summary: "OTA weight update from {{ $labels.repo_id }} refused by its SHA-256 gate"
+          description: >-
+            A downloaded artifact from {{ $labels.repo_id }} did not match its
+            sha256 manifest on {{ $labels.instance }}, and the swap was refused.
+            The rover is still on its previous weights. Something upstream
+            produced or served a bad artifact -- investigate before re-publishing.
+            See docs/playbooks/artifact-integrity-fail.md.
+          config_ref: "operator default 15m window; gate: cloud weight-update sha256_manifest_filename"

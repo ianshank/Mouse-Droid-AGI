@@ -222,15 +222,28 @@ def generate_metrics_sample() -> str:
     # Artifact-integrity refusals — seed one series per artifact kind so
     # promtool / Grafana / alert evaluation see the family from the first
     # scrape. Required, not optional: a rule or panel added against a family
-    # this helper never renders fails test_prometheus_alerts_yml.py /
+    # this helper never renders fails test_prometheus_alerts_yml.py (every
+    # group, since F-052 6.1 -- before that, only the LLM group was checked,
+    # which is how two MCP alerts shipped against a name nothing emitted) /
     # test_grafana_dashboard_json.py rather than the rule's own review.
     registry.inc_model_artifact_sha256_mismatch("world_model_onnx")
     registry.inc_model_artifact_sha256_mismatch("bdi_weights")
 
     # Tier C1 — exercise the cloud weight-update OTA metric families so
     # promtool / Grafana / alert evaluation all see non-empty series from
-    # the first scrape (REQUIRED, not optional — alert rules reference
-    # these series and would fail without seed values).
+    # the first scrape (REQUIRED, not optional — CloudWeightUpdateDigestMismatch
+    # in alerts.yml references the sha256 counter and would fail without it).
+    # MCP server families (track_mcp defaults True). Never seeded before, so
+    # the dashboard test had to whitelist them by ASSERTED name -- and the
+    # assertion was wrong: the counter rendered `..._total_total`. Seeding
+    # makes every MCP panel and alert expression resolve against what is
+    # really rendered. `circuit_open` / `rate_limited` are the outcomes the
+    # MCP alerts filter on.
+    registry.inc_mcp_request()
+    registry.inc_mcp_tool_call("health_check", "ok")
+    registry.inc_mcp_tool_call("health_check", "circuit_open")
+    registry.inc_mcp_tool_call("health_check", "rate_limited")
+    registry.observe_mcp_request_latency_ms(12.0)
     registry.inc_cloud_weight_update_download("ianshank/mousedroid-policy-v2")
     registry.inc_cloud_weight_update_sha256_mismatch("ianshank/mousedroid-policy-v2")
     registry.observe_cloud_weight_update_download_seconds(2.5)

@@ -24,7 +24,9 @@
 #   MOUSEDROID_CONFIG_DIR    Config file dir (default: /etc/mousedroid)
 #   MOUSEDROID_COMPOSE_FILE  Compose file path (default: <install_dir>/docker-compose.jetson.yml)
 #   MOUSEDROID_CONTAINER     Container name (default: mousedroid)
-#   MOUSEDROID_HEALTH_PORT   Telemetry health port (default: 8080)
+#   MOUSEDROID_HEALTH_PORT   Override the probed telemetry port (default: the port the
+#                            running rover resolved from its own config)
+#   MOUSEDROID_HEALTH_PATH   Override the probed health path (default: resolved likewise)
 #   MOUSEDROID_HEALTH_TIMEOUT  Health check timeout secs (default: 30)
 #   MOUSEDROID_STRICT_HEALTH   Set to 1/true for --strict-health without the flag
 #   MOUSEDROID_DEPLOY_RECORD   Deploy record holding the expected model digest
@@ -123,8 +125,10 @@ INSTALL_DIR="${MOUSEDROID_INSTALL_DIR:-/opt/mousedroid}"
 CONFIG_DIR="${MOUSEDROID_CONFIG_DIR:-/etc/mousedroid}"
 COMPOSE_FILE="${MOUSEDROID_COMPOSE_FILE:-${COMPOSE_FILE:-${INSTALL_DIR}/docker-compose.jetson.yml}}"
 CONTAINER_NAME="${MOUSEDROID_CONTAINER:-mousedroid}"
-HEALTH_PORT="${MOUSEDROID_HEALTH_PORT:-${MOUSEDROID_TELEMETRY_PORT:-8080}}"
-HEALTH_PATH="${MOUSEDROID_HEALTH_PATH:-/api/v1/health}"
+# Explicit operator overrides only. Left empty, the endpoint is resolved from
+# the RUNNING container at health-check time -- see resolve_health_endpoint.
+HEALTH_PORT="${MOUSEDROID_HEALTH_PORT:-}"
+HEALTH_PATH="${MOUSEDROID_HEALTH_PATH:-}"
 HEALTH_TIMEOUT="${MOUSEDROID_HEALTH_TIMEOUT:-30}"
 DEPLOY_RECORD="${MOUSEDROID_DEPLOY_RECORD:-${INSTALL_DIR}/deployments/jetson-image.json}"
 
@@ -202,6 +206,15 @@ case "${DEPLOY_RECORD}" in
         exit 1
         ;;
 esac
+
+# Values compose interpolates into a mount spec, checked before ANY compose
+# command parses the file (F-052 task 5.6). Shared with preflight_check.sh,
+# which the systemd unit runs as a fatal ExecStartPre, so the boot path applies
+# the identical rule rather than a copy of it.
+if ! bash "${SCRIPT_DIR}/validate_compose_env.sh"; then
+    error "Refusing to run: fix the value(s) above in ${DOCKER_ENV_FILE} first"
+    exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Strict promotion probe (--strict-health only)
@@ -352,6 +365,89 @@ strict_promotion_probe() {
 # ---------------------------------------------------------------------------
 # Health check function
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Resolve the telemetry health endpoint from the RUNNING container.
+#
+# The rover serves cfg.telemetry.port (compose runs network_mode: host) at
+# f"{cfg.telemetry.api_prefix}/health". This script used to probe
+# ${MOUSEDROID_TELEMETRY_PORT:-8080} -- but that is not a settings key: the
+# nested delimiter is `__`, so the real key is MOUSEDROID_TELEMETRY__PORT. Moving
+# the port the supported way left this probe on 8080, and setting the template's
+# MOUSEDROID_TELEMETRY_PORT moved only the probe. Either way the health check and
+# the rover could disagree, and a strict promotion would fail a healthy rover.
+#
+# The container's entrypoint already resolves Settings from the exact `--config`
+# it then hands to mousedroid.main, and writes values derived from them to its
+# healthcheck env file (print_healthcheck_env). Reading the endpoint from there
+# makes the probe follow the config the rover runs by construction, instead of
+# re-deriving it here and hoping the two agree.
+#
+# Precedence: MOUSEDROID_HEALTH_PORT / MOUSEDROID_HEALTH_PATH if set; then the
+# container's resolved values; then -- only for an image that predates them --
+# this script's previous fallbacks, announced rather than silent.
+# ---------------------------------------------------------------------------
+LEGACY_HEALTH_PORT_FALLBACK=8080
+LEGACY_HEALTH_PATH_FALLBACK=/api/v1/health
+
+# Print the value of KEY from the container's healthcheck env file, or nothing.
+# Pure bash, no pipeline: under `set -euo pipefail` a SIGPIPE from an early
+# `head` would otherwise abort the whole deploy from inside a command
+# substitution. The file's format is fixed by print_healthcheck_env -- one
+# KEY='value' per line, values already restricted to a shell-safe charset.
+_container_resolved_value() {
+    local key="$1" out line
+    out="$(docker exec "${CONTAINER_NAME}" sh -c \
+        'cat "${MOUSEDROID_HEALTHCHECK_ENV_FILE:-/run/mousedroid.env}"' 2>/dev/null)" || return 0
+    while IFS= read -r line; do
+        if [[ "${line}" == "${key}='"*"'" ]]; then
+            line="${line#"${key}='"}"
+            printf '%s' "${line%\'}"
+            return 0
+        fi
+    done <<< "${out}"
+    return 0
+}
+
+resolve_health_endpoint() {
+    local resolved_port resolved_path
+    resolved_port="$(_container_resolved_value MOUSEDROID_RESOLVED_TELEMETRY_PORT)"
+    resolved_path="$(_container_resolved_value MOUSEDROID_RESOLVED_HEALTH_PATH)"
+
+    # The template ships MOUSEDROID_TELEMETRY_PORT, and its old comment said it set
+    # the endpoint's port. Say so plainly when it disagrees with the rover.
+    if [ -n "${MOUSEDROID_TELEMETRY_PORT:-}" ] && [ -n "${resolved_port}" ] \
+        && [ "${MOUSEDROID_TELEMETRY_PORT}" != "${resolved_port}" ]; then
+        warn "  MOUSEDROID_TELEMETRY_PORT=${MOUSEDROID_TELEMETRY_PORT} has no effect on the rover, which serves port ${resolved_port}."
+        warn "  It is not a settings key: set MOUSEDROID_TELEMETRY__PORT to move the rover, or MOUSEDROID_HEALTH_PORT to override this probe."
+    fi
+
+    if [ -z "${HEALTH_PORT}" ] || [ -z "${HEALTH_PATH}" ]; then
+        if [ -z "${resolved_port}" ] || [ -z "${resolved_path}" ]; then
+            warn "  Could not read the rover's resolved telemetry endpoint from the container."
+            warn "  Falling back to this script's previous defaults; rebuild the image to resolve it from config."
+        fi
+        if [ -z "${HEALTH_PORT}" ]; then
+            HEALTH_PORT="${resolved_port:-${MOUSEDROID_TELEMETRY_PORT:-${LEGACY_HEALTH_PORT_FALLBACK}}}"
+        fi
+        if [ -z "${HEALTH_PATH}" ]; then
+            HEALTH_PATH="${resolved_path:-${LEGACY_HEALTH_PATH_FALLBACK}}"
+        fi
+    fi
+
+    # Both end up in a URL, and the resolved pair came out of a file inside the
+    # container. Validate before use rather than hand curl whatever arrived.
+    if [[ ! "${HEALTH_PORT}" =~ ^[0-9]{1,5}$ ]] \
+        || (( 10#${HEALTH_PORT} < 1 || 10#${HEALTH_PORT} > 65535 )); then
+        error "  Telemetry health port is not a valid TCP port: ${HEALTH_PORT}"
+        return 1
+    fi
+    if [[ ! "${HEALTH_PATH}" =~ ^/[A-Za-z0-9._~/-]*$ ]]; then
+        error "  Telemetry health path is not a safe absolute URL path: ${HEALTH_PATH}"
+        return 1
+    fi
+    return 0
+}
+
 health_check() {
     info "Running container health checks..."
     # Failure accumulator: the strict legs report EVERY problem before
@@ -395,8 +491,16 @@ health_check() {
     # the default stays a warn, word for word. For a promotion it is a
     # release-blocking failure: an unreachable health endpoint means no
     # observability on the thing that just replaced a working rover.
-    local health_url="http://127.0.0.1:${HEALTH_PORT}${HEALTH_PATH}"
-    if curl -sf --max-time 5 "$health_url" >/dev/null 2>&1; then
+    local health_url=""
+    if resolve_health_endpoint; then
+        health_url="http://127.0.0.1:${HEALTH_PORT}${HEALTH_PATH}"
+    fi
+    if [ -z "${health_url}" ]; then
+        # resolve_health_endpoint has already said why.
+        if [ "$STRICT_HEALTH" = true ]; then
+            failures=$((failures + 1))
+        fi
+    elif curl -sf --max-time 5 "$health_url" >/dev/null 2>&1; then
         info "  Telemetry health endpoint: OK (${health_url})"
     elif [ "$STRICT_HEALTH" = true ]; then
         error "  Telemetry health endpoint: not responding (${health_url})"

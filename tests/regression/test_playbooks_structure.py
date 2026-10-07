@@ -35,6 +35,8 @@ _NEW_PLAYBOOKS_PINNED: tuple[str, ...] = (
     # promtool-install.md uses the same contract (Phase 11), keep it pinned
     # so it can't drift either.
     "promtool-install",
+    # The two mousedroid_artifact_integrity alerts link here (F-052 6.1).
+    "artifact-integrity-fail",
 )
 
 

@@ -515,42 +515,119 @@ and `-uroot` is shown reaching a live `docker` call.
 
 ## Phase 5 — Config correctness in the promotion gate
 
-- [ ] 5.1 `scripts/docker_deploy.sh:150` — resolve the overlay through the repository's own
+- [~] 5.1 **REPLACED** (premise false; see Slice D record). `scripts/docker_deploy.sh:150` — resolve the overlay through the repository's own
   resolver. It reads `MOUSEDROID_CONFIG` only; `_CONFIG_SINGLE_ENV_VARS` at
   `src/mousedroid/validation/runtime/_shared.py:25` honours `MOUSEDROID_JETSON_CONFIG` too,
   so a rover on the legacy key has the strict gate evaluate a different config than the
   rover runs — and **pass**.
-- [ ] 5.2 Prove 5.1 with a negative test: set `MOUSEDROID_JETSON_CONFIG` to an overlay
+- [~] 5.2 **REPLACED** (premise false; see Slice D record). Prove 5.1 with a negative test: set `MOUSEDROID_JETSON_CONFIG` to an overlay
   whose `world_model.engine` differs and assert the probe reports *that* engine. It fails
   today.
-- [ ] 5.3 `scripts/docker_deploy.sh:54-55` — read `cfg.telemetry.port` and derive the path
+- [x] 5.3 `scripts/docker_deploy.sh:54-55` — read `cfg.telemetry.port` and derive the path
   from `cfg.telemetry.api_prefix` from the `load_settings` call already made at `:151`.
   `MOUSEDROID_TELEMETRY_PORT` is not a pydantic-settings key: `root.py:189-191` sets
   `env_nested_delimiter="__"`, so the real key is `MOUSEDROID_TELEMETRY__PORT` and an
   operator moving the port the supported way leaves the probe on literal `8080`. Keep
   `MOUSEDROID_HEALTH_PORT`/`_PATH` as explicit overrides.
-- [ ] 5.4 Prove 5.3 with a negative test asserting the probed URL carries
+- [x] 5.4 Prove 5.3 with a negative test asserting the probed URL carries
   `MOUSEDROID_TELEMETRY__PORT`.
-- [ ] 5.5 Document the 13 env keys these scripts read that are absent from
+- [x] 5.5 Document the 13 env keys these scripts read that are absent from
   `config/docker.env.example` — the input to the `host_env_keys` preflight drift check
   (`src/mousedroid/validation/preflight.py:440`), so none is covered today. Follow the
   commented-entry precedent this branch set at `config/docker.env.example:121`.
-- [ ] 5.6 Validate `MOUSEDROID_JETSON__TENSORRT_CACHE_DIR` before compose interpolates it
+- [x] 5.6 Validate `MOUSEDROID_JETSON__TENSORRT_CACHE_DIR` before compose interpolates it
   into the container-side mount path (`docker-compose.jetson.yml:130`): a value of `/etc`
   shadows an image directory, and one containing `:` injects a third mount field.
-- [ ] 5.7 `scripts/deploy_remote.sh:395,430` — derive the venv path from
+- [x] 5.7 `scripts/deploy_remote.sh:395,430` — derive the venv path from
   `REMOTE_SRC`/`MOUSEDROID_INSTALL_DIR` instead of the hardcoded `/opt/mousedroid/venv`
   (two copies). An install-dir override currently leaves the probe on the old tree and
   `pip_reinstall` silently falls through to a full `deploy_jetson.sh`.
 
+### Slice D landed — four of seven tasks needed correcting
+
+Every claim was re-derived against the tree first. The pattern from Slices A and C held: the
+defects were real, and the task wording around them was not.
+
+- **5.1 / 5.2 — REPLACED: the premise is false, and doing it would have created the bug.** The
+  rover runs `mousedroid.main`, which loads `load_settings(*args.config)` — only the explicit
+  `--config` from compose's `command:`. The strict probe reads `MOUSEDROID_CONFIG`, which compose
+  pins inline to the same file, and inline `environment:` beats `env_file:`. So
+  `MOUSEDROID_JETSON_CONFIG` is ignored by BOTH; there is no "rover on the legacy key" on the
+  Docker path, and 5.2's negative test asserts the wrong behaviour. Worse, routing the probe
+  through `resolve_runtime_config_paths` would let the `MOUSEDROID_CONFIGS` CSV lists — which that
+  resolver ranks above `MOUSEDROID_CONFIG`, and which can arrive via `env_file:` — point the probe
+  at an overlay the rover never loads. Replaced by pins on the invariant 5.1 was reaching for, at
+  the places it can actually break: the two compose pins must name one file, and the entrypoint
+  must hand one argument list to both the rover and the health-env derivation
+  (`tests/regression/test_f052_aqa.py`, both proven against a mutated compose and a wired-in
+  resolver).
+- **5.3 / 5.4 — defect real in BOTH directions; mechanism corrected.** Moving the port the
+  supported way (`MOUSEDROID_TELEMETRY__PORT`) left the probe on 8080, and setting the template's
+  `MOUSEDROID_TELEMETRY_PORT` moved only the probe. The task said to reuse "the `load_settings`
+  call already made" — but that call runs inside the container and only under `--strict-health`,
+  while the health check runs on the host every time. Fixed instead through the existing single
+  source of truth: `derive_healthcheck_env` now emits the resolved port and path (from the exact
+  `--config` the entrypoint hands to `mousedroid.main`), and the deploy script reads them from the
+  running container. The route suffix moved to `constants.HEALTH_ROUTE_SUFFIX` so the server and
+  the derivation cannot drift, pinned against the real router. 12 of 15 shim tests fail against
+  the old script; the 3 that pass on both are the backwards-compat cases.
+- **5.5 — 14 keys, not 13, and 9 must not be documented.** Each was checked for whether setting it
+  in `docker.env` actually works. The six `deploy_remote.sh` keys run on the operator's PC and
+  never read the rover's file; `MOUSEDROID_DOCKER_ENV_FILE` is circular; `MOUSEDROID_CONTAINER` is
+  defeated by compose's hardcoded `container_name`; `MOUSEDROID_COMPOSE_FILE` would split the
+  deploy script from the systemd unit, which reads `COMPOSE_FILE`. Documenting them would repeat
+  the `MOUSEDROID_TELEMETRY_PORT` mistake. The five that work are documented (commented, so
+  `host_env_keys` warns on no rover), the exclusions are explained in the template, and both are
+  pinned. `MOUSEDROID_TELEMETRY_PORT`'s comment no longer claims it sets the endpoint's port.
+- **5.6 — real, but the task covered one of two compose entry points.** Compose is started by
+  `docker_deploy.sh` and by the systemd unit, which loads `docker.env` itself. One validator,
+  `scripts/validate_compose_env.sh`, is now called from both — the unit through its existing fatal
+  `ExecStartPre=preflight_check.sh`. A pin asserts that pre-start step stays fatal and before
+  compose. The schema has no validator on `tensorrt_cache_dir` at all; that, and the observation
+  that relocating a named volume's container path buys no host-side benefit, are recorded as
+  follow-ups rather than widened into here.
+- **5.7 — confirmed as written.** The venv is now `${MOUSEDROID_INSTALL_DIR:-/opt/mousedroid}/venv`,
+  exactly as `deploy_jetson.sh` creates it, validated and `%q`-quoted like its siblings.
+
 ## Phase 6 — Documentation, and the alert that does not exist
 
-- [ ] 6.1 Add a `ModelArtifactDigestMismatch` rule to `config/prometheus/alerts.yml` for
+- [x] 6.1 Add a `ModelArtifactDigestMismatch` rule to `config/prometheus/alerts.yml` for
   `mousedroid_model_artifact_sha256_mismatches_total`, plus a runbook paragraph.
   `_registry_replay_vla.py:195` states "Operator alert rules should page on any non-zero
   rate" and `grep` finds **zero** hits outside `src/` — no rule, no panel, no runbook.
   This is the F-050 defect class repeated inside F-050's own change. Not documentation:
   a digest mismatch means wrong weights, wrong inference, silently, and nothing pages.
+### Slice E landed — the alert as written could never have fired
+
+- **The specified rule was dead on arrival.** "Page on any non-zero rate" over a counter written
+  once, at boot, inside `build_orchestrator` and before the telemetry server exists: the first
+  scrape sees the final value and it never changes, so `rate()` is 0 forever. Proven with
+  `promtool test rules` against a born-at-1 series. Landed as a value check, which correctly
+  stays firing while a BDI refusal keeps the rover degraded on the MCTS planner. A world-model
+  refusal never reaches `/metrics` at all (the process exits first), which the rule and the
+  runbook both say.
+- **Row 11's paired test forced a real bug fix.** Asserting every alert metric is rendered — for
+  every group, not just the LLM one the old check covered — failed on two MCP rules querying
+  `mousedroid_mcp_tool_calls`, which nothing emits: the registry rendered `..._total_total`. Every
+  other consumer (dashboard, docs) expected `..._total`, so the emitter was what was wrong. Fixed
+  there; the golden diff is exactly that rename. The Grafana MCP panel was dead for the same reason,
+  hidden by a dashboard-test whitelist that asserted the name without checking it — removed, now
+  that the sample seeds the MCP family.
+- **Declared extension: `SafetyViolation` (critical) missed every rover's first violation.** Every
+  counter here is pure-add — absent until its first write, so born at 1 — and `increase()` never
+  sees a series being born. The old rule fired only from the second violation; promtool proves
+  both behaviours. Fixed with a second `unless ... offset` arm; `max without ()` keeps labels and
+  avoids a duplicate-labelset error when both arms match. Taken here, not deferred, because it is
+  this slice's defect class on a critical safety alert.
+- **Declared extension: `CloudWeightUpdateDigestMismatch`.** The OTA sibling carries the identical
+  docstring instruction, and `generate_metrics_sample` claimed rules referenced it; none did. Added
+  as an event alert (fires on the first refusal, resolves after 15 minutes), since the rover keeps
+  its previous weights.
+- **The semantics are now gated, not argued.** `config/prometheus/alerts_test.yml` runs under
+  `promtool test rules` in the `prometheus-check` job. Against the pre-fix `alerts.yml` it fails on
+  exactly the fixed and added rules, and on `SafetyViolation` only at the first-violation check.
+  Runbook: `docs/playbooks/artifact-integrity-fail.md`, pinned into the playbook structure contract.
+
 - [ ] 6.2 Add a `### Added` block for F-050/F-051 under `CHANGELOG.md:9`. The file was not
   touched by this branch at all; 78 files are unrecorded. Include a forward reference to
   the PR #93 entry at `:4129-4151` whose "wired" claim F-050 contradicts — do not edit

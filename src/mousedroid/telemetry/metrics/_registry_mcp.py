@@ -44,7 +44,12 @@ class _McpMetricsMixin:
 
         # MCP metric names — all derived from namespace
         self._name_mcp_requests = f"{ns}_mcp_requests"
-        self._name_mcp_tool_calls = f"{ns}_mcp_tool_calls_total"
+        # The FAMILY name: the renderer appends `_total` to counters, so this
+        # is exposed as `<ns>_mcp_tool_calls_total`. It used to carry its own
+        # `_total` too, rendering `..._total_total` -- a name no alert or
+        # dashboard queried, so both MCP alerts and the Grafana MCP panel
+        # were silently dead (F-052 task 6.1).
+        self._name_mcp_tool_calls = f"{ns}_mcp_tool_calls"
         self._name_mcp_request_latency = f"{ns}_mcp_request_latency_ms"
         self._name_mcp_memory_query_latency = f"{ns}_mcp_memory_query_latency_ms"
 

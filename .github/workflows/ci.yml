@@ -516,6 +516,15 @@ jobs:
               if: steps.promtool.outputs.available == 'true'
               run: ./promtool check rules config/prometheus/alerts.yml
 
+            # `check rules` validates syntax only: three rules that could never
+            # fire passed it -- two MCP alerts over a series nothing emits, and
+            # SafetyViolation, blind to a rover's first violation because the
+            # counter is pure-add. These evaluate the rules against series shaped
+            # like the real ones, so "does it fire" is a result (F-052 task 6.1).
+            - name: Unit-test Prometheus alert rules
+              if: steps.promtool.outputs.available == 'true'
+              run: ./promtool test rules config/prometheus/alerts_test.yml
+
             # ::warning:: (not a plain echo) so a silently-degraded job is
             # visible in the run summary — this job has no continue-on-error,
             # and without the annotation a promtool download failure made it

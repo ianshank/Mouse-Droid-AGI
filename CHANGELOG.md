@@ -8,6 +8,61 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — three alerts that could never fire, and the two the docstrings promised
+
+`promtool check rules` validates syntax, not whether a rule can ever be true, and three rules
+passed it while dead. `MCPCircuitOpen` (severity `page`) and `MCPRateLimitedSurge` queried
+`mousedroid_mcp_tool_calls{...}`, a series nothing emits: the registry declared the family name with
+its own `_total` and the renderer appended another, so it exposed `..._total_total` — matched by no
+alert, no dashboard panel and no doc, all of which expected `mousedroid_mcp_tool_calls_total`. The
+emitter now renders that name. The Grafana MCP panel had been dead for the same reason, hidden by a
+dashboard-test whitelist that asserted the name without checking it; that whitelist is gone, because
+`generate_metrics_sample()` now seeds the MCP family. **Breaking for anyone who queried the
+`_total_total` name directly** — nothing in this repository did.
+
+`SafetyViolation` (critical) never fired on a rover's **first** safety violation. Every counter here
+is pure-add — absent from `/metrics` until its first write, so it is born at 1 — and `increase()`
+needs two samples of an existing series, so it never sees one being born. It fired only from the
+second violation. A second `unless ... offset` arm catches the birth.
+
+The model-artifact digest counter's docstring says operators should page on "any non-zero rate";
+no rule did, and one written that way could not have fired either: both writers run at boot, before
+the telemetry server exists, so the value never changes after the first scrape and its rate is 0
+forever. `ModelArtifactDigestMismatch` checks the value instead. `CloudWeightUpdateDigestMismatch`
+covers the OTA sibling, which carried the same instruction and was also unalerted. Both page and
+link `docs/playbooks/artifact-integrity-fail.md`.
+
+None of this is argued any more. `config/prometheus/alerts_test.yml` evaluates the rules against
+series shaped like the real ones under `promtool test rules`, now part of CI's `prometheus-check`
+job, and a pytest gate requires every metric any alert references — in every group, not only the
+LLM one it used to check — to be rendered by the sample.
+
+### Fixed — the deploy health check probes the port the rover actually serves
+
+`docker_deploy.sh` probed `${MOUSEDROID_TELEMETRY_PORT:-8080}`, but that is not a settings key (the
+nested delimiter is `__`). Moving the port the supported way, `MOUSEDROID_TELEMETRY__PORT`, left the
+probe on 8080; setting the template's `MOUSEDROID_TELEMETRY_PORT` moved only the probe. Either way a
+strict promotion could fail a healthy rover. The container's entrypoint already derives health
+settings from the exact `--config` it hands to the rover, so that derivation now also emits the
+resolved port and health path, and the deploy script reads them from the running container.
+`MOUSEDROID_HEALTH_PORT`/`_PATH` still override; an image that predates the new keys gets the old
+behaviour, announced. The template now says what `MOUSEDROID_TELEMETRY_PORT` really does and points
+at the key that moves the rover, and documents the five deploy knobs that genuinely work from
+`docker.env` — explaining why nine others the plan listed would not.
+
+Also: `MOUSEDROID_JETSON__TENSORRT_CACHE_DIR` is validated before compose interpolates it into a
+mount spec (a `:` injected a third mount field; `/etc` shadowed an image directory), on both paths
+that start compose — the deploy script and the systemd unit's preflight. And `deploy_remote.sh`
+derives the remote venv from `MOUSEDROID_INSTALL_DIR` instead of hardcoding it twice, which had made
+an install-dir override silently fall through to a full `deploy_jetson.sh`.
+
+One planned change was **not** made, because it was wrong: routing the strict probe's config through
+the env-var resolver to honour `MOUSEDROID_JETSON_CONFIG`. The rover ignores that key entirely (it
+loads only its explicit `--config`), and that resolver ranks the `MOUSEDROID_CONFIGS` CSV lists
+above `MOUSEDROID_CONFIG`, so the change would have let the probe evaluate an overlay the rover never
+loads. The invariant it was after — the gate and the rover read the same config — is pinned instead.
+
+
 ### Security — `docker_deploy.sh` stopped executing `/etc/mousedroid/docker.env`, and stopped leaving it world-readable
 
 Two defects in the same file, both confirmed on the tree before anything changed.

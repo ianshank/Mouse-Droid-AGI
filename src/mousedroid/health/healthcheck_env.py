@@ -19,6 +19,8 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from mousedroid.constants import HEALTH_ROUTE_SUFFIX
+
 if TYPE_CHECKING:
     # ``Settings`` is only used as a type annotation. ``from __future__
     # import annotations`` defers annotation evaluation, so this import
@@ -84,5 +86,19 @@ def derive_healthcheck_env(cfg: Settings) -> dict[str, str]:
         "MOUSEDROID_START_GRACE_FILE": _validate_path(
             cfg.loop.start_grace_file,
             "start_grace_file",
+        ),
+        # The telemetry endpoint the rover will actually serve, derived from
+        # the SAME ``Settings`` as every value above -- and therefore from the
+        # exact ``--config`` the entrypoint hands to ``mousedroid.main``.
+        # ``scripts/docker_deploy.sh`` reads these from the running container
+        # rather than guessing: before they existed it probed
+        # ``MOUSEDROID_TELEMETRY_PORT``, which is not a settings key (the
+        # nested delimiter is ``__``), so an operator moving the port the
+        # supported way left the probe on the old one. ``RESOLVED_`` marks
+        # them as outputs of resolution, never operator inputs.
+        "MOUSEDROID_RESOLVED_TELEMETRY_PORT": str(cfg.telemetry.port),
+        "MOUSEDROID_RESOLVED_HEALTH_PATH": _validate_path(
+            f"{cfg.telemetry.api_prefix}{HEALTH_ROUTE_SUFFIX}",
+            "telemetry.api_prefix",
         ),
     }

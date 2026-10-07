@@ -152,6 +152,35 @@ async def test_sensors_endpoint_with_data() -> None:
         assert data["tick_count"] == 42
 
 
+async def test_derived_health_path_is_a_route_the_server_registers() -> None:
+    """``derive_healthcheck_env`` names a route the server really registers.
+
+    ``docker_deploy.sh`` probes the path this derives, so if the server ever
+    registered health under a different suffix the probe would 404 a healthy
+    rover. Both build it from ``constants.HEALTH_ROUTE_SUFFIX``; this pins that
+    against the real router rather than either module's source, and uses a
+    non-default prefix so a hardcoded ``/api/v1`` on either side fails.
+    """
+    from mousedroid.config.schema import Settings
+    from mousedroid.health.healthcheck_env import derive_healthcheck_env
+
+    prefix = "/rover/v2"
+    queue: asyncio.Queue[TelemetryFrame] = asyncio.Queue()
+    server = TelemetryServer(
+        cfg=TelemetryConfig(api_prefix=prefix),
+        telemetry_queue=queue,
+        health_monitor=_make_health_monitor(),
+    )
+    registered = {route.resource.canonical for route in _build_app(server).router.routes()}
+
+    derived = derive_healthcheck_env(
+        Settings.model_validate({"mock_hardware": True, "telemetry": {"api_prefix": prefix}})
+    )["MOUSEDROID_RESOLVED_HEALTH_PATH"]
+
+    assert derived == f"{prefix}/health"
+    assert derived in registered, f"{derived} is not a registered route: {sorted(registered)}"
+
+
 async def test_health_endpoint() -> None:
     server, _queue = _make_server()
     app = _build_app(server)

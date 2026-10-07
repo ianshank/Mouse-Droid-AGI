@@ -203,6 +203,21 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Compose-interpolated values (F-052 task 5.6)
+# ---------------------------------------------------------------------------
+# The mousedroid-docker unit runs this script as a fatal ExecStartPre, BEFORE
+# `docker compose pull/up` parse the compose file -- the last point at which a
+# value compose would splice into a mount spec can still be refused. Same
+# validator docker_deploy.sh calls, so the two paths cannot disagree.
+echo ""
+echo "--- Compose-interpolated environment ---"
+if bash "$(dirname "${BASH_SOURCE[0]}")/validate_compose_env.sh"; then
+    ok "Compose-interpolated values are safe"
+else
+    fail "A value compose interpolates into a mount spec was refused (see above)"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""

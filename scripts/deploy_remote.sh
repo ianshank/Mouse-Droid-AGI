@@ -21,6 +21,8 @@
 #   MOUSEDROID_REMOTE_SRC             Rsync destination on the rover
 #                                     (default: /opt/mousedroid/src)
 #   MOUSEDROID_CONFIG_DIR             Remote config dir (default: /etc/mousedroid)
+#   MOUSEDROID_INSTALL_DIR            Remote install root; the venv is <it>/venv,
+#                                     as deploy_jetson.sh creates it (default: /opt/mousedroid)
 #   MOUSEDROID_DEPLOY_CONFIRM_DIRTY   1/true = same as --confirm-dirty
 #   MOUSEDROID_DEPLOY_ARCHIVE_DIR     Where rover WIP archives land on THIS
 #                                     machine (default: ~/.mousedroid/rover-wip)
@@ -37,6 +39,14 @@ REMOTE_USER="${MOUSEDROID_REMOTE_USER:-jetson}"
 # tests/unit/scripts/test_deploy_remote_guard.py instead of only on a rover.
 REMOTE_SRC="${MOUSEDROID_REMOTE_SRC:-/opt/mousedroid/src}"
 REMOTE_CONFIG="${MOUSEDROID_CONFIG_DIR:-/etc/mousedroid}"
+# deploy_jetson.sh creates the venv at ${INSTALL_DIR}/venv with
+# INSTALL_DIR=${MOUSEDROID_INSTALL_DIR:-/opt/mousedroid}; derive it the same way
+# instead of hardcoding the default. The literal used to appear twice below, so
+# an install-dir override left the health probe on the old tree and made
+# pip_reinstall's `test -d` miss, silently falling through to a FULL
+# deploy_jetson.sh run in place of a quick reinstall.
+REMOTE_INSTALL_DIR="${MOUSEDROID_INSTALL_DIR:-/opt/mousedroid}"
+REMOTE_VENV="${REMOTE_INSTALL_DIR}/venv"
 DEPLOY_MODE="code-only"
 HOST=""
 WIP_GUARD="${SCRIPT_DIR}/rover_wip_guard.sh"
@@ -117,11 +127,13 @@ require_safe_remote_path() {
 
 require_safe_remote_path "MOUSEDROID_REMOTE_SRC" "${REMOTE_SRC}"
 require_safe_remote_path "MOUSEDROID_CONFIG_DIR" "${REMOTE_CONFIG}"
+require_safe_remote_path "MOUSEDROID_INSTALL_DIR" "${REMOTE_INSTALL_DIR}"
 
 # Pre-quoted forms for interpolation into remote command strings. Use these,
 # not the raw variables, anywhere the value crosses into a shell on the rover.
 REMOTE_SRC_Q="$(printf '%q' "${REMOTE_SRC}")"
 REMOTE_CONFIG_Q="$(printf '%q' "${REMOTE_CONFIG}")"
+REMOTE_VENV_Q="$(printf '%q' "${REMOTE_VENV}")"
 
 remote_cmd() {
     ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
@@ -407,11 +419,10 @@ run_deploy() {
 
 pip_reinstall() {
     log_section "Reinstalling mousedroid package"
-    local venv="/opt/mousedroid/venv"
-    if remote_cmd "test -d ${venv}"; then
+    if remote_cmd "test -d ${REMOTE_VENV_Q}"; then
         local pip_target_q
         pip_target_q="$(printf '%q' "${REMOTE_SRC}[hardware,jetson]")"
-        remote_sudo "${venv}/bin/pip" install --quiet -e "${pip_target_q}"
+        remote_sudo "${REMOTE_VENV_Q}/bin/pip" install --quiet -e "${pip_target_q}"
     else
         log_step "Venv not found — running full deploy_jetson.sh"
         run_deploy
@@ -444,9 +455,8 @@ restart_service() {
 
 run_health_check() {
     log_section "Running remote health check"
-    local venv="/opt/mousedroid/venv"
-    if remote_cmd "test -d ${venv}"; then
-        remote_cmd "MOUSEDROID_MOCK_HARDWARE=false ${venv}/bin/python -m mousedroid.main --health-check" || {
+    if remote_cmd "test -d ${REMOTE_VENV_Q}"; then
+        remote_cmd "MOUSEDROID_MOCK_HARDWARE=false ${REMOTE_VENV_Q}/bin/python -m mousedroid.main --health-check" || {
             echo "WARNING: Health check returned non-zero exit code"
         }
     else

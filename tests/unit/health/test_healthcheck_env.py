@@ -19,14 +19,52 @@ def _settings(**loop_overrides: object) -> Settings:
 
 
 def test_derive_returns_exact_required_keys() -> None:
-    """Contract: env mapping has exactly the 4 keys the shell script reads."""
+    """Contract: the exact key set, so an addition is a deliberate edit here.
+
+    The four heartbeat/grace keys are read by ``mousedroid_healthcheck.sh``; the
+    two ``RESOLVED_`` keys are read by ``docker_deploy.sh`` (F-052 task 5.3), so
+    the deploy probe follows the port the rover actually serves.
+    """
     env = derive_healthcheck_env(_settings())
     assert set(env) == {
         "MOUSEDROID_HEARTBEAT_PATH",
         "MOUSEDROID_HEARTBEAT_STALE_S",
         "MOUSEDROID_START_GRACE_S",
         "MOUSEDROID_START_GRACE_FILE",
+        "MOUSEDROID_RESOLVED_TELEMETRY_PORT",
+        "MOUSEDROID_RESOLVED_HEALTH_PATH",
     }
+
+
+def test_resolved_port_follows_the_telemetry_config() -> None:
+    """The port the rover will serve, from the same Settings — not a default.
+
+    The deploy probe used to read ``MOUSEDROID_TELEMETRY_PORT``, which is not a
+    settings key, so moving ``telemetry.port`` left it probing the old port.
+    """
+    cfg = Settings.model_validate({"mock_hardware": True, "telemetry": {"port": 9191}})
+
+    assert derive_healthcheck_env(cfg)["MOUSEDROID_RESOLVED_TELEMETRY_PORT"] == "9191"
+
+
+def test_resolved_health_path_follows_the_api_prefix() -> None:
+    cfg = Settings.model_validate({"mock_hardware": True, "telemetry": {"api_prefix": "/rover/v2"}})
+
+    assert derive_healthcheck_env(cfg)["MOUSEDROID_RESOLVED_HEALTH_PATH"] == "/rover/v2/health"
+
+
+def test_a_shell_unsafe_api_prefix_is_rejected_not_written() -> None:
+    """The env file is dot-sourced, so an unsafe prefix must fail loudly here.
+
+    Same defence-in-depth contract as the path fields above: a value reaching
+    this function through an unvalidated route still cannot break the file.
+    """
+    cfg = Settings.model_validate(
+        {"mock_hardware": True, "telemetry": {"api_prefix": "/api'; touch /tmp/x; '"}}
+    )
+
+    with pytest.raises(ValueError, match=r"telemetry\.api_prefix"):
+        derive_healthcheck_env(cfg)
 
 
 def test_stale_threshold_is_interval_times_tolerance() -> None:
