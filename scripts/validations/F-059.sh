@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# F-059 — rover gate closeout. Fixture-based: every pin runs in hosted CI.
+# F-059 — rover gate closeout. Fixture-based pins that run in hosted CI.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 bash scripts/validations/_run_always_on_pytest.sh F-059 \

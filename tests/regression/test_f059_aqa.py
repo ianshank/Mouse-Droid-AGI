@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -29,8 +30,12 @@ def test_f059_edge_points_the_right_way() -> None:
     assert "F-059" in feats["F-008"]["depends_on"]
 
 
-def test_select_next_surfaces_f059_until_f008_is_done() -> None:
-    """R3-1 + EX-3: with F-050/F-051 deferred, the selector's answer is F-059."""
+def test_select_next_returns_f059_while_it_is_in_progress() -> None:
+    """F-059 wins the in-progress pick by priority (critical beats F-050 high / F-051 medium);
+    the F-050/F-051 deferral is catalog honesty (EX-3), not the lever.
+    """
+    if _features()["F-059"]["status"] != "in_progress":
+        pytest.skip("F-059 is no longer in progress; the edge pin is the durable guarantee")
     from mousedroid.harness import spec
 
     feats = spec.load_features(str(_REPO_ROOT / "features.yaml"))
