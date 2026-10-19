@@ -237,6 +237,7 @@ async def test_esp32_diagnostics_reads_the_live_driver_and_never_actuates(
         "source": "live_driver",
         "imu_valid": True,
         "battery_v": 11.9,
+        "polls": 1,
     }
     driver.read_encoders.assert_awaited_once_with()
     driver.get_battery_voltage.assert_awaited_once_with()
@@ -286,6 +287,7 @@ async def test_esp32_diagnostics_live_driver_polls_exactly_within_the_budget(
     assert result["status"] == status
     assert result["source"] == "live_driver"
     assert result["imu_valid"] is (status == "ok")
+    assert result["polls"] == reads
     assert driver.read_encoders.await_count == reads
     driver.send_velocity.assert_not_awaited()
     driver.emergency_stop.assert_not_awaited()
@@ -304,6 +306,7 @@ async def test_esp32_diagnostics_live_driver_silence_reads_no_battery() -> None:
         "source": "live_driver",
         "imu_valid": False,
         "battery_v": None,
+        "polls": 2,
     }
     driver.get_battery_voltage.assert_not_awaited()
 

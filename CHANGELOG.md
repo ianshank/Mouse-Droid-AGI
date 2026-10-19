@@ -12,21 +12,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 The registry's `esp32_diagnostics` was a constant, `{"status": "esp32_ok"}`, whether the board was
 wired, mocked or dead, so any MCP client, and any agent told to cite it as evidence, saw a healthy
-ESP32. It now says what the board did and still never moves or stops the rover: it stays out of
+ESP32. It now says what the board did and still sends no velocity or stop command (the probe
+branch arms the chassis heartbeat on connect, as any driver connect does): it stays out of
 `MCPConfig.actuation_tools`, and an AST pin keeps `send_velocity` and `emergency_stop` out of the
 handler and the probe. `create_default_registry` takes keyword-only `settings` and `esp32_driver`
 (default `None`, the legacy construction) and `build_orchestrator` passes its `cfg` and the driver
 it built. `status` is `unconfigured` with no settings and `mock` when `mock_hardware` is on or
 `esp32.enabled` is false. Otherwise it is `ok` or `no_frame`, read through the orchestrator's own
-driver, which holds the exclusive port and is never reopened, polling within
-`esp32.max_consecutive_timeouts`; or, when no driver is supplied, `ok` or `no_response` from
-`collect_esp32_probe`. A driver or probe failure is returned as `error`, never raised: the MCP
-bridge counts a raising handler against its circuit breaker, so one unplugged board would
-otherwise lock every tool out. A non-stock `esp32.command_set` is `error` too, because the legacy
-dialect never sets `imu_valid` and `no_frame` would call a living board dead. **Breaking for
-anything matching `esp32_ok`**; only the pin this change inverts did. `health_check` and
-`benchmark_latency` remain constants, as do the other placeholder tools, and are still not
-evidence.
+driver, which holds the exclusive port and is never reopened, at most
+`esp32.max_consecutive_timeouts` times with the count reported as `polls`; or, when no driver is
+supplied, `ok` or `no_response` from `collect_esp32_probe`. `no_frame` is the shared link's current
+view, not a fresh measurement: a silent board flips the driver to degraded, and a repeat call
+inside its throttle window writes nothing and still answers `no_frame`, so it is not proof of a
+dead board (a wrong baud, a loose cable and the throttle look the same). A driver or probe failure
+is returned as `error`, never raised: the MCP bridge counts a raising handler against its circuit
+breaker, so one unplugged board would otherwise lock every tool out. A non-stock
+`esp32.command_set` is `error` too, because the legacy dialect never sets `imu_valid` and
+`no_frame` would call a living board dead. **Breaking for anything matching `esp32_ok`**; only the
+pin this change inverts did. `health_check` and `benchmark_latency` remain constants, as do the
+other placeholder tools, and are still not evidence.
 
 ### Fixed — preflight reported the ESP32 healthy without ever talking to it (S-4)
 

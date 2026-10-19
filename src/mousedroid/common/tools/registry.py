@@ -217,15 +217,22 @@ async def _esp32_live_driver_status(
     The orchestrator holds the exclusive serial port, so nothing here opens, closes or
     reconfigures it: these are the two public reads the sensor loop already issues. Stock
     shares one stream across frame types, so a wrong-typed line is not silence: like the
-    probe, this polls up to ``esp32.max_consecutive_timeouts`` times (the driver's own
-    link-is-dead budget) before it says ``no_frame``.
+    probe, this reads up to ``esp32.max_consecutive_timeouts`` times (the driver's own
+    link-is-dead budget) before it says ``no_frame``, and reports the reads it issued as
+    ``polls``.
+
+    ``no_frame`` is the shared link's current view, not a fresh measurement. A silent board
+    flips the driver to degraded mode, where reads are throttled to
+    ``esp32.degraded_poll_interval_s``: a repeat call inside that window writes nothing and
+    still answers ``no_frame``. It is not proof that the board is dead (a wrong baud, a loose
+    cable and the throttle look the same).
 
     Args:
         settings: Root settings; ``esp32.command_set`` and the poll budget are consulted.
         driver: The driver the orchestrator is running on.
 
     Returns:
-        The ``ok`` / ``no_frame`` result with ``source: live_driver``.
+        The ``ok`` / ``no_frame`` result with ``source: live_driver`` and ``polls``.
 
     Raises:
         ValueError: If ``esp32.command_set`` is not ``waveshare_stock``. The legacy codec never
@@ -239,7 +246,7 @@ async def _esp32_live_driver_status(
             "frame to witness; set esp32.command_set='waveshare_stock' to diagnose a stock board"
         )
         raise ValueError(msg)
-    for _ in range(esp32.max_consecutive_timeouts):
+    for polls in range(1, esp32.max_consecutive_timeouts + 1):
         if (await driver.read_encoders()).imu_valid:
             voltage = await driver.get_battery_voltage()
             return {
@@ -248,8 +255,15 @@ async def _esp32_live_driver_status(
                 "imu_valid": True,
                 # The driver's 0.0 "no reading" sentinel is not a flat pack.
                 "battery_v": voltage if voltage > 0.0 else None,
+                "polls": polls,
             }
-    return {"status": "no_frame", "source": "live_driver", "imu_valid": False, "battery_v": None}
+    return {
+        "status": "no_frame",
+        "source": "live_driver",
+        "imu_valid": False,
+        "battery_v": None,
+        "polls": esp32.max_consecutive_timeouts,
+    }
 
 
 async def _esp32_probe_status(settings: Settings) -> dict[str, object]:
@@ -279,7 +293,7 @@ async def _esp32_diagnostics(
     settings: Settings | None = None,
     esp32_driver: ESP32CommProtocol | None = None,
 ) -> dict[str, object]:
-    """Report whether the ESP32 answers, without ever commanding motion.
+    """Report whether the ESP32 answers, sending no velocity or stop command.
 
     ``status`` is the verdict, and only ``ok`` is evidence that the board answered:
 
@@ -287,16 +301,18 @@ async def _esp32_diagnostics(
     * ``mock``: ``mock_hardware`` or ``esp32.enabled=false``. The factory builds
       ``MockESP32Driver`` there, whose silence says nothing about a board.
     * ``ok`` / ``no_frame``: read through ``esp32_driver``, the orchestrator's own driver,
-      polling within ``esp32.max_consecutive_timeouts``. Its port is exclusive, so it is
-      never reopened.
+      at most ``esp32.max_consecutive_timeouts`` times (``polls`` is how many this call
+      issued). Its port is exclusive, so it is never reopened. ``no_frame`` is the link's
+      current view, not a fresh measurement and not proof of a dead board.
     * ``ok`` / ``no_response``: no driver was supplied, so ``collect_esp32_probe`` connects
       one of its own, polls, and disconnects.
     * ``error``: the read or the probe raised, or the command set is not
       ``waveshare_stock`` (the legacy dialect has no frame to witness); ``detail`` is
       ``<Type>: <message>``.
 
-    This is a read-only diagnostic: it makes no motion or stop call, and it stays out of
-    ``MCPConfig.actuation_tools`` (both pinned in ``tests/regression/test_f059_aqa.py``).
+    It sends no velocity or stop command (the probe branch's ``connect()`` arms the chassis
+    heartbeat, as any driver connect does) and stays out of ``MCPConfig.actuation_tools``;
+    both are pinned in ``tests/regression/test_f059_aqa.py``.
     A failure is returned as ``error``, never raised: the MCP bridge counts a raising handler
     against its circuit breaker, and an unplugged board must not lock every other tool out.
     Cancellation still propagates.
