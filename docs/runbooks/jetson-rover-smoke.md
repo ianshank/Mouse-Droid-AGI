@@ -140,14 +140,22 @@ The serial probe follows the selector (stock probes with `{"T":130}`, a
 read that elicits a reply); `SMOKE_SERIAL_PROBE_JSON` overrides it for
 bench experiments.
 
+The `serial` stage is a probe, so it needs a reply: it opens the port
+exclusively (as the driver does) and silence FAILs, where it used to record a
+PASS for an open nobody answered. A port another opener holds FAILs too, with
+`Could not exclusively lock port`, rather than sharing the UART with the holder.
+The lock is advisory and per device node, so it stops openers that also lock and
+share the node (processes in one container), not a program that opens the port
+without locking.
+
 ## Triage matrix
 
 | Symptom in `SUMMARY.md` | First check |
 |-------------------------|-------------|
 | `usbc` FAIL | `ls /dev/serial/by-id/` — confirm both CP2102N (rover) and CP2102 (lidar) cables are seated and not held by another process. |
-| `serial` FAIL after `usbc` PASS | Container may be holding the port. Restart with `docker compose -f docker-compose.jetson.yml restart mousedroid`. |
+| `serial` FAIL `Could not exclusively lock port` after `usbc` PASS | Another opener holds the ESP32 port; the stage and the driver both open it exclusively, so the second opener fails fast. The usual holder is the orchestrator in the `mousedroid` container with `esp32.enabled` true: stop it for the run (`docker stop mousedroid`, then `docker start mousedroid`). Restarting it does not help, because it re-opens the port. |
 | `motor` FAIL `encoder loopback inactive` | First: is `chassis_has_wheel_encoders` right for this chassis? The WAVE ROVER is encoder-less (audit R3): with the flag `false` the stage requires a T:1001 frame (`EncoderReading.imu_valid`) instead of wheel velocity, and a silent board FAILS (the FAIL reason reads `no FEEDBACK_BASE_INFO frame after ... in N poll(s)`, with the traceback in `motor.log`; check the command-set/baud row below before the wiring). A reason of `esp32.enabled=false` means the stage never reached the board: stack `config/jetson_bench_esp32.yaml` or unset `MOUSEDROID_ESP32__ENABLED`. On an encoder-bearing chassis: rover power; motor/encoder wiring; rover firmware version. Re-run with `MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION=true` only after lifting the rover off the ground. |
-| `serial` WARN no response on a presumed-live board | Command-set/baud mismatch (audit R1/R2): stock firmware ignores legacy commands and runs 115 200 baud. Retry with `MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock` before declaring the board dead. |
+| `serial` FAIL `No response from ESP32` on a presumed-live board | Command-set/baud mismatch (audit R1/R2): stock firmware ignores legacy commands and runs 115 200 baud. The FAIL line names the `command_set` and `baud` the probe used. Retry with `MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock` before declaring the board dead. |
 | `power` FAIL on e-stop latency | `ESP32Config.emergency_stop_budget_ms` may need re-tuning OR the UART is congested — check `command_dispatch` log volume in `power.log`. |
 | `power` FAIL on battery voltage | **Check whether the reading is real before touching the pack.** Grep the stage log for `esp32_battery_reading_unavailable` (WARN-once per connection) and `battery_reading_implausible`: either means no valid voltage came back and the number is not a measurement — chase a command-set/baud mismatch (row above), not the battery. Only when a plausible reading is present does the pack matter: charge it or raise the rail; threshold is `safety.battery_critical_v`, and the "is this even a reading" floor is `safety.battery_implausible_below_v`. |
 | `lidar` FAIL | `udevadm info /dev/serial/by-id/usb-Silicon_Labs_CP2102_*` to confirm the LD19 sits on the lidar bridge, not the rover bridge. |

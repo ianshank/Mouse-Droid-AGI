@@ -58,6 +58,24 @@ async def test_connect_sets_connected():
     assert driver._connected is True
 
 
+async def test_connect_opens_the_port_exclusively():
+    """The ESP32 port is opened with pyserial's exclusive (``flock``) lock (F-059 Task 4.1).
+
+    Two openers on one UART split the board's frames between them, and each sees a board that
+    answers half the time. With ``exclusive=True`` the second opener fails with ``Could not
+    exclusively lock port`` instead. The flag is a module constant (``_SERIAL_EXCLUSIVE``),
+    not config: nothing may turn the collision off from YAML or an environment variable.
+    """
+    driver = _make_driver()
+    mock_serial = MagicMock()
+    with patch("mousedroid.comms.serial_driver._serial_mod", mock_serial):
+        await driver.connect()
+        await driver.disconnect()
+    mock_serial.Serial.assert_called_once_with(
+        driver._port, driver._baud, timeout=driver._timeout, exclusive=True
+    )
+
+
 async def test_connect_raises_without_pyserial():
     driver = _make_driver()
     with (

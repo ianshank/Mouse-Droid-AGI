@@ -41,6 +41,20 @@ _IoResult = TypeVar("_IoResult")
 #: exists to prevent, so it must not be reachable from YAML or an env var.
 _SERIAL_IO_WORKERS: Final[int] = 1
 
+#: Whether the port is opened with pyserial's exclusive lock.
+#:
+#: Deliberately **not** a config field, for the same reason as ``_SERIAL_IO_WORKERS``: it is
+#: not a tuning knob, it is what makes two openers collide loudly. ``exclusive=True`` takes a
+#: POSIX ``flock`` on the device node, so a second opener that shares the node (the
+#: orchestrator and a ``docker exec`` smoke run in one container, say) fails fast with
+#: ``SerialException: Could not exclusively lock port ...`` instead of both reading the
+#: board's frames and each seeing only some of them. Turning it off from YAML or an
+#: environment variable would put that failure back. pyserial ignores the flag on Windows,
+#: where the OS already opens a port exclusively. The lock is advisory and per device node:
+#: it does not span containers that each get their own node for the same device, nor a program
+#: that opens the port without locking.
+_SERIAL_EXCLUSIVE: Final[bool] = True
+
 #: Thread-name prefix for the serial I/O worker, so a stack dump or ``py-spy``
 #: capture attributes a blocked ``readline()`` to this driver rather than to an
 #: anonymous ``asyncio_N`` thread from the shared default executor.
@@ -217,11 +231,12 @@ class SerialESP32Driver(BaseESP32Driver):
             raise
 
     def _open_serial(self) -> Any:  # pragma: no cover
-        """Open the serial port (blocking)."""
+        """Open the serial port (blocking), exclusively (see ``_SERIAL_EXCLUSIVE``)."""
         return _serial_mod.Serial(
             self._port,
             self._baud,
             timeout=self._timeout,
+            exclusive=_SERIAL_EXCLUSIVE,
         )
 
     async def disconnect(self) -> None:
