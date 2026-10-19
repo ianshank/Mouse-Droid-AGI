@@ -684,6 +684,72 @@ def test_request_for_a_line_past_the_end_of_the_file_says_so(repo: Path) -> None
     assert "past the end" in text.lower()
 
 
+def test_a_finding_whose_symbol_is_not_near_its_line_is_flagged_as_stale(repo: Path) -> None:
+    fresh = _finding(f"{_SRC}/alpha/util.py", 30, "value_30", "variable")
+    drifted = _finding(f"{_SRC}/alpha/util.py", 30, "value_85", "variable")  # lives at line 85
+
+    fresh_request = triage.build_request(f"{_SRC}/alpha", [fresh], repo)
+    drifted_request = triage.build_request(f"{_SRC}/alpha", [drifted], repo)
+
+    assert triage.stale_notes(fresh_request) == 0
+    assert triage.stale_notes(drifted_request) == 1
+    assert "audit may be stale" in _user_text(drifted_request)
+
+
+def test_the_staleness_window_is_the_configured_excerpt_window(repo: Path) -> None:
+    inside = _finding(f"{_SRC}/alpha/util.py", 30, "value_10", "variable")  # 20 lines above
+    outside = _finding(f"{_SRC}/alpha/util.py", 30, "value_9", "variable")  # 21 lines above
+    below = _finding(f"{_SRC}/alpha/util.py", 30, "value_50", "variable")  # 20 lines below
+    beyond = _finding(f"{_SRC}/alpha/util.py", 30, "value_51", "variable")  # 21 lines below
+    notes = [
+        triage.stale_notes(triage.build_request(f"{_SRC}/alpha", [f], repo))
+        for f in (inside, outside, below, beyond)
+    ]
+    assert notes == [0, 1, 0, 1]
+
+
+def test_stale_notes_count_gone_files_and_lines_past_the_end_too(repo: Path) -> None:
+    ghost = _finding(f"{_SRC}/alpha/ghost.py", 10, "vanished")
+    past = _finding(f"{_SRC}/gamma.py", 500, "value_500", "variable")
+    assert triage.stale_notes(triage.build_request(f"{_SRC}/alpha", [ghost], repo)) == 1
+    assert triage.stale_notes(triage.build_request(f"{_SRC}/gamma.py", [past], repo)) == 1
+
+
+def test_a_fresh_audit_raises_no_staleness_warning(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    triage.submit(_write_findings(repo), 15.0, repo_root=repo, dry_run=True, scanner=_clean_scanner)
+    assert "stale" not in capsys.readouterr().err
+
+
+def test_an_audit_older_than_the_checkout_is_warned_about_before_any_spend(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rows = [_row(f"{_SRC}/alpha/util.py", 30, "value_85", "variable"), *_audit_rows()]
+    client = MagicMock()
+
+    triage.submit(
+        _write_findings(repo, rows),
+        15.0,
+        repo_root=repo,
+        client=client,
+        dry_run=True,
+        scanner=_clean_scanner,
+    )
+
+    err = capsys.readouterr().err
+    assert "look stale" in err
+    assert "scripts/dead_code_audit.py" in err
+    assert client.mock_calls == []
+
+
+def test_submit_prints_the_batch_id_the_moment_it_exists(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _submit(repo)
+    assert "created batch msgbatch_test01" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     "filename",
     [

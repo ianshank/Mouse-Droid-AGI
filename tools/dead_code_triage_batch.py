@@ -553,6 +553,29 @@ def _windows(linenos: Iterable[int], total: int, context: int) -> list[tuple[int
     return [(low, high) for low, high in merged]
 
 
+#: The phrases a prompt uses to say the audit no longer matches the checkout. They are
+#: also how ``stale_notes`` counts them, so the wording lives in one place.
+_MISSING_FILE_MARK = "file not found in this checkout"
+_PAST_END_MARK = "past the end of the file"
+_STALE_NAME_MARK = "does not appear within"
+
+
+def _name_near(source: Sequence[str], finding: Finding, context: int) -> bool:
+    """True when the finding's symbol name occurs within ``context`` lines of its recorded line."""
+    first = max(0, finding.lineno - 1 - context)
+    return finding.name in "\n".join(source[first : finding.lineno + context])
+
+
+def stale_notes(request: Mapping[str, Any]) -> int:
+    """Count the places a built request says its audit row no longer matches the source.
+
+    A file that is gone, a line past the end of a file, a symbol that is not near its
+    recorded line: each one means the audit JSON is older than the checkout.
+    """
+    text = request["params"]["messages"][0]["content"]
+    return sum(text.count(mark) for mark in (_MISSING_FILE_MARK, _PAST_END_MARK, _STALE_NAME_MARK))
+
+
 def _file_section(
     repo: Path, filename: str, group: Sequence[Finding], settings: BatchTriageConfig
 ) -> list[str]:
@@ -567,13 +590,18 @@ def _file_section(
     ]
     source = _read_source(repo, filename, settings)
     if source is None:
-        return [*lines, "Source: (file not found in this checkout - answer `verify`)", ""]
+        return [*lines, f"Source: ({_MISSING_FILE_MARK} - answer `verify`)", ""]
     total = len(source)
     for finding in group:
         if finding.lineno > total:
             lines.append(
-                f"Source for line {finding.lineno}: (past the end of the file, which has "
+                f"Source for line {finding.lineno}: ({_PAST_END_MARK}, which has "
                 f"{total} lines - answer `verify`)"
+            )
+        elif not _name_near(source, finding, settings.context_lines):
+            lines.append(
+                f"Note: `{finding.name}` {_STALE_NAME_MARK} {settings.context_lines} lines of "
+                f"line {finding.lineno}; the audit may be stale - answer `verify`"
             )
     wanted = {f.lineno for f in group}
     excerpt: list[str] = []
@@ -1316,6 +1344,14 @@ def _prepare(
         model=requested,
         scanner=scanner if scanner is not None else _default_scanner(workforce, repo),
     )
+    stale = sum(stale_notes(r) for r in requests)
+    if stale:
+        print(
+            f"warning: {stale} finding(s) or file(s) look stale against this checkout (a file "
+            "gone, a line past the end of a file, a symbol not near its recorded line): the audit "
+            "JSON may be older than the source - re-run scripts/dead_code_audit.py before spending",
+            file=sys.stderr,
+        )
     estimate = estimate_cost_usd(requests, workforce.credit, model=requested)
     return _Prepared(findings, sha, plan, requests, estimate, Path(findings_path))
 
@@ -1502,6 +1538,7 @@ def submit(
     for request in prepared.requests:
         request["params"]["model"] = resolved
     batch_id = _create_batch(api, prepared.requests)
+    print(f"created batch {batch_id}", file=sys.stderr, flush=True)  # before anything can fail
     record = _batch_record(
         prepared,
         batch_id=batch_id,
