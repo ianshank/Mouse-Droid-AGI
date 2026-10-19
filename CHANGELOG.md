@@ -13,17 +13,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 `python -m tools.agent_reviewer.run_review --base REF --head REF --cap-usd N` runs the `peer-reviewer`
 agent over a change set through the Claude Agent SDK and saves the review to
 `reports/agent_reviewer/<date>/wsb-NNNN.md`, with one row in the credit ledger. An agent that reads this
-repository and spends money is acceptable only if what it cannot do is pinned, so the containment is
-plain data in `tools/agent_reviewer/policy.py` and each piece has a test: the model is shown only
-`Read`, `Grep`, `Glob` and `Bash`; a PreToolUse hook admits `git diff|log|show` and
-`python -m pytest ... --collect-only` as one plain command and nothing else (it also refuses
-`git diff --output`, `--no-index`, unquoted globs, secret-file names, and pytest plugins or output
-files); no actuation tool, `Write`/`Edit` or web tool is allowed or reachable; the MCP server is the
-`mousedroid` entry of `.mcp.json` with `MOUSEDROID_MOCK_HARDWARE=true` forced, every other env key
-dropped, and the `github` server left out; and no user or project settings file is loaded, so nothing on
-the workstation can widen any of it. The prompt builder strips the agent file's front-matter, appends
-the house output shape, and refuses `*.env`, `docker.env*`, key-shaped text and anything matching the
-regexes in `.gitleaks.toml`.
+repository and spends money is acceptable only if what it cannot do is pinned, and the head under review
+may be hostile, so the containment is plain data in `tools/agent_reviewer/policy.py`, each piece has a
+test, and nothing the reviewed tree controls reaches an exec sink: the model is shown only `Read`, `Grep`,
+`Glob` and `Bash`; a PreToolUse hook admits `git diff|log|show` as one plain command and nothing else (no
+interpreter and no `pytest`: `--collect-only` imports the head's `conftest.py`, and an `@argfile` argument
+injects options). It also refuses `--output`, `--no-index`, whole-history flags (`--all`, `--reflog`, ...),
+unquoted globs, secret-file names and any pathspec that is not a literal path, and git runs with
+`GIT_LITERAL_PATHSPECS=1`; `git show <rev>:<path>` may name only a non-secret file tracked at the base ref.
+No actuation tool, `Write`/`Edit` or web tool is allowed or reachable. The `mousedroid` MCP entry is built
+in code (`sys.executable -m mousedroid`, mock hardware forced, credential variables blanked, the `github`
+server left out) and the `.mcp.json` at the *base* ref, never the working tree, must confirm it or the run
+is refused; the agent instructions and the list of files `git show` may name also come from the base ref.
+The run is also refused when the interpreter would import the branch's own `mousedroid` for that server
+(an editable install, with the checkout not at the base commit) unless `--allow-in-tree-mcp` says so.
+The environment the reviewer adds is an allowlist that never carries a credential (the SDK merges it over
+the CLI's own, so the key is kept from the head's code by what is allowed to run, not by scrubbing), and no
+user or project settings file is loaded, so nothing on the workstation can widen any of it. The prompt
+builder strips the agent file's front-matter, appends the house output shape, and refuses `*.env`,
+`docker.env*`, key-shaped text and anything matching the regexes in `.gitleaks.toml`.
 
 Spend is checked before it happens. `--cap-usd` must fit in what is left of the workstream cap
 (`charge()` raises `CapExceeded` before any client is built) and is also handed to the SDK as its hard

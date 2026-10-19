@@ -167,7 +167,8 @@ flowchart TB
 
     Api[("Anthropic API\nthe only egress")]
     Mcp["mousedroid MCP server\nMOUSEDROID_MOCK_HARDWARE=true\nactuation tools hidden"]
-    Shell["git diff, log, show\npython -m pytest --collect-only"]
+    Shell["git diff, log, show\nliteral pathspecs\nno interpreter, no pytest"]
+    BaseRef[("trusted base ref\n.mcp.json, agent file,\ntracked-file list")]
     Artifact[("reports/agent_reviewer/date/wsb-NNNN.md")]
     LedgerFile[("reports/credit/ledger.jsonl")]
 
@@ -176,6 +177,7 @@ flowchart TB
     Run --> Prompt
     Run --> LedgerAdapter
     Run -.reads.-> Config
+    Run -.reads at the base SHA.-> BaseRef
     LedgerAdapter --> Credit
     Prompt -.delegates to gitleaks with.-> SecretScan
     Run -->|"after charge() passes"| Query
@@ -194,18 +196,28 @@ Anthropic API - the one egress. `anthropic` (the `anthropic` extra) is optional 
 the model alias with `models.retrieve`; `gitleaks` is optional and only adds a scan of the
 assembled prompt and of the review before it is saved.
 
+**Threat model: the head may be hostile.** The reviewer runs with an API key in its environment
+against a change set whose head commit controls every file in the working tree. So nothing the
+head controls may reach an exec sink, a process that holds the key, or the reviewer's own
+instructions. Three inputs are therefore taken from the **base** ref - `git cat-file blob
+<base-sha>:<path>` and `git ls-tree -r <base-sha>`, never the working tree - namely the reviewer's
+instructions (`.claude/agents/peer-reviewer.md`), the MCP declaration (`.mcp.json`) and the list of
+files `git show <rev>:<path>` may name. What the head does control (the diff; what `Read` and `Grep`
+return) reaches the model as data, with no exec sink behind it.
+
 **Containment, in the order the SDK applies it.** Each layer is a pure function or a constant in
 `policy.py`, pinned by `tests/unit/tools/test_agent_reviewer.py` without the SDK or a network:
 
 | # | Layer | What it guarantees |
 |---|---|---|
 | 1 | `tools=` base set | The model is shown only `Read`, `Grep`, `Glob`, `Bash`: no `Write`, `Edit`, web or subagent tool exists for it. |
-| 2 | PreToolUse hook `deny_non_readonly_bash` | Runs first. A whitelist: `git diff\|log\|show` and `python -m pytest ... --collect-only` as one plain command; refuses the options that make those write a file (`--output`), run a program or read outside the repo (`--no-index`), shell syntax, unquoted globs and secret-file names. Silent when it has no objection, so it can only tighten. Fails closed. |
+| 2 | PreToolUse hook `deny_non_readonly_bash` | Runs first. A whitelist: `git diff\|log\|show` as one plain command and nothing else - no interpreter and no `pytest` (`--collect-only` still imports the head's `conftest.py`, and an `@argfile` argument can inject options). Refuses the options that write a file (`--output`), run a program or read outside the repo (`--no-index`, `--ext-diff`, `--textconv`), or widen the search to every ref (`--all`, `--reflog`, `--branches`, `--remotes`); shell syntax; unquoted globs. Pathspecs follow `--` and are literal: none contains `* ? [ :` or starts with `-`. `git show <rev>:<path>` is accepted only for a non-secret file tracked at the base ref. Silent when it has no objection, so it can only tighten. Fails closed. |
 | 3 | `disallowed_tools` deny rules | Evaluated even if the hook failed: writes, web, subagents, every actuation tool by name (a superset of `MCPConfig.actuation_tools`, pinned by a test), and reads of `*.env`, `docker.env*` and credential directories. |
 | 4 | `permission_mode="dontAsk"` | Anything not pre-approved is denied; a headless run has nobody to ask. |
-| 5 | `allowed_tools` | The allowlist: the read tools, the three Bash patterns, and `system_info` / `lidar_diagnostics` / `esp32_diagnostics`. |
-| 6 | MCP config | Only the `mousedroid` server, built from `.mcp.json`; `MOUSEDROID_MOCK_HARDWARE=true` and `MOUSEDROID_MCP__EXPOSE_ACTUATION_TOOLS=false` forced; only `MOUSEDROID_MCP__*` env survives (no rover host, no token); a `${...}` value is refused because it would be expanded from the environment that holds the API key; `strict_mcp_config` so the CLI loads no other server. |
-| 7 | `setting_sources=[]` | No user, project or local settings file can widen any of the above. |
+| 5 | `allowed_tools` | The allowlist: the read tools, the three git patterns, and `system_info` / `lidar_diagnostics` / `esp32_diagnostics`. |
+| 6 | MCP entry | Only the `mousedroid` server, **built in code** from constants: `sys.executable -m mousedroid --config config/default.yaml` with a fixed minimal environment (`MOUSEDROID_MOCK_HARDWARE=true`, `MOUSEDROID_MCP__EXPOSE_ACTUATION_TOOLS=false`, `PYTHONSAFEPATH=1`, every credential variable blanked). Nothing is passed through from `.mcp.json`: the copy at the base ref only has to *confirm* the pinned command and arguments, and any mismatch raises - there is no fallback. `strict_mcp_config` so the CLI loads no other server (the `github` entry of `.mcp.json` carries a token and can write). The one remaining way for the branch's code to run is the package itself: under an editable install `python -m mousedroid` imports the checkout's own `src/mousedroid`, so the plan names where the interpreter finds it (`mcp_package:`) and the run is refused when that is the checkout and the checkout is not at the base commit (`--allow-in-tree-mcp` accepts it). |
+| 7 | `setting_sources=[]` | No user, project or local settings file can widen any of the above, and the head's `.claude/settings.json` hooks never run. |
+| 8 | Process environment (`process_env`) | The environment the reviewer adds for the CLI is an allowlist - `PATH`, `HOME`, `LANG` - plus forced constants (`GIT_LITERAL_PATHSPECS=1`, `GIT_OPTIONAL_LOCKS=0`, `MOUSEDROID_MOCK_HARDWARE=true`). No credential is copied into it, whatever the parent holds. The SDK lays it over the CLI's inherited environment, so it cannot remove the key the CLI itself needs: the key is kept from the head's code by never starting a process the head can steer (layers 2 and 6), not by scrubbing. |
 
 **Spend.** `--cap-usd` is both the amount `charge()` must find headroom for - it raises `CapExceeded`
 before any client is built - and the SDK's `max_budget_usd`. The row's cost is
@@ -220,8 +232,15 @@ repository text can at worst produce a wrong paragraph in an advisory review. Th
 control, not a text filter.
 
 **Not claimed.** `Read` is not confined to the repository (the deny rules are a screen, not a
-sandbox), and `python -m pytest --collect-only` runs the repository's import-time code with the API
-key in the environment. The reviewer is for branches the operator would run.
+sandbox). The CLI that holds the API key keeps it in its own environment: the SDK merges the `env`
+it is given over the inherited one, so credentials are withheld from child processes by what is
+allowed to run, not by scrubbing. The CLI has a switch that strips credentials from its
+subprocesses (`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`); it is not enabled, because it is tied to the
+CLI's permission-mode handling and subprocess sandbox, which cannot be rehearsed without spending.
+`git log -p` shows any secret ever committed in the named history. `.claude/workforce.yaml`,
+`config/default.yaml` and `.gitleaks.toml` are read from the working tree: validated data, none of
+it an exec sink. The aim is that a hostile head can mislead a review and spend up to its cap, but
+gets no code execution and no process that holds the key.
 
 ## Why this shape
 

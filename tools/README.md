@@ -17,9 +17,10 @@ Probes and dev utilities (not shipped in the runtime path):
   made when the workstream's recorded spend would pass its cap, `record(entry)` appends one JSON line per run;
   caps and the ledger path come from `credit:` in `.claude/workforce.yaml`
 - `agent_reviewer/` — F-059 WS-B / WS-D: a read-only Agent-SDK peer reviewer
-  (`python -m tools.agent_reviewer.run_review --base REF --head REF --cap-usd N [--dry-run]`). The tool
-  allowlist, the Bash guard and the mock-only MCP config are `policy.py`; every run is pre-checked against
-  and recorded in the credit ledger. Needs the `agent_reviewer` extra; see its `README.md`
+  (`python -m tools.agent_reviewer.run_review --base REF --head REF --cap-usd N [--dry-run]`). The head
+  under review is treated as hostile: the tool allowlist, the git-only Bash guard and the mock-only MCP
+  entry (built in code, confirmed by the base ref's `.mcp.json`) are `policy.py`; every run is pre-checked
+  against and recorded in the credit ledger. Needs the `agent_reviewer` extra; see its `README.md`
 - `spikes/` — throwaway investigation spikes
 
 `tools/` is inside the `ruff` lint + format scope — in `pyproject.toml`, in
