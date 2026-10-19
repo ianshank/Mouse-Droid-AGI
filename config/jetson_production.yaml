@@ -55,7 +55,15 @@ esp32:
   # env overrides YAML, so no commit is needed at bring-up time.
   enabled: false
   serial_port: "/dev/serial/by-id/usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_cc0ff02aab6cef119a38a4adc169b110-if00-port0"
-  serial_baud: 1000000
+  # F-059 D-2: this rover runs stock Waveshare General_Driver firmware (factory
+  # package: General_Driver.ino.bin, sha256 ebedf216...). The legacy private
+  # protocol parsed its frames as zeros — how a live board read as dead.
+  command_set: waveshare_stock
+  # Stock UART speed; equals what ESP32Config._apply_command_set_coupling derives.
+  serial_baud: 115200
+  # WAVE ROVER is encoder-less (audit R3): stock L/R echo the commanded speed, so
+  # the motor smoke asserts a T:1001 frame instead of a wheel velocity.
+  chassis_has_wheel_encoders: false
 
 jetson:
   tensorrt_enabled: true

@@ -121,8 +121,9 @@ everything skips, so a clean exit is not a PASS.
 `ESP32Config.command_set` selects the wire protocol: `legacy` (default,
 the historical private JSON) or `waveshare_stock` (stock `General_Driver`
 firmware — `CMD_ROS_CTRL` velocity, `CMD_HEART_BEAT_SET` failsafe armed at
-connect, telemetry from `FEEDBACK_BASE_INFO`). Until
-`deployments/jetson-image.json` is re-pinned, opt in via env only:
+connect, telemetry from `FEEDBACK_BASE_INFO`). `waveshare_stock` is shipped in
+`config/jetson_production.yaml` since F-059; the env var stays the per-host
+override, and the lever for any overlay that does not declare it:
 
 ```bash
 MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock bash scripts/jetson_smoke_test.sh serial
@@ -131,8 +132,8 @@ MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock bash scripts/jetson_smoke_test.sh 
 Selecting stock also derives `serial_baud=115200`, so the command set is
 the only lever you need to set. The derivation is suppressed **only** by a
 *non-default* baud pin; an explicit pin that happens to equal the schema
-default still derives 115200, which matters because both shipped overlays
-pin exactly that value. Keying the rule on "is it pinned at all" instead
+default still derives 115200, which matters because `default.yaml` pins
+exactly that value. Keying the rule on "is it pinned at all" instead
 would leave the rover at the legacy 1 Mbaud, where stock firmware reads as
 line noise — which is how a live board gets diagnosed dead (audit R2).
 

@@ -11,6 +11,7 @@ import pytest
 import yaml
 
 from mousedroid.config.loader import load_settings
+from mousedroid.config.schema import WAVESHARE_STOCK_BAUD
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CONFIG_DIR = _REPO_ROOT / "config"
@@ -272,3 +273,12 @@ def test_loopback_velocity_test_stops_the_board_in_a_finally_and_polls_within_th
     assert "_read_until_feedback_frame" in names, "the T:1001 witness is polled, not read once"
     poll = _code_names(fns["_read_until_feedback_frame"])
     assert {"read_encoders", "imu_valid"} <= poll, "the poll must read until imu_valid answers"
+
+
+def test_production_overlay_speaks_stock_firmware_on_an_encoder_less_chassis() -> None:
+    """D-2 / audit R3: the shipped rover speaks stock firmware on an encoder-less chassis."""
+    cfg = load_settings(_PROD, config_dir=_CONFIG_DIR)
+    assert cfg.esp32.command_set == "waveshare_stock"
+    assert cfg.esp32.serial_baud == WAVESHARE_STOCK_BAUD
+    assert cfg.esp32.chassis_has_wheel_encoders is False
+    assert cfg.esp32.enabled is False  # the flip to true lives only in the bench overlay
