@@ -323,7 +323,7 @@ async def _check_esp32(cfg: Settings) -> PreflightCheckResult:
     WARN, never OK, when nothing can be probed: ``esp32.enabled=false`` (the
     factory returns MockESP32Driver — reporting OK there was S-4) or a legacy
     command set (no polled frame exists). FAIL when the board stays silent.
-    Connect/lock errors propagate; ``run_preflight`` records them as FAIL.
+    Connect errors propagate; ``run_preflight`` records them as FAIL.
     """
     t0 = time.monotonic()
     if cfg.mock_hardware:
@@ -340,7 +340,9 @@ async def _check_esp32(cfg: Settings) -> PreflightCheckResult:
         return _warn(
             "esp32",
             f"command_set={esp32.command_set!r} has no probe "
-            "(legacy firmware pushes frames unsolicited); not reported OK",
+            "(legacy firmware pushes frames unsolicited); not reported OK. "
+            "Set MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock "
+            "(also derives the 115200 stock baud) to probe a stock board",
             time.monotonic() - t0,
         )
     from mousedroid.validation.runtime import collect_esp32_probe

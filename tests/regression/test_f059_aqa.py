@@ -72,9 +72,11 @@ async def test_preflight_esp32_warns_rather_than_ok_when_the_board_is_mocked() -
 def test_trend_unit_never_runs_exclusive_device_checks() -> None:
     """R-11: the on-timer preflight must never open the serial port or the camera.
 
-    The orchestrator container owns those devices while it runs.
+    The orchestrator container owns those devices while it runs. systemd honours the LAST
+    ``Environment=`` assignment of a variable, so every such line is checked, not the first.
     """
     text = (_REPO_ROOT / "scripts" / "mousedroid-trend.service").read_text(encoding="utf-8")
-    match = re.search(r"^Environment=MOUSEDROID_TREND_CHECKS=(\S+)$", text, re.M)
-    assert match, "default check list must be an Environment= line"
-    assert not {"esp32", "lidar", "camera"} & set(match.group(1).split(","))
+    declared = re.findall(r"^Environment=MOUSEDROID_TREND_CHECKS=(\S+)$", text, re.M)
+    assert declared, "default check list must be an Environment= line"
+    listed = {name for value in declared for name in value.split(",")}
+    assert not {"esp32", "lidar", "camera"} & listed

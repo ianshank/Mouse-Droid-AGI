@@ -204,6 +204,7 @@ class TestEsp32RealBranch:
         result = await _check_esp32(real_cfg)
         assert result.status is PreflightStatus.WARN
         assert "no probe" in result.detail
+        assert "MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock" in result.detail
 
     async def test_silent_board_fails(
         self, real_cfg: Settings, monkeypatch: pytest.MonkeyPatch
@@ -212,7 +213,9 @@ class TestEsp32RealBranch:
             return Esp32ProbeResult(False, None, None, 0.1, "no FEEDBACK_BASE_INFO frame")
 
         monkeypatch.setattr(runtime, "collect_esp32_probe", silent)
-        assert (await _check_esp32(self._stock(real_cfg))).status is PreflightStatus.FAIL
+        result = await _check_esp32(self._stock(real_cfg))
+        assert result.status is PreflightStatus.FAIL
+        assert "no FEEDBACK_BASE_INFO frame" in result.detail
 
     async def test_answering_board_ok(
         self, real_cfg: Settings, monkeypatch: pytest.MonkeyPatch
@@ -225,23 +228,24 @@ class TestEsp32RealBranch:
         assert result.status is PreflightStatus.OK
         assert "FEEDBACK_BASE_INFO" in result.detail
 
-    async def test_a_port_held_elsewhere_fails_fast_with_the_reason(
+    async def test_a_connect_error_fails_fast_with_the_reason(
         self, real_cfg: Settings, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Review focus 4: a port locked by the running container is a FAIL with the reason.
+        """A connect error (device node missing or unreadable) is a FAIL with the reason.
 
-        The probe's connect error propagates out of ``_check_esp32``; ``run_preflight``
-        records it as a FAIL carrying the message, rather than hanging or crashing.
+        The probe's ``connect()`` raises; the error propagates out of ``_check_esp32`` and
+        ``run_preflight`` records it as a FAIL whose detail carries the message, rather
+        than hanging or crashing.
         """
 
-        async def busy(cfg: Settings) -> Esp32ProbeResult:
-            raise OSError("Could not exclusively lock port /dev/ttyUSB0")
+        async def unreachable(cfg: Settings) -> Esp32ProbeResult:
+            raise OSError("could not open port /dev/ttyUSB0: [Errno 2] No such file or directory")
 
-        monkeypatch.setattr(runtime, "collect_esp32_probe", busy)
+        monkeypatch.setattr(runtime, "collect_esp32_probe", unreachable)
         report = await run_preflight(self._stock(real_cfg), check_names={"esp32"})
         esp = next(c for c in report.checks if c.name == "esp32")
         assert esp.status is PreflightStatus.FAIL
-        assert "exclusively lock" in esp.detail
+        assert "No such file or directory" in esp.detail
 
 
 class TestConfigCheckIssueBranch:
