@@ -174,3 +174,44 @@ credit:
         B: 60
         C: 15
     ledger: reports/credit/ledger.jsonl
+    # Token prices tools/dead_code_triage_batch.py makes its pre-call estimate and
+    # its recorded cost from (USD per million tokens, standard non-batch rates).
+    # [Likely]: the claude-api skill's model table, cached 2026-10-06, and its
+    # "Batch API is 50 % off" -- re-check them against the pricing page before
+    # raising a cap. A model missing from `models` cannot be estimated, so it
+    # cannot be submitted; an absent batch_multiplier means 1.0 (no discount).
+    prices:
+        batch_multiplier: 0.5
+        models:
+            claude-sonnet-5-5:
+                input_usd_per_mtok: 2.0
+                output_usd_per_mtok: 10.0
+    # F-059 WS-C: Batch-API triage of the vulture findings
+    # (python -m tools.dead_code_triage_batch). It spends against workstream C.
+    batch_triage:
+        workstream: C
+        model: claude-sonnet-5-5
+        # Thinking tokens count against max_tokens, so effort stays low: a
+        # model that thinks first can spend the cap before the verdicts start.
+        max_tokens: 4096
+        effort: low
+        # Source shown either side of a finding, and findings per request (about
+        # 75 answer tokens each; a bigger package is split across requests).
+        context_lines: 20
+        max_findings_per_request: 20
+        max_hint_names: 300
+        # Estimate: a prompt is sized at chars_per_token and priced at no less
+        # than assumed_input_tokens_per_request; output is priced at max_tokens.
+        chars_per_token: 3.0
+        assumed_input_tokens_per_request: 8000
+        # A batch expires 24 hours after creation; collect waits 25 hours.
+        poll_interval_s: 60
+        poll_timeout_s: 90000
+        source_root: src/mousedroid
+        batches_dir: reports/credit/batches
+        analysis_dir: docs/analysis
+        # File names the prompt builder refuses to read (fnmatch, case-insensitive).
+        refuse_globs:
+            - "*.env"
+            - "docker.env*"
+            - ".env*"

@@ -487,3 +487,189 @@ def test_repo_config_declares_the_credit_block() -> None:
     cfg = load_config(repo_root=repo_root)
     assert cfg.credit.caps_usd, "credit.caps_usd must be declared in .claude/workforce.yaml"
     assert all(cap > 0 for cap in cfg.credit.caps_usd.values())
+
+
+# ---------------------------------------------------------------------------
+# credit.prices + credit.batch_triage (F-059 WS-C: tools/dead_code_triage_batch.py)
+# ---------------------------------------------------------------------------
+
+
+def test_credit_prices_default_to_nothing_priced_and_no_discount(tmp_path: Path) -> None:
+    """No ``prices:`` block => no model can be estimated => no batch can be submitted.
+
+    The multiplier defaults to 1.0 (no discount assumed) so an estimate made from
+    defaults can only over-state the cost, never under-state it.
+    """
+    cfg = load_config(repo_root=tmp_path)
+    assert cfg.credit.prices.models == {}
+    assert cfg.credit.prices.batch_multiplier == 1.0
+
+
+def test_credit_prices_block_round_trips(tmp_path: Path) -> None:
+    _write_config(
+        tmp_path,
+        "credit:\n"
+        "    prices:\n"
+        "        batch_multiplier: 0.5\n"
+        "        models:\n"
+        "            claude-x-1:\n"
+        "                input_usd_per_mtok: 2\n"
+        "                output_usd_per_mtok: 10.5\n",
+    )
+    prices = load_config(repo_root=tmp_path).credit.prices
+    assert prices.batch_multiplier == 0.5
+    assert prices.models["claude-x-1"].input_usd_per_mtok == 2.0
+    assert prices.models["claude-x-1"].output_usd_per_mtok == 10.5
+
+
+def test_credit_prices_leave_caps_and_ledger_alone(tmp_path: Path) -> None:
+    _write_config(
+        tmp_path,
+        "credit:\n    caps_usd:\n        C: 15\n    prices:\n        batch_multiplier: 0.5\n",
+    )
+    credit = load_config(repo_root=tmp_path).credit
+    assert credit.caps_usd == {"C": 15.0}
+    assert credit.ledger == "reports/credit/ledger.jsonl"
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", ".nan", ".inf", "-.inf"])
+@pytest.mark.parametrize("field", ["input_usd_per_mtok", "output_usd_per_mtok"])
+def test_credit_price_must_be_finite_and_positive(tmp_path: Path, field: str, bad: str) -> None:
+    """A zero price would make every estimate zero and so bypass the cap."""
+    other = "output_usd_per_mtok" if field == "input_usd_per_mtok" else "input_usd_per_mtok"
+    _write_config(
+        tmp_path,
+        "credit:\n    prices:\n        models:\n            m:\n"
+        f"                {field}: {bad}\n"
+        f"                {other}: 1\n",
+    )
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+def test_credit_price_requires_both_directions(tmp_path: Path) -> None:
+    _write_config(
+        tmp_path,
+        "credit:\n    prices:\n        models:\n            m:\n"
+        "                input_usd_per_mtok: 1\n",
+    )
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(repo_root=tmp_path)
+    assert "output_usd_per_mtok" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("bad", ["0", "-0.5", "1.5", ".nan", ".inf"])
+def test_credit_batch_multiplier_must_be_a_fraction_of_the_standard_price(
+    tmp_path: Path, bad: str
+) -> None:
+    _write_config(tmp_path, f"credit:\n    prices:\n        batch_multiplier: {bad}\n")
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+def test_credit_batch_multiplier_of_one_is_allowed(tmp_path: Path) -> None:
+    _write_config(tmp_path, "credit:\n    prices:\n        batch_multiplier: 1\n")
+    assert load_config(repo_root=tmp_path).credit.prices.batch_multiplier == 1.0
+
+
+def test_credit_prices_unknown_key_is_rejected(tmp_path: Path) -> None:
+    _write_config(tmp_path, "credit:\n    prices:\n        batch_discount: 0.5\n")
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(repo_root=tmp_path)
+    assert "batch_discount" in str(excinfo.value)
+
+
+def test_credit_price_blank_model_name_is_rejected(tmp_path: Path) -> None:
+    _write_config(
+        tmp_path,
+        "credit:\n    prices:\n        models:\n            ' ':\n"
+        "                input_usd_per_mtok: 1\n                output_usd_per_mtok: 1\n",
+    )
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+def test_batch_triage_defaults(tmp_path: Path) -> None:
+    """Every knob has a default, so a workforce.yaml written before them still loads."""
+    triage = load_config(repo_root=tmp_path).credit.batch_triage
+    assert triage.workstream == "C"
+    assert triage.model == "claude-sonnet-5-5"
+    assert triage.max_tokens == 4096
+    assert triage.effort == "low"
+    assert triage.thinking is None
+    assert triage.source_root == "src/mousedroid"
+    assert triage.context_lines == 20
+    assert triage.max_findings_per_request == 20
+    assert triage.batches_dir == "reports/credit/batches"
+    assert triage.analysis_dir == "docs/analysis"
+    # The prompt builder must never read these, whatever else is configured.
+    assert "*.env" in triage.refuse_globs
+    assert "docker.env*" in triage.refuse_globs
+
+
+def test_batch_triage_partial_block_keeps_the_other_defaults(tmp_path: Path) -> None:
+    _write_config(tmp_path, "credit:\n    batch_triage:\n        context_lines: 5\n")
+    triage = load_config(repo_root=tmp_path).credit.batch_triage
+    assert triage.context_lines == 5
+    assert triage.max_tokens == 4096
+    assert triage.workstream == "C"
+
+
+def test_batch_triage_unknown_key_is_rejected(tmp_path: Path) -> None:
+    _write_config(tmp_path, "credit:\n    batch_triage:\n        max_token: 10\n")
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(repo_root=tmp_path)
+    assert "max_token" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("field", "bad"),
+    [
+        ("max_tokens", "0"),
+        ("context_lines", "-1"),
+        ("max_findings_per_request", "0"),
+        ("max_hint_names", "-1"),
+        ("assumed_input_tokens_per_request", "-1"),
+        ("chars_per_token", "0"),
+        ("chars_per_token", ".nan"),
+        ("poll_interval_s", "0"),
+        ("poll_interval_s", ".inf"),
+        ("poll_timeout_s", "-5"),
+        ("workstream", "' '"),
+        ("model", "' '"),
+        ("effort", "xhigh"),
+        ("thinking", "disabled"),
+    ],
+)
+def test_batch_triage_rejects_values_that_cannot_work(tmp_path: Path, field: str, bad: str) -> None:
+    _write_config(tmp_path, f"credit:\n    batch_triage:\n        {field}: {bad}\n")
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+@pytest.mark.parametrize("field", ["source_root", "batches_dir", "analysis_dir"])
+@pytest.mark.parametrize("path", ["/etc/x", "C:/x", "../outside", " "])
+def test_batch_triage_paths_must_stay_inside_the_repo(
+    tmp_path: Path, field: str, path: str
+) -> None:
+    _write_config(tmp_path, f"credit:\n    batch_triage:\n        {field}: '{path}'\n")
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+def test_batch_triage_refuse_globs_may_not_hold_a_blank_pattern(tmp_path: Path) -> None:
+    _write_config(tmp_path, "credit:\n    batch_triage:\n        refuse_globs: ['*.env', ' ']\n")
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+def test_repo_config_prices_the_model_the_triage_run_will_use() -> None:
+    """The checked-in config can estimate its own batch: the model is priced and C has a cap."""
+    repo_root = Path(__file__).resolve().parents[4]
+    credit = load_config(repo_root=repo_root).credit
+    triage = credit.batch_triage
+    assert triage.model in credit.prices.models, (
+        "credit.prices.models must price credit.batch_triage.model, or submit cannot estimate"
+    )
+    assert triage.workstream in credit.caps_usd
+    assert 0 < credit.prices.batch_multiplier <= 1
