@@ -41,6 +41,42 @@ so does `motor` behind `MOUSEDROID_SMOKE_ALLOW_MOTION=1`. `scripts/jetson_full_v
 motion off, so there `motor` SKIPs and `power` is the stage that measures the board; its failure is
 recorded as a non-blocking warning.
 
+### Fixed — the ESP32 port is opened exclusively, and the full smoke run stops sharing it
+
+`SerialESP32Driver` now opens the port with pyserial's `exclusive=True` (a POSIX `flock`; the module
+constant `_SERIAL_EXCLUSIVE`, deliberately not a config field), so two openers inside one container
+collide: the second fails fast with `Could not exclusively lock port` instead of splitting the board's
+frames with the first. The lock is advisory and per device node, so it does not cross the container
+boundary (the host and other containers get their own node for the device) and does not see a program
+that opens the port without locking. The `serial` smoke stage opens the same way and no longer records a
+PASS for a silent board (`serial open/write (no response ...)`): silence is a FAIL that names the
+`command_set` and baud it probed with.
+
+Because the lock cannot see across containers, `scripts/jetson_full_smoke_run.sh` gains
+`MOUSEDROID_SMOKE_ESP32_MODE`. `warm` (the default) runs `serial`, `motor`, `power` and
+`mcp_motor_smoke` in the running container and refuses them (`warm smoke refused`) when that
+container's orchestrator owns the port (`esp32.enabled`, not `mock_hardware`, serial protocol) or the
+wrapper cannot tell. `cold` first dry-runs the transient container, so a `docker.env` the calling user
+cannot read refuses the run with compose's own message while the orchestrator is still up, then stops
+the container, runs the stages in a `docker compose run` container under the same inner `timeout` as the
+warm wrapper, and restarts it with `docker restart`. An EXIT trap restarts it on any catchable exit
+(SIGKILL cannot be trapped), and the wrapper waits, bounded, for the container's healthcheck before
+`llm_probe`. `mcp_motor_smoke` stacks no bench overlay, so with `esp32.enabled: false` it measures
+`MockESP32Driver`: it opens no window of its own and its row says so. An ESP32 stage that only skipped
+(pyserial missing, bench overlay opted out) records SKIPPED, never PASS.
+
+The wrapper also forwards `MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION` into the container by name;
+before this the lever the runbook documents stopped at the host's `docker exec`. A warm stage runs with
+the variable removed when the host leaves it unset, so only an export opens the gate; a cold stage keeps
+the service's own value. A stale `=true` left exported in an operator's shell now takes effect, where it
+used to be inert. The runbook no longer says the bash gate zeroes velocity: the Pydantic gate does, and
+the bash gate decides whether `motor` runs.
+
+**Operator-visible:** on a rover whose container runs the ESP32, the default wrapper refuses the ESP32
+stages and `serial` (blocking) fails the run until you re-run with `MOUSEDROID_SMOKE_ESP32_MODE=cold`,
+which needs a readable `/etc/mousedroid/docker.env` or its dry run refuses. On a dead board `serial` now
+fails where it used to pass.
+
 ### Fixed — the nightly Spec Harness, red every night since 2026-09-08
 
 `validate-slow` runs `--strict-git`, which needs every `done` feature's `implemented_in` to resolve.
