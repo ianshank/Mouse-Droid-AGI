@@ -18,6 +18,11 @@ async def test_power_chain_within_budget(
 
     if jetson_settings.mock_hardware:
         pytest.skip("mock_hardware=true; power chain smoke requires real ESP32")
+    if not jetson_settings.esp32.enabled:
+        pytest.skip(
+            "esp32.enabled=false routes to MockESP32Driver; "
+            "stack config/jetson_bench_esp32.yaml to probe the board"
+        )
 
     driver = build_esp32_driver(jetson_settings)
     await driver.connect()

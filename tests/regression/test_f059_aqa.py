@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
@@ -71,3 +72,71 @@ def test_bench_overlay_leaves_the_motion_gate_closed() -> None:
     """Review focus 2: enabling the board never opens the Pydantic motion gate."""
     bench = load_settings(_PROD, _BENCH, config_dir=_CONFIG_DIR)
     assert bench.esp32.smoke_test_allow_motion is False
+
+
+def _bash_function(text: str, name: str) -> str:
+    """Body of the top-level shell function ``name``: its opening line to the first bare ``}``."""
+    lines = text.splitlines()
+    start = lines.index(f"{name}() {{")
+    return "\n".join(lines[start : lines.index("}", start)])
+
+
+def _hardware_functions(module: str) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
+    """Every function defined in ``tests/hardware/<module>``, keyed by name."""
+    src = (_REPO_ROOT / "tests" / "hardware" / module).read_text(encoding="utf-8")
+    return {
+        node.name: node
+        for node in ast.walk(ast.parse(src))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+
+def _code_names(fn: ast.AST) -> set[str]:
+    """Names and attributes the *code* under ``fn`` uses.
+
+    Docstrings, comments and message strings are never ``Name``/``Attribute`` nodes, so
+    prose that merely mentions a token cannot satisfy a pin on the code that must use it.
+    """
+    names: set[str] = set()
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Name):
+            names.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            names.add(node.attr)
+    return names
+
+
+def test_motor_stage_runs_the_loopback_module_and_greps_its_test_name() -> None:
+    """R-1 pin 1: the stage ↔ test pairing the gate depends on."""
+    text = (_REPO_ROOT / "scripts" / "jetson_smoke_test.sh").read_text(encoding="utf-8")
+    body = _bash_function(text, "test_motor")
+    # The assignment, not the bare path: the stage's own "not found" messages also name it.
+    assert 'test_file="${PROJECT_DIR}/tests/hardware/test_esp32_loopback.py"' in body
+    assert 'grep -q "test_send_velocity_moves_encoders PASSED"' in body
+    assert "esp32_stage_configs_csv" in body
+    # The power stage shares the overlay wiring; its behavioural test alone left it unpinned.
+    assert "esp32_stage_configs_csv" in _bash_function(text, "test_power")
+
+
+def test_loopback_motion_tests_branch_on_the_encoder_flag_and_the_motion_gate() -> None:
+    """R-1 + review focus 2: the encoder-less criterion is present and both motion
+    commands go through the Pydantic motion gate.
+    """
+    fns = _hardware_functions("test_esp32_loopback.py")
+    velocity = _code_names(fns["test_send_velocity_moves_encoders"])
+    estop = _code_names(fns["test_emergency_stop_latency"])
+    assert "chassis_has_wheel_encoders" in velocity
+    assert "imu_valid" in velocity
+    assert "_commanded_velocity" in velocity
+    assert "_commanded_velocity" in estop
+    assert "smoke_test_allow_motion" in _code_names(fns["_commanded_velocity"])
+
+
+def test_power_chain_test_skips_when_the_board_is_configured_off() -> None:
+    """R3-2: esp32.enabled=false routes the power stage to MockESP32Driver (a 12.0 V green).
+
+    The bench overlay turns it on, but an exported MOUSEDROID_ESP32__ENABLED=false beats
+    the overlay; the test must skip with the remedy rather than measure the mock.
+    """
+    fns = _hardware_functions("test_power_chain_smoke.py")
+    assert "enabled" in _code_names(fns["test_power_chain_within_budget"])

@@ -95,6 +95,20 @@ async def driver(settings: Settings, require_serial_device):
     await d.disconnect()
 
 
+def _commanded_velocity(settings: Settings, fraction: float) -> float:
+    """Second motion gate (CHARTER §3, F-059).
+
+    ``jetson_smoke_test.sh`` only reaches this module behind
+    ``MOUSEDROID_SMOKE_ALLOW_MOTION=1``; the Pydantic gate
+    ``esp32.smoke_test_allow_motion`` (default False) must ALSO be open before
+    a non-zero command leaves the host. With it closed the stage still proves
+    command acceptance, the T:1001 frame and e-stop latency — at zero velocity.
+    """
+    if not settings.esp32.smoke_test_allow_motion:
+        return 0.0
+    return settings.esp32.max_velocity_mps * fraction
+
+
 # ---------------------------------------------------------------------------
 # 1. Connection
 # ---------------------------------------------------------------------------
@@ -113,10 +127,24 @@ async def test_driver_connects(driver) -> None:
 
 @pytest.mark.timeout(10)
 async def test_send_velocity_moves_encoders(driver, settings: Settings) -> None:
-    """Sending a small forward velocity must produce measurable encoder feedback."""
-    # Use 20% of max velocity — small, safe nudge
+    """Forward velocity must produce feedback the chassis can actually give (F-059 R-1).
+
+    Encoder-bearing chassis: measured wheel velocity > 5 % of max (historical).
+    WAVE ROVER (``chassis_has_wheel_encoders=False``): stock firmware echoes the
+    commanded speed into L/R, so a velocity assertion measures nothing; the
+    criterion is a FEEDBACK_BASE_INFO (T:1001) frame after the command,
+    witnessed by ``EncoderReading.imu_valid`` — never set by the legacy codec.
+    No skip on this branch: a silent board FAILS. ``esp32.enabled=false`` is a
+    config decision (MockESP32Driver), not a measurement, so it skips with the remedy.
+    """
+    if not settings.esp32.enabled:
+        pytest.skip(
+            "esp32.enabled=false routes to MockESP32Driver; "
+            "stack config/jetson_bench_esp32.yaml to probe the board"
+        )
+    # 20% of max velocity — small, safe nudge (0.0 while the Pydantic motion gate is closed)
     max_vel = settings.esp32.max_velocity_mps
-    test_vel = max_vel * 0.2
+    test_vel = _commanded_velocity(settings, 0.2)
     feedback_tolerance = max_vel * 0.05
 
     await driver.send_velocity(test_vel, 0.0, 0.0)
@@ -126,12 +154,21 @@ async def test_send_velocity_moves_encoders(driver, settings: Settings) -> None:
     # Stop immediately after reading
     await driver.emergency_stop()
 
+    if not settings.esp32.chassis_has_wheel_encoders:
+        assert enc.imu_valid, (
+            f"no FEEDBACK_BASE_INFO frame after {test_vel:.2f} m/s on "
+            f"{settings.esp32.serial_port} (command_set={settings.esp32.command_set!r}); "
+            "the encoder-less criterion needs waveshare_stock and a live board"
+        )
+        return
+
     if (
         abs(enc.left_velocity_mps) <= feedback_tolerance
         and abs(enc.right_velocity_mps) <= feedback_tolerance
     ):
         pytest.skip(
-            "encoder loopback inactive; ensure rover power and motor/encoder wiring are present"
+            "encoder loopback inactive; "
+            "ensure rover power, motor/encoder wiring and both motion gates"
         )
 
     assert (
@@ -168,8 +205,7 @@ async def test_send_zero_velocity_stops_encoders(driver, settings: Settings) -> 
 @pytest.mark.timeout(10)
 async def test_emergency_stop_latency(driver, settings: Settings) -> None:
     """emergency_stop() must complete within cfg.esp32.command_timeout_s."""
-    max_vel = settings.esp32.max_velocity_mps
-    await driver.send_velocity(max_vel * 0.3, 0.0, 0.0)
+    await driver.send_velocity(_commanded_velocity(settings, 0.3), 0.0, 0.0)
     await asyncio.sleep(0.05)
 
     t0 = time.monotonic()
@@ -195,7 +231,11 @@ async def test_battery_voltage_non_negative(driver) -> None:
 
 
 async def test_battery_voltage_in_plausible_range(driver, settings: Settings) -> None:
-    """When connected, battery voltage should be above the critical threshold."""
+    """When connected, battery voltage should be above the critical threshold.
+
+    Asymmetry kept on purpose (R3-5): this module is the motion gate and passes on a
+    missing reading; ``test_power_chain_smoke.py`` is the telemetry gate and fails on it.
+    """
     v = await driver.get_battery_voltage()
     # When actually powered, voltage must be above critical threshold defined in config
     if v > 0.0:
