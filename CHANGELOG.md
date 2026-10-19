@@ -25,9 +25,13 @@ the tracked sentinels, all pinned by real `rsync -n --delete` fixture tests. The
 what actually runs the code: `mousedroid-docker` when that unit is enabled, then the bare-metal unit if
 that is enabled too, and it health-checks the container with `docker exec`. **The unit restart
 recreates the container** (the unit's `ExecStop` is `docker compose down`), so packages hot-installed into
-its writable layer are lost and a recreate has wedged the camera before;
-`MOUSEDROID_REMOTE_RESTART_MODE=container` (default `unit`) runs `docker restart` in place instead, which
-keeps the writable layer and skips the unit's `ExecStartPre` overlay sync and preflight, but also keeps
+its writable layer are lost and a recreate has wedged the camera before. `MOUSEDROID_REMOTE_RESTART_MODE`
+(default `unit`) follows one rule: where the unit is enabled it restarts the container, and the unit is
+attached to it (`docker compose up --abort-on-container-exit`, `Restart=on-failure`), so the script never
+restarts it any other way. On a rover with no unit, whose container runs under compose alone, `unit`
+mode leaves it running and says so, and `container` mode runs `docker restart` in place, keeping the
+writable layer; it refuses while the unit is active, before anything is synced, because an in-place
+restart would abort the unit and systemd would recreate the container ten seconds later, and it keeps
 the image the container was created from, so it is not for use after a rebuild. After a unit
 restart the health check waits up to `MOUSEDROID_REMOTE_HEALTH_WAIT_S` (30 s, wall-clock) for the
 container to be listed and warns, rather than skips, if it never is or the rover cannot be reached;

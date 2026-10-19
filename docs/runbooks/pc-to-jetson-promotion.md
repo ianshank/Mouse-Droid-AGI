@@ -27,6 +27,8 @@ and it defers everywhere else:
   same bench.
 - `ssh` to the rover works; `/etc/mousedroid/docker.env` exists, owner-only
   (`600`). **Presence-check secrets, never echo them.**
+- The SSH user is in the `docker` group: `deploy_remote.sh` runs `docker ps`, `docker exec` and
+  `docker restart` as that user, while `systemctl` goes through `sudo`.
 - **Disk:** `df -h /` + `docker system df -v`, **>= 8 GiB free**; reclaim with
   `scripts/jetson_disk_cleanup.sh`.
 - **Memory:** record `swapon --show` + `zramctl`. The container cap is 6 GiB of
@@ -58,19 +60,21 @@ bare-metal venv path and is not for this rover. An rsync leaves the rover's tree
 `HEAD` (`.git` is never synced), so the next run's WIP guard reports the checkout dirty and
 needs `--confirm-dirty`; prefer the git-fetch path below when the rover can reach `origin`.
 
-**The unit restart recreates the container.** `--code-only` restarts `mousedroid-docker`, whose
-`ExecStop` is `docker compose down`, so the container is removed and created again from the image:
-packages hot-installed into its writable layer are lost (reinstall them), and a recreate has wedged
-the camera before, needing a host reboot (2026-07-15). In return the unit's `ExecStartPre` re-syncs
-the overlay and runs the preflight, fail-closed, before the new tree runs. Set
-`MOUSEDROID_REMOTE_RESTART_MODE=container` for an in-place `docker restart` instead: the writable
-layer survives and `ExecStartPre` is skipped (the script has already run its safety-floor guard and
-goes on to run the health check). Pick it when the container must keep what was installed into it,
-or a recreate is a risk you cannot take; keep the default when you want the unit's preflight to gate
-the new tree. It stays on the image the container was created from, so after a `docker compose build`
-keep the default, which recreates the container from the new image. The unit supervises the
-container with `compose up --abort-on-container-exit`, so read
-the `mousedroid-docker:` state line the script prints after a `container` restart.
+**The rule: where the unit is enabled, the unit restarts the container.** `--code-only` restarts
+`mousedroid-docker`, whose `ExecStop` is `docker compose down`, so the container is removed and created
+again from the image: packages hot-installed into its writable layer are lost (reinstall them), and a
+recreate has wedged the camera before, needing a host reboot (2026-07-15). In return the unit's
+`ExecStartPre` re-syncs the overlay and runs the preflight, fail-closed, before the new tree runs. The
+unit is attached to the container (`docker compose up --abort-on-container-exit`,
+`Restart=on-failure`), so the script never restarts that container any other way: an in-place
+`docker restart` would abort the unit, and systemd would run it again ten seconds later through
+`docker compose down`, a recreate by detour. A rover with **no unit**, whose container runs under
+compose alone (`restart: unless-stopped`), is left running by the default mode, with a line saying so;
+`MOUSEDROID_REMOTE_RESTART_MODE=container` restarts it in place with `docker restart`, which keeps its
+writable layer. That mode **refuses** while the unit is active, before anything is synced. Neither mode
+swaps the image: `container` keeps the one the container was created from, so after a
+`docker compose build` recreate the container (the default mode where the unit exists, `docker compose up
+-d --force-recreate mousedroid` where it does not).
 
 With `--confirm-dirty` the guard (`scripts/rover_wip_guard.sh`, piped over
 `ssh` so it does not have to already be on the rover) does two things, in this
@@ -118,8 +122,8 @@ docker exec -w /opt/mousedroid mousedroid python3 -c "import mousedroid.main, mo
 
 sudo bash /opt/mousedroid/scripts/sync_jetson_overlay.sh    # the overlay, after the code
 
-# Then restart: the unit when it is enabled (that recreates the container; docker restart
-# mousedroid keeps its writable layer, see above), otherwise the container.
+# Then restart: the unit when it is enabled (that recreates the container, and nothing else may
+# restart it while the unit is active, see above), otherwise the container under compose.
 if systemctl is-enabled mousedroid-docker >/dev/null 2>&1; then
     sudo systemctl restart mousedroid-docker
 else
@@ -145,9 +149,10 @@ reverts behaviour.
 ## 3. Promote
 
 Sync (step 1): `deploy_remote.sh` restarts the Docker unit for you, which recreates the
-container from the current image (`MOUSEDROID_REMOTE_RESTART_MODE=container` restarts it in place,
-on the image it was created from, so not after a `docker compose build`). Without the unit, recreate
-it per `docs/runbooks/jetson-claude-pilot-deploy.md`. Nothing in the promotion path introduces a
+container from the current image (on a rover with no unit, `MOUSEDROID_REMOTE_RESTART_MODE=container`
+restarts it in place, on the image it was created from, so not after a `docker compose build`).
+Without the unit, recreate it per `docs/runbooks/jetson-claude-pilot-deploy.md`. Nothing in the
+promotion path introduces a
 release directory or a `current`/`previous` symlink: the editable
 install resolves through an absolute path, so replacing the mount root with a
 symlink farm breaks it, and would also change what `MOUSEDROID_INSTALL_DIR`
