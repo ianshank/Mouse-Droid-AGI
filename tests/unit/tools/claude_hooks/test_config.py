@@ -403,3 +403,87 @@ def test_ratchet_budgets_unknown_key_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(ConfigError) as excinfo:
         load_config(repo_root=tmp_path)
     assert "max_items" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# credit (F-059: spend caps + ledger location for tools/credit_ledger.py)
+# ---------------------------------------------------------------------------
+
+
+def test_credit_defaults_fail_closed_with_no_caps(tmp_path: Path) -> None:
+    """No ``credit:`` block => no workstream has a cap => nothing may spend."""
+    cfg = load_config(repo_root=tmp_path)
+    assert cfg.credit.caps_usd == {}
+    assert cfg.credit.ledger == "reports/credit/ledger.jsonl"
+
+
+def test_credit_block_round_trips(tmp_path: Path) -> None:
+    _write_config(
+        tmp_path,
+        "credit:\n"
+        "    caps_usd:\n"
+        "        A: 10\n"
+        "        B: 60.5\n"
+        "    ledger: reports/x/spend.jsonl\n",
+    )
+    cfg = load_config(repo_root=tmp_path)
+    assert cfg.credit.caps_usd == {"A": 10.0, "B": 60.5}
+    assert cfg.credit.ledger == "reports/x/spend.jsonl"
+
+
+def test_credit_partial_block_keeps_the_default_ledger_path(tmp_path: Path) -> None:
+    _write_config(tmp_path, "credit:\n    caps_usd:\n        A: 1\n")
+    assert load_config(repo_root=tmp_path).credit.ledger == "reports/credit/ledger.jsonl"
+
+
+def test_credit_does_not_disturb_other_sections(tmp_path: Path) -> None:
+    _write_config(tmp_path, "credit:\n    caps_usd:\n        A: 1\n")
+    cfg = load_config(repo_root=tmp_path)
+    assert cfg.freeze.feature_key == "F-008"
+    assert cfg.coverage.tools_line_min == 85
+
+
+def test_credit_unknown_key_is_rejected(tmp_path: Path) -> None:
+    _write_config(tmp_path, "credit:\n    cap_usd:\n        A: 1\n")
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(repo_root=tmp_path)
+    assert "cap_usd" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("cap", ["-1", ".nan", ".inf", "-.inf"])
+def test_credit_cap_must_be_a_finite_non_negative_number(tmp_path: Path, cap: str) -> None:
+    _write_config(tmp_path, f"credit:\n    caps_usd:\n        A: {cap}\n")
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+def test_credit_zero_cap_is_allowed_and_disables_a_workstream(tmp_path: Path) -> None:
+    _write_config(tmp_path, "credit:\n    caps_usd:\n        A: 0\n")
+    assert load_config(repo_root=tmp_path).credit.caps_usd == {"A": 0.0}
+
+
+def test_credit_blank_workstream_name_is_rejected(tmp_path: Path) -> None:
+    _write_config(tmp_path, "credit:\n    caps_usd:\n        ' ': 5\n")
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+@pytest.mark.parametrize("ledger", ["/etc/ledger.jsonl", "C:/ledger.jsonl", "../outside.jsonl"])
+def test_credit_ledger_path_must_stay_inside_the_repo(tmp_path: Path, ledger: str) -> None:
+    _write_config(tmp_path, f"credit:\n    ledger: '{ledger}'\n")
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+def test_credit_blank_ledger_path_is_rejected(tmp_path: Path) -> None:
+    _write_config(tmp_path, "credit:\n    ledger: ' '\n")
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+def test_repo_config_declares_the_credit_block() -> None:
+    """The checked-in workforce.yaml carries caps, so the ledger can refuse overspend."""
+    repo_root = Path(__file__).resolve().parents[4]
+    cfg = load_config(repo_root=repo_root)
+    assert cfg.credit.caps_usd, "credit.caps_usd must be declared in .claude/workforce.yaml"
+    assert all(cap > 0 for cap in cfg.credit.caps_usd.values())
