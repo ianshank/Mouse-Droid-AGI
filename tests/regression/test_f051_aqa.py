@@ -288,11 +288,17 @@ def test_the_deploy_record_carries_the_model_digest_and_provider_fields() -> Non
 
 
 def test_no_parallel_deploy_manifest_was_introduced() -> None:
-    """``deployments/<platform>-image.json`` is the extension point; a second
-    manifest format is what the spec forbids."""
+    """``deployments/`` holds one record per platform artifact and nothing else.
+
+    ``jetson-image.json`` pins the container image and ``esp32-firmware.json``
+    pins the stock ESP32 image set. A second manifest *format* is what the spec
+    forbids, and a third file would be one. ``check_config_compat.py``,
+    ``repin_tags.sh`` and ``archive_stale_branches.sh`` read ``jetson-image.json``
+    by name, so the ESP32 record is invisible to them.
+    """
     manifests = sorted(p.name for p in (_REPO_ROOT / "deployments").glob("*"))
-    assert manifests == ["jetson-image.json"], (
-        f"deployments/ must hold only the per-platform image records; got {manifests}"
+    assert manifests == ["esp32-firmware.json", "jetson-image.json"], (
+        f"deployments/ must hold only the per-platform records; got {manifests}"
     )
 
 

@@ -1,0 +1,19 @@
+{
+  "platform": "esp32",
+  "board": "Waveshare General Driver for Robots (WAVE ROVER), ESP32, 4 MB flash (flash id 0x164020)",
+  "image": "General_Driver.ino (ugv_base_general factory build, flashed by the factory 2024-07..2025-06)",
+  "source": "E:\\WAVE_ROVER_FACTORY-25*\\flash_download_tool_3.9.5\\bin — factory flashing-station snapshot, 1283 PASS logs 2023-07..2025-06",
+  "recorded_at": "2026-10-16T00:00:00Z",
+  "connect_baud": 115200,
+  "esptool": {"before": "default_reset", "after": "no_reset", "compress": true, "flash_size": "keep", "flash_mode": "keep", "flash_freq": "keep", "verify": true},
+  "parts": [
+    {"name": "bootloader", "file": "General_Driver.ino.bootloader.bin", "offset": "0x1000",  "size": 18992,  "sha256": "644de0067047e22380034b8989c39e5d2882f7538c698788866ca5130427322e"},
+    {"name": "partitions", "file": "General_Driver.ino.partitions.bin", "offset": "0x8000",  "size": 3072,   "sha256": "148b959cbff1c38aa8e1d5c0ba9d612c54997b945e56a63f41223eef650653a1"},
+    {"name": "boot_app0",  "file": "boot_app0.bin",                     "offset": "0xE000",  "size": 8192,   "sha256": "f94c5d786a7a8fab06ac5d10e33bf37711a6697636dc037559ea19cc410a17f0"},
+    {"name": "app",        "file": "General_Driver.ino.bin",            "offset": "0x10000", "size": 986928, "sha256": "ebedf216d23402381a16f44373721c8f2d90dfe6ef020cb1f33f73c8f95ee4a4"}
+  ],
+  "alternates": [{"name": "app", "file": "WAVE_ROVER_V0.9.ino.bin", "size": 986768, "sha256": "80db6e52137590ec70bbb075d2de2a67f7ac3d32ffa42667a6649cfcc02fbb29", "note": "older ugv_base_general build (2024-03..05); same dialect; not the default"}],
+  "never_flash": ["combine/target.bin (896192 B, unidentified)"],
+  "post_flash_config": {"T": 900, "main": 2, "module": 2},
+  "notes": "Stage the four files under firmware/ (gitignored *.bin) with exactly these names; the sha256 is authoritative, the name is a convenience. Dialect: WaveshareStockCodec — {\"T\":13,\"X\",\"Z\"} velocity, {\"T\":130}->{\"T\":1001,...} poll, {\"T\":136,\"cmd\":ms} heartbeat."
+}

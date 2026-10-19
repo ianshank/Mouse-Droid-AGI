@@ -286,8 +286,8 @@ cp scripts/mousedroid.service /etc/systemd/system/ && systemctl enable --now mou
 **No firmware flash is required.** The ESP32 runs stock Waveshare
 `General_Driver` firmware and the host speaks its command set directly
 (`esp32.command_set: waveshare_stock`). This repo ships no ESP32 firmware —
-`scripts/flash_esp32.sh` is a bring-your-own-binary helper, not a build step,
-and flashing is only relevant if you deliberately replace the vendor firmware.
+`scripts/flash_esp32.sh` is a hash-pinned stock re-flash helper (`deployments/esp32-firmware.json`),
+not a build step, and flashing is only relevant to repair a board whose stock firmware is damaged.
 See [`docs/architecture/c4-esp32-command-set.md`](docs/architecture/c4-esp32-command-set.md).
 
 Full bring-up (probe-first ESP32, systemd/Docker service, watchdog): [`docs/deployment.md`](docs/deployment.md), [`docs/runbooks/jetson-full-bringup.md`](docs/runbooks/jetson-full-bringup.md), and 19-step deployment runbook: [`docs/planning/JETSON_DEPLOY_RUNBOOK.md`](docs/planning/JETSON_DEPLOY_RUNBOOK.md).
