@@ -4,9 +4,10 @@ These helpers keep Jetson smoke tests and verification scripts aligned with
 the same config overlays and factory-backed drivers used by the application.
 
 This package is split by hardware domain (camera, Hailo accelerator, PCIe
-SSD, audio, LiDAR, plus shared config/logging plumbing) but re-exports every
-symbol that used to live in the flat ``runtime.py`` module from this
-``__init__``, so ``from mousedroid.validation.runtime import X`` and
+SSD, audio, LiDAR, ESP32 liveness probe, plus shared config/logging
+plumbing) but re-exports every symbol that used to live in the flat
+``runtime.py`` module from this ``__init__``, so
+``from mousedroid.validation.runtime import X`` and
 ``from mousedroid.validation import runtime; runtime.X`` keep working
 identically for every existing caller.
 """
@@ -40,6 +41,7 @@ from ._camera import (
     camera_unavailable_reason,
     capture_camera_frame,
 )
+from ._esp32 import Esp32ProbeResult, collect_esp32_probe
 from ._hailo import HailoDiagnostics, _discover_hef_role_fields, verify_hailo_accelerator
 from ._lidar import (
     LidarScanDiagnostics,
@@ -77,6 +79,7 @@ __all__ = [
     "Awaitable",
     "Callable",
     "CameraFrameDiagnostics",
+    "Esp32ProbeResult",
     "HailoDiagnostics",
     "LidarScanDiagnostics",
     "NDArray",
@@ -102,6 +105,7 @@ __all__ = [
     "capture_camera_frame",
     "capture_microphone_chunk",
     "cast",
+    "collect_esp32_probe",
     "collect_lidar_diagnostics",
     "dataclass",
     "field",
