@@ -1,8 +1,8 @@
 """F-059 WS-C: Batch-API triage of the vulture dead-code findings.
 
 ``scripts/dead_code_audit.py`` lists what ``vulture`` could not find a caller for
-(447+ findings at the 60 % floor). In a Protocol- and DI-heavy codebase most of
-them are alive: a method called through a ``@runtime_checkable`` Protocol, a
+(433 findings at the 60 % floor on 2026-10-19). In a Protocol- and DI-heavy codebase
+most of them are alive: a method called through a ``@runtime_checkable`` Protocol, a
 pydantic validator, a factory hook. This tool sorts them into ``keep`` /
 ``delete`` / ``verify`` with the Message Batches API (half price, asynchronous),
 one request per package, and writes the result as a ranked Markdown document. It
@@ -10,8 +10,10 @@ one request per package, and writes the result as a ranked Markdown document. It
 candidate for a human and for a later PR that proves its regression pin fails
 without the symbol (``prove-pin-fails``).
 
-Operator procedure (the key is read from the environment by the SDK, never from
-a flag; rotate it first, see NEXT_STEPS)::
+Operator procedure. It needs the SDK extra (``pip install -e ".[anthropic]"``) and
+``ANTHROPIC_API_KEY`` exported in the shell: the SDK reads the key from the
+environment and there is deliberately no flag for it. Rotate the key first (see
+NEXT_STEPS), then run from the repository root::
 
     python scripts/dead_code_audit.py                       # -> reports/dead_code/<date>.json
     python -m tools.dead_code_triage_batch submit --dry-run \\
@@ -34,11 +36,11 @@ What leaves the machine: for each finding, its symbol name, location and about
 of the package's Protocol members and pydantic validators. A file name matching
 ``credit.batch_triage.refuse_globs`` (``*.env``, ``docker.env*``, ...), a path
 outside the repository or not ``.py``, and any excerpt that looks like a
-credential are refused before a request is built. This is the same stance as
-``RegexInjectionFilter``'s: the model reads the repository, so it must never be
-handed a secret. It is not that filter, which guards natural-language mission text
-on its way to the rover: nothing here actuates anything, and a model reply can at
-worst put a wrong paragraph in an advisory document that a human reads.
+credential are refused before a request is built, because a model that reads the
+repository must never be handed a secret. This is not ``RegexInjectionFilter``, which
+guards natural-language mission text on its way to the rover (CHARTER section 3):
+nothing here actuates anything, and a model reply can at worst put a wrong paragraph
+in an advisory document that a human reads.
 """
 
 from __future__ import annotations
