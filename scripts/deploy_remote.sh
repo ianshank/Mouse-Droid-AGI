@@ -4,6 +4,7 @@
 #
 # Usage: bash scripts/deploy_remote.sh [jetson-host] [--full|--code-only|--config-only]
 #                                     [--confirm-dirty]
+#        bash scripts/deploy_remote.sh --print-rsync-args
 #
 # Host resolution order:
 #   1. First positional argument
@@ -47,6 +48,23 @@ REMOTE_CONFIG="${MOUSEDROID_CONFIG_DIR:-/etc/mousedroid}"
 # unit's ExecStart by tests/unit/scripts/test_deploy_remote_guard.py.
 REMOTE_INSTALL_DIR=/opt/mousedroid
 REMOTE_VENV="${REMOTE_INSTALL_DIR}/venv"
+
+# F-059 (R-2/R3-3/R3-4): `rsync --delete` must never remove rover runtime state.
+# The explicit list is the fence. `:- .gitignore` alone protects nothing on a first
+# deploy (the rover has no .gitignore yet) and afterwards only what the rover's
+# copy of it names; it also drops `!` negations, so a tracked
+# reports/endurance/.gitkeep is NOT shipped -- accepted, pinned in
+# tests/unit/scripts/test_deploy_remote_guard.py. Until the retarget (2.4b) lands,
+# do not run this against the rover with default paths (R3-3).
+RSYNC_PROTECT_ARGS=(
+    --filter=':- .gitignore'
+    --exclude '.git' --exclude '__pycache__' --exclude '.venv' --exclude '*.egg-info'
+    --exclude 'node_modules' --exclude '.mypy_cache' --exclude '.pytest_cache'
+    --exclude '.ruff_cache' --exclude '.claude'
+    --exclude 'venv/' --exclude 'weights/' --exclude 'models/' --exclude 'logs/'
+    --exclude 'reports/' --exclude 'estop_latch/' --exclude 'tensorrt_cache/'
+)
+
 DEPLOY_MODE="code-only"
 HOST=""
 WIP_GUARD="${SCRIPT_DIR}/rover_wip_guard.sh"
@@ -191,6 +209,13 @@ parse_args() {
                 CONFIRM_DIRTY=true
                 shift
                 ;;
+            --print-rsync-args)
+                # One argument per line, so a test or an operator can read the exact
+                # fence with no host and no network. Handled here, ahead of host
+                # resolution, which is why it works on a machine that cannot reach a rover.
+                printf '%s\n' "${RSYNC_PROTECT_ARGS[@]}"
+                exit 0
+                ;;
             --help|-h)
                 echo "Usage: bash scripts/deploy_remote.sh [jetson-host] [--full|--code-only|--config-only]"
                 echo "                                    [--confirm-dirty]"
@@ -204,6 +229,10 @@ parse_args() {
                 echo "  A dirty sync target is REFUSED (rsync --delete would destroy it)."
                 echo "  --confirm-dirty  Archive the rover's uncommitted work off-device and"
                 echo "                   commit it to rover/wip-<date>, then sync."
+                echo ""
+                echo "Inspection:"
+                echo "  --print-rsync-args  Print the rsync fence (what --delete is kept off), one"
+                echo "                      argument per line, and exit. Needs no host."
                 exit 0
                 ;;
             -*)
@@ -342,15 +371,7 @@ rsync_code() {
 
     log_step "Rsyncing ${PROJECT_DIR} -> ${REMOTE_USER}@${HOST}:${REMOTE_SRC}/"
     rsync -avz --delete \
-        --exclude '.git' \
-        --exclude '__pycache__' \
-        --exclude '.venv' \
-        --exclude '*.egg-info' \
-        --exclude 'node_modules' \
-        --exclude '.mypy_cache' \
-        --exclude '.pytest_cache' \
-        --exclude '.ruff_cache' \
-        --exclude '.claude' \
+        "${RSYNC_PROTECT_ARGS[@]}" \
         "${PROJECT_DIR}/" "${REMOTE_USER}@${HOST}:${REMOTE_SRC_Q}/"
     log_step "Rsync complete"
 }

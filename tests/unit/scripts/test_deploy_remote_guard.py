@@ -1,7 +1,7 @@
 """Unit: the rover-WIP guard that stands in front of ``rsync -avz --delete``.
 
 There is no shellcheck gate in CI, so shell safety is covered here instead —
-with a REAL fixture, not string assertions about the script's source. Two
+with a REAL fixture, not string assertions about the script's source. Three
 layers:
 
 1. ``scripts/rover_wip_guard.sh`` driven directly against throwaway git
@@ -11,6 +11,10 @@ layers:
    shims on ``PATH``, so the wiring — refuse, or preserve *then* sync — is
    proven by whether the rsync shim was ever invoked. No rover, no SSH, no
    network, no Docker.
+3. The rsync fence (``RSYNC_PROTECT_ARGS``): the args ``--print-rsync-args``
+   emits, fed to REAL ``rsync -n --delete`` between two throwaway trees, so what
+   the sync would delete is observed rather than inferred from the script's text.
+   Skipped where rsync is absent.
 
 Unit tier per ``.claude/skills/test-tier-mirror/SKILL.md``: two scripts in
 isolation against a throwaway checkout, no application code and no factory.
@@ -794,3 +798,165 @@ def test_no_remote_command_string_interpolates_a_raw_validated_path() -> None:
     assert offenders == [], (
         f"a remote command interpolates a raw validated path; use the _Q form: {offenders}"
     )
+
+
+# ---------------------------------------------------------------------------
+# The rsync fence: --delete never reaches rover runtime state (F-059 R-2)
+# ---------------------------------------------------------------------------
+# `rsync -avz --delete` removes everything under the destination that the source
+# lacks. The rover keeps state there that no checkout carries -- the venv, model
+# weights, logs, smoke and endurance reports, the e-stop latch, the TensorRT
+# engine cache -- so every deploy would wipe it unless a filter protects it.
+#
+# These cases run REAL rsync in dry-run mode between two throwaway trees, so they
+# fail on what rsync would actually delete rather than on how the script is
+# spelt. The args under test are the script's own (`--print-rsync-args`), and one
+# more case proves the real sync passes that very list: one definition, not two
+# that can drift apart.
+#
+# The destination here has no `.gitignore` of its own -- a dry run transfers
+# none, and a first deploy has none -- which leaves the explicit list as the only
+# thing protecting the rover. That is the layer worth pinning.
+
+_rsync_required = pytest.mark.skipif(
+    shutil.which("rsync") is None,
+    reason="real rsync needed; ubuntu-latest ships it",
+)
+
+# Top-level directories on the rover that hold state, not source.
+_RUNTIME_ROOTS = (
+    "venv",
+    "weights",
+    "models",
+    "logs",
+    "reports",
+    "estop_latch",
+    "tensorrt_cache",
+)
+
+
+def _rsync_args() -> list[str]:
+    """The fence exactly as the script defines it: one argument per output line."""
+    result = subprocess.run(
+        ["bash", str(_DEPLOY), "--print-rsync-args"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    return [line for line in result.stdout.splitlines() if line]
+
+
+@pytest.fixture
+def pc_checkout(tmp_path: Path) -> Path:
+    """The PC side of the sync: a git checkout whose ``.gitignore`` names every
+    runtime root, including one negated entry (``reports/endurance/.gitkeep``)."""
+    src = tmp_path / "pc-checkout"
+    for rel in ("src/mousedroid", "scripts", "reports/endurance"):
+        (src / rel).mkdir(parents=True)
+    _git(tmp_path, "init", "-q", "-b", "main", str(src))
+    ignored = (
+        "venv/",
+        "weights/",
+        "models/",
+        "logs/",
+        "reports/endurance/*",
+        "!reports/endurance/.gitkeep",
+        "estop_latch/",
+        "tensorrt_cache/",
+        "__pycache__/",
+    )
+    (src / ".gitignore").write_text("\n".join(ignored) + "\n", encoding="utf-8")
+    for rel, body in (
+        ("src/mousedroid/__init__.py", ""),
+        ("src/mousedroid/main.py", "print('v2')\n"),
+        ("scripts/run.sh", "#!/bin/bash\n"),
+        ("README.md", "rover\n"),
+        ("reports/endurance/.gitkeep", ""),
+    ):
+        (src / rel).write_text(body, encoding="utf-8")
+    _git(src, "add", "-A")
+    _git(src, "commit", "-qm", "baseline")
+    return src
+
+
+@pytest.fixture
+def rover_tree(tmp_path: Path) -> Path:
+    """The rover side: state under every runtime root, plus one source file the PC
+    no longer has -- the one thing ``--delete`` is *supposed* to remove."""
+    rover = tmp_path / "rover-tree"
+    for rel in (
+        "venv/bin/python",
+        "weights/bdi/policy.onnx",
+        "models/Phi-3-mini.gguf",
+        "logs/mousedroid.log",
+        "reports/jetson_smoke/2026-10-16/run.json",
+        "estop_latch/latched.json",
+        "tensorrt_cache/engine.plan",
+        "src/mousedroid/removed_module.py",
+    ):
+        (rover / rel).parent.mkdir(parents=True, exist_ok=True)
+        (rover / rel).write_text("rover-only\n", encoding="utf-8")
+    return rover
+
+
+def _dry_run(src: Path, rover: Path) -> tuple[set[str], set[str]]:
+    """What real rsync WOULD delete from ``rover`` and WOULD transfer to it."""
+    args = _rsync_args()
+    assert "--filter=:- .gitignore" in args
+    result = subprocess.run(
+        ["rsync", "-n", "-a", "--delete", "--itemize-changes", *args, f"{src}/", f"{rover}/"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    deleting = {line.split(None, 1)[1] for line in lines if line.startswith("*deleting")}
+    transferred = {line.split(None, 1)[1] for line in lines if line.startswith(">f")}
+    return deleting, transferred
+
+
+@_rsync_required
+def test_delete_never_touches_runtime_state(pc_checkout: Path, rover_tree: Path) -> None:
+    """Pin 2 (R-2): the fence protects every runtime root on the rover."""
+    deleting, _ = _dry_run(pc_checkout, rover_tree)
+    assert "src/mousedroid/removed_module.py" in deleting, "premise: --delete is still live"
+    at_risk = sorted(p for p in deleting if p.split("/")[0] in _RUNTIME_ROOTS)
+    assert not at_risk, f"--delete would remove rover runtime state: {at_risk}"
+
+
+@_rsync_required
+def test_every_tracked_file_outside_the_fenced_roots_is_transferred(
+    pc_checkout: Path, rover_tree: Path
+) -> None:
+    """R3-4: the positive direction -- and the accepted loss of negated .gitignore entries.
+
+    A fence that over-protects would "pass" the deletion case above while quietly
+    shipping nothing, so every tracked file outside the fenced roots must still go.
+    ``reports/endurance/.gitkeep`` is the accepted casualty: the ``-`` merge drops
+    ``.gitignore``'s ``!`` negations, and ``reports/`` is fenced whole in any case.
+    """
+    _, transferred = _dry_run(pc_checkout, rover_tree)
+    tracked = set(_git(pc_checkout, "ls-files").splitlines())
+    expected = {p for p in tracked if p.split("/")[0] not in _RUNTIME_ROOTS}
+    assert "src/mousedroid/main.py" in expected
+    assert expected <= transferred, sorted(expected - transferred)
+    assert "reports/endurance/.gitkeep" in tracked
+    assert "reports/endurance/.gitkeep" not in transferred
+
+
+def test_the_shim_recorded_the_same_rsync_args_the_script_prints(
+    deploy_env: dict[str, str],
+) -> None:
+    """One definition: the args the real sync passes are the ones --print-rsync-args shows."""
+    assert _run_deploy(deploy_env, "--code-only").returncode == 0
+    recorded = Path(deploy_env["RSYNC_MARKER"]).read_text(encoding="utf-8").splitlines()
+    printed = _rsync_args()
+    assert printed, "premise: --print-rsync-args printed the fence"
+    assert set(printed) <= set(recorded)
+    assert "--delete" in recorded
+    # Order matters to rsync (first matching rule wins), so the printed list must reach
+    # the sync as one contiguous, in-order block -- not merely as a subset of it.
+    start = recorded.index(printed[0])
+    assert recorded[start : start + len(printed)] == printed
