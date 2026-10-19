@@ -113,16 +113,21 @@ def _code_names(fn: ast.AST) -> set[str]:
 
 
 def _skips_when_the_board_is_configured_off(fn: ast.AST) -> bool:
-    """Whether ``fn`` holds an ``if`` on ``<...>.enabled`` whose body calls ``pytest.skip``.
+    """Whether ``fn`` holds ``if not <...>.enabled:`` whose body calls ``pytest.skip``.
 
     Prose cannot satisfy it: a docstring, a message or an unrelated branch that merely mentions
-    the setting is not an ``If`` node reading the attribute and skipping from its body.
+    the setting is not an ``If`` node negating the attribute and skipping from its body. The
+    ``not`` is pinned too: ``if <...>.enabled: pytest.skip(...)`` skips a live board and runs
+    the test on the mock whenever the board is configured off.
     """
     for node in ast.walk(fn):
         if not isinstance(node, ast.If):
             continue
-        reads_enabled = any(
-            isinstance(sub, ast.Attribute) and sub.attr == "enabled" for sub in ast.walk(node.test)
+        negates_enabled = (
+            isinstance(node.test, ast.UnaryOp)
+            and isinstance(node.test.op, ast.Not)
+            and isinstance(node.test.operand, ast.Attribute)
+            and node.test.operand.attr == "enabled"
         )
         skips = any(
             isinstance(call, ast.Call)
@@ -133,7 +138,7 @@ def _skips_when_the_board_is_configured_off(fn: ast.AST) -> bool:
             for stmt in node.body
             for call in ast.walk(stmt)
         )
-        if reads_enabled and skips:
+        if negates_enabled and skips:
             return True
     return False
 
