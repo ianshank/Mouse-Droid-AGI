@@ -106,11 +106,16 @@ and a rounded-to-zero window is the firmware's "disable failsafe" value — whic
 would have disarmed the failsafe while still logging `esp32_heartbeat_armed`.
 
 **Baud coupling defers to the operator.** Selecting stock derives 115 200 only
-while `serial_baud` still holds the schema default. Both shipped overlays pin
-the legacy 1 Mbaud explicitly, so keying on `model_fields_set` alone made the
-derivation dead on every real deployment — the exact misdiagnosis (stock
-firmware at 1 Mbaud reads as line noise, i.e. "the board is dead") that F-025
-exists to prevent. An explicit non-default pin still wins.
+while `serial_baud` still holds the schema default. When F-025 landed, both
+shipped overlays pinned the legacy 1 Mbaud explicitly, so keying on
+`model_fields_set` alone made the derivation dead on every real deployment —
+the exact misdiagnosis (stock firmware at 1 Mbaud reads as line noise, i.e.
+"the board is dead") that F-025 exists to prevent. That still holds for
+`default.yaml`. Since F-059, `config/jetson_production.yaml` ships
+`command_set: waveshare_stock` with `serial_baud: 115200` stated outright;
+`MOUSEDROID_ESP32__COMMAND_SET` stays the per-host override, and the lever for
+any config that does not declare the stock set. An explicit non-default pin
+still wins.
 
 ## Test surface
 

@@ -107,9 +107,14 @@ def test_command_set_settable_via_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """``MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock`` reaches the field.
 
     This is the documented CLAUDE.md path (``MOUSEDROID_`` prefix + ``__``
-    nested delimiter) and the ONLY sanctioned lever for the live rover
-    until ``deployments/jetson-image.json`` is re-pinned to a schema that
-    knows the field.
+    nested delimiter) and the per-host override.
+
+    REVERSAL (F-059 2.1): it is no longer the ONLY lever. Of the shipped
+    overlays only ``jetson_production.yaml`` (``_STOCK_OVERLAYS``) declares
+    ``command_set: waveshare_stock``, with its own 115200 baud; every other
+    one, ``default.yaml`` included, loads on the schema default ``legacy``.
+    The env var is how a config that does not declare the stock set opts in,
+    and how a host overrides one that does.
     """
     monkeypatch.setenv("MOUSEDROID_ESP32__COMMAND_SET", "waveshare_stock")
     cfg = Settings(mock_hardware=True)

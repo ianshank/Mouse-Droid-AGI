@@ -3,7 +3,8 @@
 Use this playbook when ESP32 motor commands time out, the serial link drops,
 or the resilient driver's circuit breaker stays `OPEN`. The ESP32 is the
 primary actuator path on the Jetson Orin Nano rover (Silicon Labs CP2102N
-USB-to-UART bridge at 1 Mbps).
+USB-to-UART bridge at 115 200 baud, the speed of the stock Waveshare
+`General_Driver` firmware that `config/jetson_production.yaml` selects).
 
 ## What This Covers
 
@@ -11,8 +12,8 @@ USB-to-UART bridge at 1 Mbps).
 - ESP32 serial command timeout / motor command not acknowledged
 - Resilient driver circuit breaker `OPEN` (cumulative failures exceeded
   `cfg.circuit_breaker.failure_threshold`)
-- Battery voltage reads stuck at 0.0 V (sensor not wired) — informational,
-  not a fault
+- Battery voltage reads 0.0 V (no valid `v` came back: a missing reading, not
+  a flat pack) — log-only at runtime, a FAIL in the power smoke gate
 - Emergency stop bypass: when `OPEN`, `emergency_stop()` MUST still flow
   through (safety-critical path, see
   [`src/mousedroid/resilience/resilient_driver.py`](../../src/mousedroid/resilience/resilient_driver.py))
@@ -72,9 +73,20 @@ USB-to-UART bridge at 1 Mbps).
    server's WebSocket and confirm the motors halt within
    `cfg.safety.max_loop_time_ms`. This call bypasses the circuit breaker
    per the safety contract — if it doesn't halt, escalate.
-5. **Battery readings 0.0 V**: this is expected on the dev kit (no battery
-   ADC wired). The production overlay disables thresholds with
-   `safety.battery_critical_v: 0.0`. Don't treat 0 V as a fault.
+5. **Battery readings 0.0 V**: on the production overlay this is a *missing
+   reading*, not a flat pack. Stock firmware reports bus voltage (`v`) in
+   `FEEDBACK_BASE_INFO`, so [`config/jetson_production.yaml`](../../config/jetson_production.yaml)
+   ships live thresholds since F-059 CF-1: `safety.battery_warn_v: 10.5` and
+   `safety.battery_critical_v: 9.5`. A frame without `v` reads 0.0 V, which the
+   1.0 V floor `safety.battery_implausible_below_v` screens as missing telemetry:
+   a `battery_reading_implausible` WARNING (once per episode), log-only, never
+   an emergency stop. The power smoke gate has no such floor and still FAILs on
+   that frame
+   ([`tests/hardware/test_power_chain_smoke.py`](../../tests/hardware/test_power_chain_smoke.py)),
+   on purpose. Chase a command-set/baud mismatch or a dead link (see the
+   [rover smoke triage](../runbooks/jetson-rover-smoke.md)), not the pack. Only
+   a plausible reading (1.0 V or more) below 9.5 V is a real `battery_critical`
+   emergency stop.
 
 ## Cross-Reference
 
