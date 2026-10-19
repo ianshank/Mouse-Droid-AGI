@@ -404,6 +404,13 @@ PYEOF
 # ---------------------------------------------------------------------------
 # 3. Serial
 # ---------------------------------------------------------------------------
+# A probe, not an open/write check. It opens the port exclusively, so a port another opener in the
+# same container holds (the orchestrator, when this runs by `docker exec`) FAILs with "Could not
+# exclusively lock port". The lock does not cross the container boundary: run directly on the host
+# this stage shares no device node with a containerised orchestrator, so stop the container first
+# (jetson_full_smoke_run.sh does that in cold mode). It also needs a reply to the command-set
+# probe: opening a port proves a device node, not a board, so silence is a FAIL too. The only way
+# to pass is a response.
 
 test_serial() {
     log_section "Serial Port Test"
@@ -459,7 +466,9 @@ if not isinstance(probe, dict):
     sys.exit(0)
 
 try:
-    ser = serial.Serial(str(serial_port), baud_rate, timeout=2)
+    # exclusive=True is the lock the driver takes: a port another opener holds FAILs here with
+    # "Could not exclusively lock port ..." instead of sharing the UART with it.
+    ser = serial.Serial(str(serial_port), baud_rate, timeout=2, exclusive=True)
     time.sleep(0.1)  # Allow port to stabilise
     cmd = json.dumps(probe) + "\n"
     ser.write(cmd.encode())
@@ -469,7 +478,11 @@ try:
     if response:
         print(f"PASS:Got response: {response}")
     else:
-        print("WARN:No response from ESP32 (timeout) -- device may not be running")
+        # A probe needs a reply: an open nobody answers proves a device node, not a board.
+        print(
+            "FAIL:No response from ESP32 (timeout) -- board off, firmware silent, or a "
+            f"command_set/baud mismatch (command_set={cfg.esp32.command_set}, baud={baud_rate})"
+        )
 except serial.SerialException as exc:
     print(f"FAIL:Serial error: {exc}")
 except Exception as exc:
@@ -484,10 +497,6 @@ PYEOF
         record_pass "serial send/receive"
     elif echo "${result}" | grep -q "^SKIP:"; then
         record_skip "serial send/receive" "pyserial not installed"
-    elif echo "${result}" | grep -q "^WARN:"; then
-        local msg
-        msg="$(echo "${result}" | grep "^WARN:" | sed 's/^WARN://')"
-        record_pass "serial open/write (no response: ${msg})"
     else
         local msg
         msg="$(echo "${result}" | grep "^FAIL:" | sed 's/^FAIL://')"

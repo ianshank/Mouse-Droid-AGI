@@ -272,3 +272,40 @@ def test_loopback_velocity_test_stops_the_board_in_a_finally_and_polls_within_th
     assert "_read_until_feedback_frame" in names, "the T:1001 witness is polled, not read once"
     poll = _code_names(fns["_read_until_feedback_frame"])
     assert {"read_encoders", "imu_valid"} <= poll, "the poll must read until imu_valid answers"
+
+
+def test_serial_driver_exclusive_open_is_a_constant_not_a_config_knob() -> None:
+    """Task 4.1: ``exclusive=`` is fed by a module constant, and no config field can turn it off.
+
+    Two openers on the ESP32 UART must collide loudly, so nothing reachable from YAML or an env
+    var may release the lock. The unit test pins the value the driver passes, through a mock; this
+    pins where that value comes from, which a literal ``exclusive=True`` or a new ESP32Config
+    field would change without failing it.
+    """
+    from mousedroid.config.schema import ESP32Config
+
+    path = _REPO_ROOT / "src" / "mousedroid" / "comms" / "serial_driver.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    constants = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "_SERIAL_EXCLUSIVE"
+    ]
+    assert len(constants) == 1, "serial_driver.py must define _SERIAL_EXCLUSIVE once"
+    assert ast.unparse(constants[0].annotation) == "Final[bool]"
+    assert isinstance(constants[0].value, ast.Constant)
+    assert constants[0].value.value is True
+    opens = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "Serial"
+    ]
+    assert len(opens) == 1, "the driver opens the port in exactly one place"
+    exclusive = {kw.arg: kw.value for kw in opens[0].keywords}.get("exclusive")
+    assert isinstance(exclusive, ast.Name), "exclusive= must be the constant, not a literal"
+    assert exclusive.id == "_SERIAL_EXCLUSIVE"
+    assert not [name for name in ESP32Config.model_fields if "exclusive" in name]

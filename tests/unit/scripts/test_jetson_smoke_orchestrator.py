@@ -23,6 +23,7 @@ and the test never touches /etc or /sys on the host. Hosts without
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -669,4 +670,117 @@ def test_motor_stage_names_the_cause_when_pytest_exits_nonzero(
     )
     expected = "FAIL: motor loopback smoke 1 test(s) failed" + (f": {detail}" if detail else "")
     assert f"  {expected}\n" in result.stdout, result.stdout
+    assert result.returncode == 1, result.stdout
+
+
+# ---------------------------------------------------------------------------
+# F-059 Task 4.1: the serial stage is an exclusive probe, not an open/write check
+# ---------------------------------------------------------------------------
+
+# Stand-in for pyserial, importable as ``serial`` ahead of the real one. It records every open
+# (so a test sees the keyword arguments the stage really passed) and models the one behaviour
+# the stage now depends on: with ``exclusive`` truthy and the port held, pyserial raises
+# ``SerialException(errno, "Could not exclusively lock port ...")`` from the constructor
+# (serialposix._reconfigure_port, flock(LOCK_EX | LOCK_NB)). SerialException is an IOError there.
+_FAKE_SERIAL = r"""
+import json
+import os
+
+
+class SerialException(IOError):
+    pass
+
+
+class Serial:
+    def __init__(self, port=None, baudrate=9600, timeout=None, exclusive=None, **kwargs):
+        record = {"port": port, "baudrate": baudrate, "timeout": timeout, "exclusive": exclusive}
+        with open(os.environ["FAKE_SERIAL_LOG"], "a", encoding="utf-8") as log:
+            log.write(json.dumps(record) + "\n")
+        if exclusive and os.environ.get("FAKE_SERIAL_HELD") == "1":
+            raise SerialException(
+                11,
+                f"Could not exclusively lock port {port}: "
+                "[Errno 11] Resource temporarily unavailable",
+            )
+
+    def write(self, data):
+        return len(data)
+
+    def flush(self):
+        pass
+
+    def readline(self):
+        return os.environ.get("FAKE_SERIAL_REPLY", "").encode()
+
+    def close(self):
+        pass
+"""
+
+
+def _run_serial_stage(
+    tmp_path: Path, *, reply: str, held: bool = False
+) -> tuple[subprocess.CompletedProcess[str], list[dict[str, object]]]:
+    """Run the real inline serial probe, under the test's own interpreter, against the fake port.
+
+    Returns the finished process and every ``serial.Serial(...)`` open the probe made.
+    """
+    package = tmp_path / "fake_pyserial" / "serial"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text(_FAKE_SERIAL, encoding="utf-8")
+    node = tmp_path / "ttyFAKE0"
+    node.write_text("", encoding="utf-8")  # the stage FAILs first if the device node is absent
+    opens_log = tmp_path / "serial_opens.jsonl"
+    result = _run_smoke(
+        "serial",
+        env_extra={
+            "MOUSEDROID_SMOKE_PYTHON": sys.executable,
+            "PYTHONPATH": str(tmp_path / "fake_pyserial"),
+            "MOUSEDROID_ESP32__SERIAL_PORT": str(node),
+            "FAKE_SERIAL_LOG": str(opens_log),
+            "FAKE_SERIAL_REPLY": reply,
+            "FAKE_SERIAL_HELD": "1" if held else "0",
+        },
+    )
+    lines = opens_log.read_text(encoding="utf-8").splitlines() if opens_log.exists() else []
+    return result, [json.loads(line) for line in lines]
+
+
+@_BASH_AVAILABLE
+def test_serial_stage_opens_the_port_exclusively_and_passes_on_a_reply(tmp_path: Path) -> None:
+    """A live board answers the probe: the stage passes, having opened the port exclusively."""
+    result, opens = _run_serial_stage(tmp_path, reply='{"T":1001}')
+    assert "PASS: serial send/receive" in result.stdout, result.stdout
+    assert [opened["exclusive"] for opened in opens] == [True], opens
+    assert result.returncode == 0, result.stdout
+
+
+@_BASH_AVAILABLE
+def test_serial_stage_fails_fast_when_another_opener_holds_the_port(tmp_path: Path) -> None:
+    """A port held elsewhere is a FAIL naming the lock, never a pass or a "no response".
+
+    Before the stage opened exclusively it shared the UART with whoever owned it, and the
+    outcome depended on who read a frame first.
+    """
+    result, _ = _run_serial_stage(tmp_path, reply='{"T":1001}', held=True)
+    assert "FAIL: serial send/receive" in result.stdout, result.stdout
+    assert "Could not exclusively lock port" in result.stdout, result.stdout
+    assert "PASS:" not in result.stdout, result.stdout
+    assert result.returncode == 1, result.stdout
+
+
+@_BASH_AVAILABLE
+def test_serial_stage_fails_on_silence(tmp_path: Path) -> None:
+    """REVERSAL: a board that opens but never answers used to PASS as "serial open/write".
+
+    The stage must be a probe: opening a port proves a device node, not a board. Silence is a
+    FAIL whose reason names what to check (command set and baud first).
+    """
+    result, opens = _run_serial_stage(tmp_path, reply="")
+    assert len(opens) == 1, opens
+    assert "FAIL: serial send/receive" in result.stdout, result.stdout
+    assert "No response from ESP32" in result.stdout, result.stdout
+    assert "command_set=" in result.stdout, result.stdout
+    assert "baud=" in result.stdout, result.stdout
+    assert "serial open/write" not in result.stdout, result.stdout
+    assert "PASS:" not in result.stdout, result.stdout
     assert result.returncode == 1, result.stdout
