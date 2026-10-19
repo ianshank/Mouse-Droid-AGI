@@ -28,11 +28,14 @@ recreates the container** (the unit's `ExecStop` is `docker compose down`), so p
 its writable layer are lost and a recreate has wedged the camera before. `MOUSEDROID_REMOTE_RESTART_MODE`
 (default `unit`) follows one rule: where the unit is enabled it restarts the container, and the unit is
 attached to it (`docker compose up --abort-on-container-exit`, `Restart=on-failure`), so the script never
-restarts it any other way. On a rover with no unit, whose container runs under compose alone, `unit`
-mode leaves it running and says so, and `container` mode runs `docker restart` in place, keeping the
-writable layer; it refuses while the unit is active, before anything is synced, because an in-place
-restart would abort the unit and systemd would recreate the container ten seconds later, and it keeps
-the image the container was created from, so it is not for use after a rebuild. After a unit
+restarts it any other way. On a rover with no unit enabled or running, whose container runs under
+compose alone, `unit` mode leaves it running and says so, and `container` mode runs `docker restart` in place, keeping the
+writable layer, only when no `mousedroid-docker` unit is enabled or running; it refuses otherwise (the unit
+enabled, or in any state but `inactive`, including `activating` while it waits to restart), before anything
+is synced, because an in-place restart would abort the unit or race its restart, and what compose then
+does to the container is unverified on hardware. It also skips the unit's fail-closed `ExecStartPre`
+preflight and keeps the image, compose config and `env_file` the container was created with, so it is not
+for use after a rebuild or a config change. After a unit
 restart the health check waits up to `MOUSEDROID_REMOTE_HEALTH_WAIT_S` (30 s, wall-clock) for the
 container to be listed and warns, rather than skips, if it never is or the rover cannot be reached;
 when the run restarted no unit it looks once. `--code-only` does not rebuild the image, and it no longer

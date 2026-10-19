@@ -37,23 +37,30 @@
 #                                     run from (default: /opt/mousedroid)
 #   MOUSEDROID_REMOTE_RESTART_MODE    How the Docker spine is restarted: unit (default) or
 #                                     container. The rule: where the mousedroid-docker unit is
-#                                     enabled, the unit restarts it; with no unit, container
-#                                     restarts it in place. unit runs systemctl restart
-#                                     mousedroid-docker, which RECREATES the container (the unit's
-#                                     ExecStop is docker compose down): anything hot-installed
-#                                     into its writable layer is lost, and the camera may need a
-#                                     host reboot after a recreate. Its ExecStartPre re-syncs the
-#                                     overlay and runs the preflight, fail-closed. A rover that
-#                                     runs the container under compose alone (no unit) is left
-#                                     running in unit mode, and the log says so. container runs
-#                                     docker restart in place, which keeps the writable layer, and
-#                                     is REFUSED while the unit is active: the unit is attached to
-#                                     the container (docker compose up --abort-on-container-exit,
-#                                     Restart=on-failure), so an in-place restart would abort it
-#                                     and systemd would recreate the container ten seconds later.
-#                                     container also stays on the image the container was created
-#                                     from, which only a recreate replaces: not after a docker
-#                                     compose build.
+#                                     enabled, the unit restarts it; container restarts it in
+#                                     place, only where no such unit is enabled or running. unit
+#                                     runs systemctl restart mousedroid-docker, which RECREATES
+#                                     the container (the unit's ExecStop is docker compose down):
+#                                     anything hot-installed into its writable layer is lost, and
+#                                     the camera may need a host reboot after a recreate. Its
+#                                     ExecStartPre re-syncs the overlay and runs the preflight,
+#                                     fail-closed. A rover that runs the container under compose
+#                                     alone is left running in unit mode, and the log says so.
+#                                     container runs docker restart in place, which keeps the
+#                                     writable layer, only when no mousedroid-docker unit is
+#                                     enabled or running. It is REFUSED while the unit is enabled
+#                                     or in any state but inactive (active, activating, failed
+#                                     ...): the unit is attached to the container (docker compose
+#                                     up --abort-on-container-exit, Restart=on-failure), so an
+#                                     in-place restart would abort it, the unit would fail and
+#                                     systemd would re-run it after RestartSec; whether that
+#                                     recreates the container depends on compose's reconciliation,
+#                                     unverified on hardware: never race it. Disable the unit, or
+#                                     use unit mode. container also skips the unit's fail-closed
+#                                     ExecStartPre preflight, and keeps what the container was
+#                                     created with (the image, the compose config, the env_file),
+#                                     none of which docker restart re-reads: not after a docker
+#                                     compose build or a config change.
 #   MOUSEDROID_REMOTE_HEALTH_WAIT_S   Seconds of wall-clock time to wait, polling once a second,
 #                                     for the container to be listed after THIS run restarted the
 #                                     Docker unit (default: 30; 0 probes once). Never listed is a
@@ -87,7 +94,8 @@ REMOTE_CONFIG="${MOUSEDROID_CONFIG_DIR:-/etc/mousedroid}"
 REMOTE_HEALTH_WAIT_S="${MOUSEDROID_REMOTE_HEALTH_WAIT_S:-30}"
 # How restart_service restarts the Docker spine: unit or container (validated below). unit
 # restarts mousedroid-docker where that unit is enabled, which RECREATES the container;
-# container restarts it in place, for a rover with no unit, and refuses while the unit is active.
+# container restarts it in place, only when no mousedroid-docker unit is enabled or running, and
+# refuses otherwise.
 REMOTE_RESTART_MODE="${MOUSEDROID_REMOTE_RESTART_MODE:-unit}"
 # The rover's install root, and the venv deploy_jetson.sh creates under it. One
 # constant instead of the literal repeated at each use. It is deliberately NOT a
@@ -145,6 +153,9 @@ SPINE_HANDLED=false
 # it: "" if it did not look (or restarted the container, so it must be looked at again), else
 # probe_container's status. run_health_check reuses it rather than asking the rover twice.
 CONTAINER_LOOK_RC=""
+# Set by read_unit_state: the Docker unit's ActiveState as systemd reports it ("inactive" for a unit
+# that does not exist), or "unknown" when systemd would not say.
+UNIT_STATE=""
 WIP_GUARD="${SCRIPT_DIR}/rover_wip_guard.sh"
 ARCHIVE_DIR="${MOUSEDROID_DEPLOY_ARCHIVE_DIR:-${HOME}/.mousedroid/rover-wip}"
 
@@ -329,11 +340,14 @@ parse_args() {
                 echo "                  need a host reboot. Its ExecStartPre syncs the overlay and runs the"
                 echo "                  preflight, fail-closed. A rover that runs the container under compose"
                 echo "                  alone (no unit) is left running, and the log says so."
-                echo "  container       docker restart in place, for that compose-only rover: keeps the"
-                echo "                  container's writable layer. REFUSED while the unit is active: it is"
-                echo "                  attached to the container, so an in-place restart would abort it and"
-                echo "                  systemd would recreate the container. It stays on the image the"
-                echo "                  container was created from, so not after a docker compose build."
+                echo "  container       docker restart in place, only when no mousedroid-docker unit is enabled or running"
+                echo "                  (a rover that runs its container under compose alone): keeps the container's"
+                echo "                  writable layer. Otherwise REFUSED: while the unit is enabled or in any state but"
+                echo "                  inactive (active, activating, failed ...) it is attached to the container, so an"
+                echo "                  in-place restart would abort it, and whether systemd's retry then recreates the"
+                echo "                  container is unverified: never race it. Disable the unit, or use unit mode. It"
+                echo "                  also skips the unit's preflight and keeps the image, compose config and env_file"
+                echo "                  the container was created with: not after a docker compose build or a config change."
                 echo ""
                 echo "Rover-local work:"
                 echo "  A dirty sync target is REFUSED (rsync --delete would destroy it)."
@@ -593,25 +607,50 @@ pip_reinstall() {
 # Service restart
 # ---------------------------------------------------------------------------
 
-# The Docker unit is attached to the container for as long as it is active: it runs
-# docker compose up --abort-on-container-exit in the foreground (Type=exec) with
-# Restart=on-failure. An in-place docker restart stops the container compose is attached to, so
-# compose aborts, the unit fails, and systemd runs it again ten seconds later through compose
-# down: a recreate by detour, with two supervisors fighting over the container in between. So
-# container mode refuses while the unit is active, and main asks before anything is synced.
-require_no_attached_unit() {
+# Ask systemd for the Docker unit's ActiveState. Only "inactive" is quiet. active, activating
+# (which includes the ten seconds of RestartSec between a failure and the restart, when
+# systemctl is-active already says no), deactivating, reloading and failed all mean the unit is,
+# or is about to be, attached to the container, and a state that cannot be read is not
+# "inactive" either. Called as a plain statement (no command substitution) so that a dropped
+# link dies here.
+read_unit_state() {
     local rc=0
-    remote_sudo systemctl is-active mousedroid-docker &>/dev/null || rc=$?
+    UNIT_STATE="$(remote_sudo systemctl show -p ActiveState --value mousedroid-docker 2>/dev/null)" || rc=$?
+    [[ "${rc}" -ne 255 ]] || die "cannot reach the rover at ${HOST}; nothing restarted"
+    if [[ "${rc}" -ne 0 || -z "${UNIT_STATE}" ]]; then
+        UNIT_STATE="unknown"
+    fi
+}
+
+# Container mode is for a rover with no Docker unit: it runs only when no mousedroid-docker unit
+# is enabled or running. The unit runs docker compose up --abort-on-container-exit in the
+# foreground (Type=exec) with Restart=on-failure. While it runs, an in-place docker restart
+# stops the container compose is attached to, so compose aborts, the unit fails, and systemd
+# re-runs it after RestartSec. Whether that recreates the container depends on compose's
+# reconciliation, which is unverified on hardware; either way two supervisors are acting on one
+# container, so never race it. is-active is not enough, since during RestartSec the unit is
+# activating; and an enabled unit that is merely stopped comes back at the next boot. So the
+# test is fail-closed: enabled, or any state but inactive. main asks before anything is synced,
+# and restart_container_in_place asks again.
+require_no_docker_unit() {
+    local rc=0 claim=""
+    remote_sudo systemctl is-enabled mousedroid-docker &>/dev/null || rc=$?
     case "${rc}" in
-        0) die "the mousedroid-docker unit is active and attached to the container; an in-place restart would abort it and trigger a recreate — use MOUSEDROID_REMOTE_RESTART_MODE=unit" ;;
+        0) claim="enabled" ;;
         255) die "cannot reach the rover at ${HOST}; nothing restarted" ;;
     esac
+    if [[ -z "${claim}" ]]; then
+        read_unit_state
+        [[ "${UNIT_STATE}" == inactive ]] || claim="${UNIT_STATE}"
+    fi
+    [[ "${claim}" != unknown ]] || claim="in an unknown state"
+    [[ -z "${claim}" ]] || die "the mousedroid-docker unit is ${claim}; it is attached to the container while it runs, so an in-place restart would abort it or race its restart, and what compose then does to the container is unverified — use MOUSEDROID_REMOTE_RESTART_MODE=unit, or disable the unit"
 }
 
 # unit mode. Where the unit is enabled, restart it: that RECREATES the container (its ExecStop is
 # docker compose down), and its ExecStartPre re-syncs the overlay and runs preflight_check.sh, so
-# the synced tree goes live through the fail-closed path. With no unit but the container
-# running, the container is under compose alone: leave it, and say how to restart it. These
+# the synced tree goes live through the fail-closed path. With no unit enabled or running but
+# the container up, the container is under compose alone: leave it, and say how to restart it. These
 # helpers are called as plain statements, never in an if or && list, so a failed restart still
 # stops the deploy (errexit is off inside anything called from a condition).
 restart_docker_unit() {
@@ -621,22 +660,31 @@ restart_docker_unit() {
         SPINE_HANDLED=true
         log_step "mousedroid-docker: $(remote_sudo systemctl is-active mousedroid-docker 2>/dev/null || true)"
     else
-        CONTAINER_LOOK_RC=0
-        probe_container || CONTAINER_LOOK_RC=$?
-        if [[ "${CONTAINER_LOOK_RC}" -eq 0 ]]; then
-            SPINE_HANDLED=true
-            log_step "Container ${REMOTE_CONTAINER} runs under compose only (no mousedroid-docker unit is enabled), so it was not restarted. MOUSEDROID_REMOTE_RESTART_MODE=container restarts it in place and keeps its writable layer"
+        # Not enabled. Only a unit that is also inactive leaves the container to compose alone. One
+        # that is running, failed or on its way up still claims it, and container mode would refuse
+        # it, so the hint below must not point there.
+        read_unit_state
+        if [[ "${UNIT_STATE}" == inactive ]]; then
+            CONTAINER_LOOK_RC=0
+            probe_container || CONTAINER_LOOK_RC=$?
+            if [[ "${CONTAINER_LOOK_RC}" -eq 0 ]]; then
+                SPINE_HANDLED=true
+                log_step "Container ${REMOTE_CONTAINER} runs under compose only (no mousedroid-docker unit is enabled or running), so it was not restarted. MOUSEDROID_REMOTE_RESTART_MODE=container restarts it in place and keeps its writable layer"
+            fi
         fi
     fi
 }
 
 # container mode: docker restart in place, for the rover that runs its container under compose
 # alone (restart: unless-stopped). The writable layer survives, so packages hot-installed into
-# it are kept, and so does the image it was created from (only a recreate picks up a rebuilt
-# one). No ExecStartPre runs: the deploy has run the floor guard and goes on to run the health
-# check. Not gated on the unit being enabled, but refused while it is active.
+# it are kept, and so does everything else the container was created with: the image, the
+# compose config and the env_file, none of which a docker restart re-reads (only a recreate
+# picks up a rebuilt image or a changed config). The unit's fail-closed ExecStartPre preflight
+# is skipped too: the deploy has run the floor guard and goes on to run the health check, but
+# nothing else vets the tree. Not gated on the unit being enabled, but refused whenever one is
+# enabled or running.
 restart_container_in_place() {
-    require_no_attached_unit
+    require_no_docker_unit
     local rc=0
     probe_container || rc=$?
     case "${rc}" in
@@ -764,10 +812,10 @@ main() {
 
     resolve_host
     check_connectivity
-    # Container mode refuses a rover whose unit is attached to the container, and it should
-    # refuse before the deploy has changed anything on it.
+    # Container mode refuses a rover whose unit is enabled or running, and it should refuse before
+    # the deploy has changed anything on it.
     if [[ "${REMOTE_RESTART_MODE}" == container ]]; then
-        require_no_attached_unit
+        require_no_docker_unit
     fi
 
     case "${DEPLOY_MODE}" in

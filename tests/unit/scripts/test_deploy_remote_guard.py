@@ -35,7 +35,8 @@ import re
 import shutil
 import subprocess
 import tarfile
-from collections.abc import Sequence
+import time
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
@@ -404,6 +405,7 @@ def _ssh_shim_body(
     *,
     fail_rc: int = 1,
     fail_after_s: int = 0,
+    answers: Mapping[str, str | Sequence[str]] | None = None,
     succeed_on_nth: tuple[str, int] | None = None,
 ) -> str:
     """The ``ssh`` shim: ``ok`` for every remote command.
@@ -418,8 +420,11 @@ def _ssh_shim_body(
     alone would be just the unit name. ``succeed_on_nth=(needle, n)`` makes a probe come back
     negative until it has been seen ``n`` times (the shim counts the lines it has already
     logged), which is a container that shows up a moment after the restart; each sighting is
-    stamped, in whole seconds, into ``<SSH_LOG>.ticks`` so a test can check the spacing. The guard's
-    own invocation is matched first and never reaches either clause.
+    stamped, in whole seconds, into ``<SSH_LOG>.ticks`` so a test can check the spacing.
+    ``answers={needle: text}`` makes a command that contains the needle print the text and exit 0,
+    which is how ``systemctl show`` reports a unit's state; given a list instead of a text, the
+    n-th sighting gets the n-th item and the last item repeats, so an answer can change between
+    two looks. The guard's own invocation is matched first and never reaches any clause.
     """
     if fail_when_contains is None:
         needles: list[str] = []
@@ -432,6 +437,15 @@ def _ssh_shim_body(
         patterns = "|".join(f'*"{needle}"*' for needle in needles)
         pause = f"sleep {fail_after_s}; " if fail_after_s else ""
         clauses += f'case "$*" in\n    {patterns}) {pause}exit {fail_rc} ;;\nesac\n'
+    for asked, reply in (answers or {}).items():
+        replies = [reply] if isinstance(reply, str) else list(reply)
+        quoted = " ".join(f'"{text}"' for text in replies)
+        clauses += (
+            f'case "$*" in\n    *"{asked}"*)\n'
+            f'        replies=({quoted}); i=$(( $(grep -c "{asked}" "$SSH_LOG") - 1 ))\n'
+            '        [ "$i" -lt "${#replies[@]}" ] || i=$(( ${#replies[@]} - 1 ))\n'
+            '        echo "${replies[$i]}"; exit 0 ;;\nesac\n'
+        )
     if succeed_on_nth is not None:
         needle, nth = succeed_on_nth
         clauses += (
@@ -508,6 +522,7 @@ def _install_ssh_shim(
     fail_when_contains: str | Sequence[str] | None = None,
     fail_rc: int = 1,
     fail_after_s: int = 0,
+    answers: Mapping[str, str | Sequence[str]] | None = None,
     succeed_on_nth: tuple[str, int] | None = None,
 ) -> None:
     """Rewrite the ``ssh`` shim ``deploy_env`` installed.
@@ -520,10 +535,45 @@ def _install_ssh_shim(
         fail_when_contains,
         fail_rc=fail_rc,
         fail_after_s=fail_after_s,
+        answers=answers,
         succeed_on_nth=succeed_on_nth,
     )
     shim.write_text(body, encoding="utf-8")
     shim.chmod(0o755)
+
+
+# What the deploy asks systemd about the Docker unit's state, and the shim's way of answering it.
+_UNIT_STATE_PROBE = "show -p ActiveState --value mousedroid-docker"
+
+
+def _install_unit(
+    tmp_path: Path,
+    *,
+    enabled: bool,
+    state: str | Sequence[str],
+    also_fail: Sequence[str] = (),
+    succeed_on_nth: tuple[str, int] | None = None,
+) -> None:
+    """Install an ssh shim that models the Docker unit the way systemd reports it.
+
+    ``systemctl is-enabled`` exits 0 only for an enabled unit. ``is-active`` exits 0 only for
+    ``active`` and ``reloading``. ``show -p ActiveState --value`` prints the state, which for a
+    unit that does not exist is ``inactive``. A list of states changes the answer from one look
+    to the next. Anything in ``also_fail`` fails too (the container probe, a venv, the
+    bare-metal unit).
+    """
+    states = [state] if isinstance(state, str) else list(state)
+    fail = list(also_fail)
+    if not enabled:
+        fail.append("is-enabled mousedroid-docker")
+    if states[0] not in {"active", "reloading"}:
+        fail.append("is-active mousedroid-docker")
+    _install_ssh_shim(
+        tmp_path,
+        fail_when_contains=fail,
+        answers={_UNIT_STATE_PROBE: states},
+        succeed_on_nth=succeed_on_nth,
+    )
 
 
 def test_deploy_refuses_a_dirty_rover_and_never_reaches_rsync(
@@ -607,11 +657,31 @@ def test_deploy_on_a_clean_rover_syncs_without_creating_an_archive(
 # than skipping in silence, when it never appears; when this run restarted no unit, nothing is
 # bringing a container up and it looks once. That restart also RECREATES the container. A rover
 # with no unit, whose container runs under compose alone, restarts it in place with
-# MOUSEDROID_REMOTE_RESTART_MODE=container, which refuses while the unit is active.
+# MOUSEDROID_REMOTE_RESTART_MODE=container, which runs only when no mousedroid-docker unit is
+# enabled or running and refuses otherwise.
 
 
 def _ssh_log(deploy_env: dict[str, str]) -> str:
     return Path(deploy_env["SSH_LOG"]).read_text(encoding="utf-8")
+
+
+def _clock_marks() -> tuple[float, float]:
+    """The wall clock and the monotonic clock, read together."""
+    return time.time(), time.monotonic()
+
+
+def _skip_if_the_wall_clock_stepped(marks: tuple[float, float]) -> None:
+    """Skip, rather than fail, when the wall clock was stepped since ``marks`` was taken.
+
+    The deploy times its wait with bash's SECONDS and the shim stamps probes with ``date``, and
+    both follow the wall clock. One that is stepped mid-run (WSL2's time sync steps it back by a
+    second or three) makes them lie, and no assertion can tell that from a regression. The
+    monotonic clock is not stepped, so a disagreement between the two voids the measurement.
+    """
+    wall0, mono0 = marks
+    drift = (time.time() - wall0) - (time.monotonic() - mono0)
+    if abs(drift) > 0.5:
+        pytest.skip(f"the wall clock stepped by {drift:+.1f}s during the run")
 
 
 def test_code_only_restarts_the_docker_unit_when_enabled(deploy_env: dict[str, str]) -> None:
@@ -628,7 +698,7 @@ def test_code_only_restarts_the_docker_unit_when_enabled(deploy_env: dict[str, s
 def test_code_only_skips_the_docker_unit_when_absent(
     tmp_path: Path, deploy_env: dict[str, str]
 ) -> None:
-    _install_ssh_shim(tmp_path, fail_when_contains="is-enabled mousedroid-docker")
+    _install_unit(tmp_path, enabled=False, state="inactive")
     result = _run_deploy(deploy_env, "--code-only")
     assert result.returncode == 0, result.stdout + result.stderr
     sent = _ssh_log(deploy_env)
@@ -727,6 +797,7 @@ def test_the_health_check_waits_for_the_container_to_be_listed(
     forces base 10, and a loop that never gets going would skip the check and fail this test.
     """
     _install_ssh_shim(tmp_path, succeed_on_nth=("docker ps", 2))
+    marks = _clock_marks()
     result = _run_deploy({**deploy_env, "MOUSEDROID_REMOTE_HEALTH_WAIT_S": "08"}, "--code-only")
     assert result.returncode == 0, result.stdout + result.stderr
     sent = _ssh_log(deploy_env)
@@ -735,6 +806,7 @@ def test_the_health_check_waits_for_the_container_to_be_listed(
     assert "WARNING: container" not in result.stdout
     # Spaced by the one-second poll interval, not N probes fired back to back (whole seconds, so
     # a real sleep always shows a gap of at least one and no sleep almost never does).
+    _skip_if_the_wall_clock_stepped(marks)
     ticks = Path(f"{deploy_env['SSH_LOG']}.ticks").read_text(encoding="utf-8").split()
     assert len(ticks) == 2, ticks
     assert int(ticks[1]) - int(ticks[0]) >= 1, ticks
@@ -831,11 +903,7 @@ def test_the_container_wait_runs_only_when_this_run_restarted_the_unit(
     that pip_reinstall does not probe the unit as well: the probe in the log is the restart-side
     one.
     """
-    _install_ssh_shim(
-        tmp_path,
-        fail_when_contains="is-enabled mousedroid-docker",
-        succeed_on_nth=("docker ps", 2),
-    )
+    _install_unit(tmp_path, enabled=False, state="inactive", succeed_on_nth=("docker ps", 2))
     result = _run_deploy({**deploy_env, "MOUSEDROID_REMOTE_HEALTH_WAIT_S": "5"}, "--code-only")
     assert result.returncode == 0, result.stdout + result.stderr
     sent = _ssh_log(deploy_env)
@@ -872,8 +940,10 @@ def test_the_container_wait_is_bounded_by_the_clock_not_by_the_probe_count(
     counting probes (the first plus two more) would make three.
     """
     _install_ssh_shim(tmp_path, fail_when_contains="docker ps", fail_after_s=1)
+    marks = _clock_marks()
     result = _run_deploy({**deploy_env, "MOUSEDROID_REMOTE_HEALTH_WAIT_S": "2"}, "--code-only")
     assert result.returncode == 0, result.stdout + result.stderr
+    _skip_if_the_wall_clock_stepped(marks)
     probes = _ssh_log(deploy_env).count("docker ps")
     assert probes >= 1, "premise: the container was probed"
     assert probes <= 2, "the window was counted in probes, not in seconds"
@@ -892,21 +962,22 @@ def test_the_default_restart_mode_restarts_the_unit_and_not_the_container(
     assert "docker restart" not in sent
 
 
-def test_the_container_restart_mode_restarts_in_place(
+def test_the_container_restart_mode_restarts_in_place_when_no_unit_is_enabled_or_running(
     tmp_path: Path, deploy_env: dict[str, str]
 ) -> None:
-    """With no unit attached, docker restart is safe and keeps the container's writable layer,
-    which the unit restart (docker compose down, then up) throws away.
+    """With no unit enabled or running, docker restart is safe and keeps the container's writable
+    layer, which the unit restart (docker compose down, then up) throws away.
 
     One look at the container decides, one more follows the restart. docker is called as the ssh
     user, like docker ps and docker exec; only systemctl goes through sudo.
     """
-    _install_ssh_shim(tmp_path, fail_when_contains="is-active mousedroid-docker")
+    _install_unit(tmp_path, enabled=False, state="inactive")
     env = {**deploy_env, "MOUSEDROID_REMOTE_RESTART_MODE": "container"}
     result = _run_deploy(env, "--code-only")
     assert result.returncode == 0, result.stdout + result.stderr
     sent = _ssh_log(deploy_env)
-    assert "is-active mousedroid-docker" in sent, "premise: the unit was probed"
+    assert "is-enabled mousedroid-docker" in sent, "premise: the unit was probed"
+    assert _UNIT_STATE_PROBE in sent, "premise: its state was asked for"
     assert "docker restart mousedroid" in sent
     assert "restart mousedroid-docker" not in sent
     assert sent.index("docker restart") < sent.index("docker exec"), "checked before restarted"
@@ -918,49 +989,51 @@ def test_the_container_restart_mode_restarts_in_place(
             assert "sudo" in line, f"systemctl must go through sudo: {line}"
 
 
-def test_the_container_restart_mode_refuses_while_the_unit_is_active(
-    deploy_env: dict[str, str],
+@pytest.mark.parametrize(
+    ("enabled", "state"),
+    [
+        (True, "inactive"),
+        (False, "active"),
+        (False, "activating"),
+        (False, "deactivating"),
+        (False, "reloading"),
+        (False, "failed"),
+    ],
+)
+def test_the_container_restart_mode_refuses_when_a_unit_is_enabled_or_running(
+    enabled: bool, state: str, tmp_path: Path, deploy_env: dict[str, str]
 ) -> None:
-    """mousedroid-docker runs docker compose up --abort-on-container-exit with Restart=on-failure.
+    """The mode is allowed only when no mousedroid-docker unit is enabled or running.
 
-    An in-place restart stops the container compose is attached to, so compose aborts, the unit
-    fails and systemd runs it again ten seconds later through compose down: the recreate this
-    mode exists to avoid, by detour. So it is refused, and before anything has been synced.
+    The unit runs docker compose up --abort-on-container-exit with Restart=on-failure. While it
+    runs, an in-place restart stops the container compose is attached to, so compose aborts, the
+    unit fails and systemd re-runs it after RestartSec; whether that recreates the container is
+    unverified on hardware, so the run must never race it. During RestartSec the unit is
+    activating, not active, so is-active alone would let the run through; an enabled unit that
+    is stopped comes back at the next boot. Hence the predicate: enabled, or any state but
+    inactive. The shim models systemd for each case (is-active is non-zero for every state but
+    active and reloading), so the pins also fail against an is-active-only check. Refused before
+    anything has been synced.
     """
+    _install_unit(tmp_path, enabled=enabled, state=state)
     env = {**deploy_env, "MOUSEDROID_REMOTE_RESTART_MODE": "container"}
     result = _run_deploy(env, "--code-only")
     assert result.returncode != 0
     assert "attached to the container" in result.stderr
     assert "MOUSEDROID_REMOTE_RESTART_MODE=unit" in result.stderr
+    assert ("enabled" if enabled else state) in result.stderr
     sent = _ssh_log(deploy_env)
-    assert "is-active mousedroid-docker" in sent, "premise: the unit was probed"
+    assert "is-enabled mousedroid-docker" in sent, "premise: the unit was probed"
     assert "docker restart" not in sent
     assert "restart mousedroid-docker" not in sent
     assert not Path(deploy_env["RSYNC_MARKER"]).exists(), "synced before refusing"
     assert deploy_env["MOUSEDROID_CONFIG_DIR"] not in sent, "installed config before refusing"
 
 
-def test_the_container_restart_mode_does_not_need_the_unit_to_be_enabled(
-    tmp_path: Path, deploy_env: dict[str, str]
-) -> None:
-    """A rover whose container runs under compose alone (restart: unless-stopped) has no unit to
-    enable, and it is exactly the rover this mode is for."""
-    _install_ssh_shim(
-        tmp_path,
-        fail_when_contains=("is-enabled mousedroid-docker", "is-active mousedroid-docker"),
-    )
-    env = {**deploy_env, "MOUSEDROID_REMOTE_RESTART_MODE": "container"}
-    result = _run_deploy(env, "--code-only")
-    assert result.returncode == 0, result.stdout + result.stderr
-    sent = _ssh_log(deploy_env)
-    assert "docker restart mousedroid" in sent
-    assert "restart mousedroid-docker" not in sent
-
-
 def test_the_container_restart_mode_warns_when_there_is_nothing_to_restart(
     tmp_path: Path, deploy_env: dict[str, str]
 ) -> None:
-    _install_ssh_shim(tmp_path, fail_when_contains=("is-active mousedroid-docker", "docker ps"))
+    _install_unit(tmp_path, enabled=False, state="inactive", also_fail=("docker ps",))
     env = {**deploy_env, "MOUSEDROID_REMOTE_RESTART_MODE": "container"}
     result = _run_deploy(env, "--code-only")
     assert result.returncode == 0, result.stdout + result.stderr
@@ -986,9 +1059,7 @@ def test_a_failed_unit_restart_stops_the_deploy(tmp_path: Path, deploy_env: dict
 def test_a_failed_in_place_restart_stops_the_deploy(
     tmp_path: Path, deploy_env: dict[str, str]
 ) -> None:
-    _install_ssh_shim(
-        tmp_path, fail_when_contains=("is-active mousedroid-docker", "docker restart")
-    )
+    _install_unit(tmp_path, enabled=False, state="inactive", also_fail=("docker restart",))
     env = {**deploy_env, "MOUSEDROID_REMOTE_RESTART_MODE": "container"}
     result = _run_deploy(env, "--code-only")
     assert result.returncode != 0
@@ -1003,7 +1074,7 @@ def test_the_unit_restart_mode_says_so_when_the_container_runs_under_compose_onl
     """No unit is enabled but the container is up: nothing is restarted, and the log says why and
     which setting restarts it in place. The one look at the container is shared with the health
     check, which then runs; and the skip line is kept for the rover with nothing at all."""
-    _install_ssh_shim(tmp_path, fail_when_contains="is-enabled mousedroid")
+    _install_unit(tmp_path, enabled=False, state="inactive", also_fail=("is-enabled mousedroid",))
     result = _run_deploy(deploy_env, "--code-only")
     assert result.returncode == 0, result.stdout + result.stderr
     sent = _ssh_log(deploy_env)
@@ -1020,13 +1091,76 @@ def test_the_unit_restart_mode_says_so_when_the_container_runs_under_compose_onl
 def test_the_unit_restart_mode_skips_quietly_with_neither_a_unit_nor_a_container(
     tmp_path: Path, deploy_env: dict[str, str]
 ) -> None:
-    _install_ssh_shim(tmp_path, fail_when_contains=("is-enabled mousedroid", "docker ps"))
+    _install_unit(
+        tmp_path,
+        enabled=False,
+        state="inactive",
+        also_fail=("is-enabled mousedroid", "docker ps"),
+    )
     result = _run_deploy(deploy_env, "--code-only")
     assert result.returncode == 0, result.stdout + result.stderr
     sent = _ssh_log(deploy_env)
     assert "docker ps" in sent, "premise: the container was looked for"
     assert "No mousedroid unit enabled" in result.stdout
     assert "runs under compose only" not in result.stdout
+    assert "docker restart" not in sent
+
+
+@pytest.mark.parametrize("state", ["active", "activating", "deactivating", "reloading", "failed"])
+def test_the_compose_only_hint_is_not_given_when_container_mode_would_refuse(
+    state: str, tmp_path: Path, deploy_env: dict[str, str]
+) -> None:
+    """The hint points at container mode, so it is never given where that mode would refuse."""
+    _install_unit(tmp_path, enabled=False, state=state, also_fail=("is-enabled mousedroid",))
+    result = _run_deploy(deploy_env, "--code-only")
+    assert result.returncode == 0, result.stdout + result.stderr
+    sent = _ssh_log(deploy_env)
+    assert _UNIT_STATE_PROBE in sent, "premise: the unit's state was asked for"
+    assert "runs under compose only" not in result.stdout
+    assert "MOUSEDROID_REMOTE_RESTART_MODE=container" not in result.stdout
+    assert "docker restart" not in sent
+
+
+def test_the_container_restart_mode_refuses_when_the_unit_state_cannot_be_read(
+    tmp_path: Path, deploy_env: dict[str, str]
+) -> None:
+    """Fail closed: a state that cannot be established is not inactive."""
+    _install_ssh_shim(
+        tmp_path, fail_when_contains=("is-enabled mousedroid-docker", _UNIT_STATE_PROBE)
+    )
+    env = {**deploy_env, "MOUSEDROID_REMOTE_RESTART_MODE": "container"}
+    result = _run_deploy(env, "--code-only")
+    assert result.returncode != 0
+    assert "unknown" in result.stderr
+    assert "MOUSEDROID_REMOTE_RESTART_MODE=unit" in result.stderr
+    assert "docker restart" not in _ssh_log(deploy_env)
+
+
+def test_the_container_restart_mode_says_so_when_the_rover_cannot_be_reached(
+    tmp_path: Path, deploy_env: dict[str, str]
+) -> None:
+    """ssh's 255 is not a unit that claims the container, and is not reported as one."""
+    _install_ssh_shim(tmp_path, fail_when_contains="is-enabled mousedroid-docker", fail_rc=255)
+    env = {**deploy_env, "MOUSEDROID_REMOTE_RESTART_MODE": "container"}
+    result = _run_deploy(env, "--code-only")
+    assert result.returncode != 0
+    assert "cannot reach the rover" in result.stderr
+    assert "attached to the container" not in result.stderr
+
+
+def test_the_restart_time_check_uses_the_same_predicate(
+    tmp_path: Path, deploy_env: dict[str, str]
+) -> None:
+    """The check is asked again where the restart happens, in case the unit claimed the container
+    after the first look: here it is inactive at the start and activating by the restart."""
+    _install_unit(tmp_path, enabled=False, state=["inactive", "activating"])
+    env = {**deploy_env, "MOUSEDROID_REMOTE_RESTART_MODE": "container"}
+    result = _run_deploy(env, "--code-only")
+    assert result.returncode != 0
+    assert "activating" in result.stderr
+    sent = _ssh_log(deploy_env)
+    assert sent.count(_UNIT_STATE_PROBE) == 2, "premise: asked at the start and at the restart"
+    assert Path(deploy_env["RSYNC_MARKER"]).exists(), "premise: the first look passed, the sync ran"
     assert "docker restart" not in sent
 
 
@@ -1049,7 +1183,8 @@ def test_the_help_says_plainly_that_the_unit_restart_recreates_the_container() -
     assert "MOUSEDROID_REMOTE_RESTART_MODE" in result.stdout
     assert "RECREATES the container" in result.stdout
     assert "docker restart in place" in result.stdout
-    assert "REFUSED while the unit is active" in result.stdout
+    assert "only when no mousedroid-docker unit is enabled or running" in result.stdout
+    assert "REFUSED" in result.stdout
     assert "docker compose build" in result.stdout
 
 
