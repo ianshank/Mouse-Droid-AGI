@@ -18,9 +18,10 @@ Probes and dev utilities (not shipped in the runtime path):
   caps and the ledger path come from `credit:` in `.claude/workforce.yaml`
 - `agent_reviewer/` — F-059 WS-B / WS-D: a read-only Agent-SDK peer reviewer
   (`python -m tools.agent_reviewer.run_review --base REF --head REF --cap-usd N [--dry-run]`). The head
-  under review is treated as hostile: the tool allowlist, the git-only Bash guard and the mock-only MCP
-  entry (built in code, confirmed by the base ref's `.mcp.json`) are `policy.py`; every run is pre-checked
-  against and recorded in the credit ledger. Needs the `agent_reviewer` extra; see its `README.md`
+  under review is treated as hostile: the trust boundary is the base ref (the reviewer's configuration,
+  instructions and MCP declaration are read from it), and the tool allowlist, the git-only Bash guard and the
+  mock-only MCP entry (built in code) are `policy.py`; every run is pre-checked against and recorded in the
+  credit ledger. Needs the `agent_reviewer` extra; see its `README.md` for the safe setup
 - `spikes/` — throwaway investigation spikes
 
 `tools/` is inside the `ruff` lint + format scope — in `pyproject.toml`, in

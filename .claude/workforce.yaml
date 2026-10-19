@@ -177,7 +177,11 @@ credit:
 
 # F-059 WS-B: the read-only Agent-SDK peer reviewer (tools/agent_reviewer/). The
 # spend caps are the credit: block above; this block holds what the reviewer may
-# be tuned on. model is an alias, resolved to a model id at run time
+# be tuned on. The reviewer reads this WHOLE file (credit:, secret_scan:, this block)
+# from the BASE ref of the review with `git cat-file`, never from the working tree:
+# the head under review may be hostile, and a copy it could rewrite would let it
+# redirect the agent file, the MCP declaration, the scanner and where output goes.
+# model is an alias, resolved to a model id at run time
 # (client.models.retrieve) and recorded in the artifact and the ledger row. A
 # max_turns of 0 would mean "no limit" to the SDK, so the schema requires >= 1.
 # What is NOT tunable here -- the tool allowlist, the Bash guard, the forced
