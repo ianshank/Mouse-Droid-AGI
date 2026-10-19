@@ -53,8 +53,10 @@ legacy protocol gave no reliable voltage; the runtime floor `battery_implausible
 unchanged, so a board answering without a voltage reads 0.0 V and is screened to log-only rather than
 an emergency stop, while the power smoke gate is deliberately stricter and fails on it (R-6). And
 `safety.emergency_latch` is armed (CF-2): an emergency stop holds across ticks and restarts until an
-operator runs `python -m mousedroid.cli.rearm --operator <you> --confirm-area-clear`
-(`docs/runbooks/emergency-stop-rearm.md`). `config/jetson_lidar_only.yaml` sets it `false`
+operator runs
+`python -m mousedroid.cli.rearm --config /etc/mousedroid/jetson_production.yaml --operator <you> --confirm-area-clear`
+(`docs/runbooks/emergency-stop-rearm.md`; without `--config` the CLI reads `default.yaml`, finds no
+latch and exits `0`). `config/jetson_lidar_only.yaml` sets it `false`
 explicitly (R-7), because that stack's `emergency` LiDAR policy would latch on one lost acquisition
 and it is the default stack of `scripts/jetson_validate.sh`. **Operator-visible:** after any
 emergency stop the rover now boots but will not move (`estop_latch_active_at_boot` in the log) until
