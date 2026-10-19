@@ -95,7 +95,7 @@ graph LR
 
 **Imports:** `common`, `comms`, `config`, `factory`, `harness`, `logging`
 
-**Dependents:** `cli`
+**Dependents:** `cli`, `common`
 
 ```mermaid
 graph LR
@@ -107,6 +107,7 @@ graph LR
   validation --> harness
   validation --> logging
   cli --> validation
+  common --> validation
 ```
 
 ## `cloud`
