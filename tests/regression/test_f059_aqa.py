@@ -197,6 +197,29 @@ def test_loopback_motion_tests_branch_on_the_encoder_flag_and_the_motion_gate() 
     assert "min" in gate, "smoke_test_velocity_mps is a ceiling on the command, not a floor"
 
 
+def test_loopback_motion_gate_stays_closed_unless_the_pydantic_gate_opens() -> None:
+    """CHARTER §3 polarity, which names cannot pin (an inverted ``if`` or a bare ``return 0.0``
+    keeps every name): ``if not <...>.smoke_test_allow_motion: return 0.0``, then the ``min`` cap.
+    """
+    fn = _hardware_functions("test_esp32_loopback.py")["_commanded_velocity"]
+    why = "CHARTER §3 gate: `if not <...>.smoke_test_allow_motion: return 0.0`, then min(...)"
+    assert not any(isinstance(n, ast.Return) for n in fn.body[:-1]), why
+    match fn.body[-2:]:
+        case [
+            ast.If(
+                test=ast.UnaryOp(
+                    op=ast.Not(), operand=ast.Attribute(attr="smoke_test_allow_motion")
+                ),
+                body=[ast.Return(value=ast.Constant(value=0.0))],
+                orelse=[],
+            ),
+            ast.Return(value=ast.Call(func=ast.Name(id="min")) as cap),
+        ]:
+            assert {"max_velocity_mps", "smoke_test_velocity_mps"} <= _code_names(cap), why
+        case _:
+            pytest.fail(why)
+
+
 def test_power_chain_test_skips_when_the_board_is_configured_off() -> None:
     """R3-2: esp32.enabled=false routes the power stage to MockESP32Driver (a 12.0 V green).
 
