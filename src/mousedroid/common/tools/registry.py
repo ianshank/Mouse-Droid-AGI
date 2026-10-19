@@ -10,7 +10,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
-    from mousedroid.config.schema import GCPConfig
+    from mousedroid.comms.protocol import ESP32CommProtocol
+    from mousedroid.config.schema import GCPConfig, Settings
     from mousedroid.harness.approval.protocol import ApprovalGateProtocol
     from mousedroid.llm_gateway.protocol import GoalVector, LLMGatewayProtocol
     from mousedroid.telemetry.metrics import MetricsRegistry
@@ -208,9 +209,139 @@ async def _calibrate_ultrasonic() -> dict[str, str]:
     return {"status": "calibration_complete"}
 
 
-async def _esp32_diagnostics() -> dict[str, str]:
-    """Run ESP32 communication diagnostics."""
-    return {"status": "esp32_ok"}
+async def _esp32_live_driver_status(
+    settings: Settings, driver: ESP32CommProtocol
+) -> dict[str, object]:
+    """Poll for one stock frame, then read the bus voltage, through the orchestrator's driver.
+
+    The orchestrator holds the exclusive serial port, so nothing here opens, closes or
+    reconfigures it: these are the two public reads the sensor loop already issues. Stock
+    shares one stream across frame types, so a wrong-typed line is not silence: like the
+    probe, this reads up to ``esp32.max_consecutive_timeouts`` times (the driver's own
+    link-is-dead budget) before it says ``no_frame``, and reports the reads it issued as
+    ``polls``.
+
+    ``no_frame`` is the shared link's current view, not a fresh measurement. A silent board
+    flips the driver to degraded mode, where reads are throttled to
+    ``esp32.degraded_poll_interval_s``: a repeat call inside that window writes nothing and
+    still answers ``no_frame``. It is not proof that the board is dead (a wrong baud, a loose
+    cable and the throttle look the same).
+
+    Args:
+        settings: Root settings; ``esp32.command_set`` and the poll budget are consulted.
+        driver: The driver the orchestrator is running on.
+
+    Returns:
+        The ``ok`` / ``no_frame`` result with ``source: live_driver`` and ``polls``.
+
+    Raises:
+        ValueError: If ``esp32.command_set`` is not ``waveshare_stock``. The legacy codec never
+            sets ``imu_valid``, so ``no_frame`` would read as a dead board when the board may
+            be answering in a dialect this tool cannot witness.
+    """
+    esp32 = settings.esp32
+    if esp32.command_set != "waveshare_stock":
+        msg = (
+            f"esp32.command_set={esp32.command_set!r} never sets imu_valid, so there is no "
+            "frame to witness; set esp32.command_set='waveshare_stock' to diagnose a stock board"
+        )
+        raise ValueError(msg)
+    for polls in range(1, esp32.max_consecutive_timeouts + 1):
+        if (await driver.read_encoders()).imu_valid:
+            voltage = await driver.get_battery_voltage()
+            return {
+                "status": "ok",
+                "source": "live_driver",
+                "imu_valid": True,
+                # The driver's 0.0 "no reading" sentinel is not a flat pack.
+                "battery_v": voltage if voltage > 0.0 else None,
+                "polls": polls,
+            }
+    return {
+        "status": "no_frame",
+        "source": "live_driver",
+        "imu_valid": False,
+        "battery_v": None,
+        "polls": esp32.max_consecutive_timeouts,
+    }
+
+
+async def _esp32_probe_status(settings: Settings) -> dict[str, object]:
+    """Probe the board through a fresh driver, for callers that hold no port.
+
+    Args:
+        settings: Root settings the probe builds its driver from.
+
+    Returns:
+        The ``ok`` / ``no_response`` result with ``source: probe``.
+    """
+    # Lazy: importing ``validation.runtime`` pulls in the factory, which builds this registry.
+    from mousedroid.validation.runtime import collect_esp32_probe
+
+    probe = await collect_esp32_probe(settings)
+    return {
+        "status": "ok" if probe.responded else "no_response",
+        "source": "probe",
+        "frame_type": probe.frame_type,
+        "battery_v": probe.battery_v,
+        "elapsed_s": probe.elapsed_s,
+        "detail": probe.detail,
+    }
+
+
+async def _esp32_diagnostics(
+    settings: Settings | None = None,
+    esp32_driver: ESP32CommProtocol | None = None,
+) -> dict[str, object]:
+    """Report whether the ESP32 answers, sending no velocity or stop command.
+
+    ``status`` is the verdict, and only ``ok`` is evidence that the board answered:
+
+    * ``unconfigured``: no ``Settings`` were supplied, so there is nothing to ask.
+    * ``mock``: ``mock_hardware`` or ``esp32.enabled=false``. The factory builds
+      ``MockESP32Driver`` there, whose silence says nothing about a board.
+    * ``ok`` / ``no_frame``: read through ``esp32_driver``, the orchestrator's own driver,
+      at most ``esp32.max_consecutive_timeouts`` times (``polls`` is how many this call
+      issued). Its port is exclusive, so it is never reopened. ``no_frame`` is the link's
+      current view, not a fresh measurement and not proof of a dead board.
+    * ``ok`` / ``no_response``: no driver was supplied, so ``collect_esp32_probe`` connects
+      one of its own, polls, and disconnects.
+    * ``error``: the read or the probe raised, or the command set is not
+      ``waveshare_stock`` (the legacy dialect has no frame to witness); ``detail`` is
+      ``<Type>: <message>``.
+
+    It sends no velocity or stop command (the probe branch's ``connect()`` arms the chassis
+    heartbeat, as any driver connect does) and stays out of ``MCPConfig.actuation_tools``;
+    both are pinned in ``tests/regression/test_f059_aqa.py``.
+    A failure is returned as ``error``, never raised: the MCP bridge counts a raising handler
+    against its circuit breaker, and an unplugged board must not lock every other tool out.
+    Cancellation still propagates.
+
+    Args:
+        settings: Root settings, or ``None`` for the legacy construction.
+        esp32_driver: The orchestrator's driver, when it holds the port.
+
+    Returns:
+        A JSON-serialisable result with at least a ``status`` key.
+    """
+    if settings is None:
+        return {"status": "unconfigured"}
+    if settings.mock_hardware or not settings.esp32.enabled:
+        return {
+            "status": "mock",
+            "enabled": settings.esp32.enabled,
+            "mock_hardware": settings.mock_hardware,
+        }
+    try:
+        if esp32_driver is None:
+            return await _esp32_probe_status(settings)
+        return await _esp32_live_driver_status(settings, esp32_driver)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        detail = f"{type(exc).__name__}: {exc}"
+        _log.warning("tool_esp32_diagnostics_failed", error=detail)
+        return {"status": "error", "detail": detail}
 
 
 async def _tensorrt_compile() -> dict[str, str]:
@@ -478,8 +609,20 @@ def create_default_registry(
     llm_gateway: LLMGatewayProtocol | None = None,
     metrics_registry: MetricsRegistry | None = None,
     gcp_cfg: GCPConfig | None = None,
+    *,
+    settings: Settings | None = None,
+    esp32_driver: ESP32CommProtocol | None = None,
 ) -> ToolRegistry:
     """Create a ToolRegistry pre-populated with built-in tools.
+
+    Args:
+        llm_gateway: Runtime LLM gateway for ``translate_nl_mission``.
+        metrics_registry: Shared Prometheus registry for ``translate_nl_mission``.
+        gcp_cfg: GCP settings for ``diagnose_cloud``.
+        settings: Root settings for ``esp32_diagnostics``. ``None`` (the default) is the
+            legacy construction, and the tool then reports ``unconfigured``.
+        esp32_driver: The orchestrator's already-built ESP32 driver. When supplied,
+            ``esp32_diagnostics`` reads through it instead of opening a second port.
 
     Returns:
         Registry with all built-in tools registered.
@@ -496,10 +639,13 @@ def create_default_registry(
     async def diagnose_cloud() -> dict[str, object]:
         return await _diagnose_cloud(gcp_cfg)
 
+    async def esp32_diagnostics() -> dict[str, object]:
+        return await _esp32_diagnostics(settings, esp32_driver)
+
     tools = [
         ToolSpec("health_check", "Run system health check", _health_check),
         ToolSpec("calibrate_ultrasonic", "Calibrate ultrasonic sensor", _calibrate_ultrasonic),
-        ToolSpec("esp32_diagnostics", "Run ESP32 diagnostics", _esp32_diagnostics),
+        ToolSpec("esp32_diagnostics", "Run ESP32 diagnostics", esp32_diagnostics),
         ToolSpec("tensorrt_compile", "Compile TensorRT models", _tensorrt_compile),
         ToolSpec("benchmark_latency", "Run latency benchmark", _benchmark_latency),
         ToolSpec("export_experience", "Export experience data", _export_experience),

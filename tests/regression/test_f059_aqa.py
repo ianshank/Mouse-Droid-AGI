@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import pytest
 import yaml
 
 from mousedroid.config.loader import load_settings
+from mousedroid.config.schema import MCPConfig
 from mousedroid.validation.preflight import PreflightStatus, _check_esp32
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -80,3 +82,64 @@ def test_trend_unit_never_runs_exclusive_device_checks() -> None:
     assert declared, "default check list must be an Environment= line"
     listed = {name for value in declared for name in value.split(",")}
     assert not {"esp32", "lidar", "camera"} & listed
+
+
+#: Driver calls that move the rover or stop it. ``emergency_stop`` is deliberately outside
+#: ``MCPConfig.actuation_tools`` so a safety emergency can never refuse it; ``esp32_diagnostics``
+#: is outside that list for the opposite reason: it is a diagnostic and must stay one.
+_ACTUATING_CALLS = frozenset({"send_velocity", "emergency_stop"})
+
+
+def _actuator_references_by_function(path: Path) -> dict[str, set[str]]:
+    """Map every function in ``path`` to the actuating names it references.
+
+    Scans the AST, not the text: the tool's docstrings name both calls to say it never makes
+    them, so a substring match would flag the explanation instead of a call. A bare reference
+    (a bound method handed to a scheduler) counts, not just a call expression, and so does the
+    name as a string literal (``getattr(driver, "emergency_stop")``). A docstring is one long
+    literal, never exactly the bare name, so it cannot trip the literal check.
+    """
+    found: dict[str, set[str]] = {}
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        names = {n.attr for n in ast.walk(node) if isinstance(n, ast.Attribute)}
+        names |= {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+        names |= {
+            n.value
+            for n in ast.walk(node)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+        }
+        found.setdefault(node.name, set()).update(names & _ACTUATING_CALLS)
+    return found
+
+
+def test_mcp_esp32_diagnostics_never_actuates() -> None:
+    """D-13 / 4.3: the MCP tool reports on the board; nothing it can reach moves or stops it.
+
+    Covers the built-in tool registry (the motor tools live in ``motor_tools.py`` by design, so
+    nothing in ``registry.py`` has a reason to name an actuator) and the probe module the tool
+    delegates to when it holds no driver.
+    """
+    modules = {
+        "common/tools/registry.py": _REPO_ROOT / "src/mousedroid/common/tools/registry.py",
+        "validation/runtime/_esp32.py": _REPO_ROOT / "src/mousedroid/validation/runtime/_esp32.py",
+    }
+    scanned = {label: _actuator_references_by_function(path) for label, path in modules.items()}
+    # Guard the gate itself: a scan that never reached the handler would pass everything.
+    assert "_esp32_diagnostics" in scanned["common/tools/registry.py"]
+    assert "collect_esp32_probe" in scanned["validation/runtime/_esp32.py"]
+    offenders = {
+        f"{label}::{function}": sorted(refs)
+        for label, by_function in scanned.items()
+        for function, refs in by_function.items()
+        if refs
+    }
+    assert not offenders, (
+        f"esp32_diagnostics must stay read-only; these name an actuator: {offenders}"
+    )
+
+
+def test_esp32_diagnostics_is_not_an_actuation_tool() -> None:
+    """D-13 / 4.3: ``actuation_tools`` are hidden and refused; a diagnostic must stay reachable."""
+    assert "esp32_diagnostics" not in MCPConfig().actuation_tools
