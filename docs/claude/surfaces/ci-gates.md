@@ -61,7 +61,8 @@ job is untracked or its window has lapsed:
 - `onnx-world-model-extras` — since 2026-05-16, 180-day window (extended once).
 - `mlflow-extras` — since 2026-08-27, 180-day window (mirrors onnx-world-model-extras'
   green-run-count gate).
-- `vulture-audit` — since 2026-07-03, 90-day window.
+- `vulture-audit` — since 2026-07-03, 180-day window (extended once, 2026-10-19: the WS-C
+  triage document from `tools/dead_code_triage_batch.py` is the decision input).
 
 ## Local Replication
 
