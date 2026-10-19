@@ -8,6 +8,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — a read-only Agent-SDK peer reviewer that cannot write, actuate or overspend (F-059 WS-B / WS-D)
+
+`python -m tools.agent_reviewer.run_review --base REF --head REF --cap-usd N` runs the `peer-reviewer`
+agent over a change set through the Claude Agent SDK and saves the review to
+`reports/agent_reviewer/<date>/wsb-NNNN.md`, with one row in the credit ledger. An agent that reads this
+repository and spends money is acceptable only if what it cannot do is pinned, so the containment is
+plain data in `tools/agent_reviewer/policy.py` and each piece has a test: the model is shown only
+`Read`, `Grep`, `Glob` and `Bash`; a PreToolUse hook admits `git diff|log|show` and
+`python -m pytest ... --collect-only` as one plain command and nothing else (it also refuses
+`git diff --output`, `--no-index`, unquoted globs, secret-file names, and pytest plugins or output
+files); no actuation tool, `Write`/`Edit` or web tool is allowed or reachable; the MCP server is the
+`mousedroid` entry of `.mcp.json` with `MOUSEDROID_MOCK_HARDWARE=true` forced, every other env key
+dropped, and the `github` server left out; and no user or project settings file is loaded, so nothing on
+the workstation can widen any of it. The prompt builder strips the agent file's front-matter, appends
+the house output shape, and refuses `*.env`, `docker.env*`, key-shaped text and anything matching the
+regexes in `.gitleaks.toml`.
+
+Spend is checked before it happens. `--cap-usd` must fit in what is left of the workstream cap
+(`charge()` raises `CapExceeded` before any client is built) and is also handed to the SDK as its hard
+stop; the row's cost is `ResultMessage.total_cost_usd`, and when that is unknown the run is charged its cap
+rather than zero. The artifact and the ledger row are written however the run ends - error result,
+crash, timeout, Ctrl-C - and a review that looks like it contains a credential is withheld, not saved.
+`--dry-run` prints the resolved plan (allowlist, denylist, prompt sizes, artifact path, credit headroom)
+without constructing a client, calling the network or writing anything. `max_turns` (40) and the model
+alias (`opus`) are the new `agent_reviewer:` block of `.claude/workforce.yaml`; the SDK is the new
+`agent_reviewer` extra (not in `[dev]`, bounded below 0.3 because the option names were verified against
+0.2.168). No credit is spent by this change: the first real run waits for the API key rotation. See
+`tools/agent_reviewer/README.md` and the new section of `docs/architecture/c4-claude-workforce.md`.
+
 ### Added — an Anthropic request profile, a probe report that cannot read a fallback as a pass, and a spend ledger (F-059 WS-A, part 1)
 
 Per the model table (cache 2026-10-06; to be confirmed on the bench by the probe run), Claude Haiku

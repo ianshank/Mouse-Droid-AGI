@@ -135,6 +135,94 @@ moves the scanner-absent case into the deny column for operators who want it.
 | **Local structlog binding** | `logging_setup.py` | Uses `wrap_logger`, not `structlog.configure()`, so importing a hook never mutates the process-global config the test suite pins. |
 | **Gate self-disables** | `freeze_gate.py` | When F-008 reaches `done` the freeze lifts with no code change and no redeploy. |
 
+## Agent-SDK peer reviewer (F-059 WS-B / WS-D)
+
+`tools/agent_reviewer/` is the one component in this document that **spends money and
+reaches a third party**: it drives the Claude Agent SDK to run an adversarial review of a
+change set (`--base...--head`) and writes the review into the repository. It is workstation
+tooling like everything else here - never on the rover, never imported by it - but it adds an
+external dependency and an egress path, so its trust boundary is drawn explicitly.
+
+```mermaid
+flowchart TB
+    Operator(["Operator\n(after the API key is rotated)"])
+
+    subgraph Reviewer["tools/agent_reviewer/ (workstation only)"]
+        Run["run_review.py\n--base --head --cap-usd [--dry-run]"]
+        Policy["policy.py\nallowlist, Bash guard,\nmock MCP config, SDK options"]
+        Prompt["prompt.py\nsystem prompt,\nsecret-file refusals"]
+        LedgerAdapter["ledger.py\npre-check, cost accounting"]
+    end
+
+    subgraph Workforce["Existing workforce primitives"]
+        Config["claude_hooks/config.py\nagent_reviewer + credit blocks"]
+        Credit["credit_ledger.py\ncharge() / record()"]
+        SecretScan["claude_hooks/secret_scan.py\ngitleaks wrapper"]
+    end
+
+    subgraph Sdk["External dependency: claude-agent-sdk (extra)"]
+        Query["query(prompt, options)"]
+        Cli["bundled Claude Code CLI\nsubprocess, dontAsk mode"]
+    end
+
+    Api[("Anthropic API\nthe only egress")]
+    Mcp["mousedroid MCP server\nMOUSEDROID_MOCK_HARDWARE=true\nactuation tools hidden"]
+    Shell["git diff, log, show\npython -m pytest --collect-only"]
+    Artifact[("reports/agent_reviewer/date/wsb-NNNN.md")]
+    LedgerFile[("reports/credit/ledger.jsonl")]
+
+    Operator --> Run
+    Run --> Policy
+    Run --> Prompt
+    Run --> LedgerAdapter
+    Run -.reads.-> Config
+    LedgerAdapter --> Credit
+    Prompt -.delegates to gitleaks with.-> SecretScan
+    Run -->|"after charge() passes"| Query
+    Query --> Cli
+    Cli -->|"HTTPS"| Api
+    Cli -.PreToolUse hook.-> Policy
+    Cli --> Mcp
+    Cli --> Shell
+    Run -->|"always, however the run ended"| Artifact
+    Credit --> LedgerFile
+```
+
+**What is new.** `claude-agent-sdk` (the `agent_reviewer` extra: not in `[dev]`, not installed by
+CI), the Claude Code CLI it bundles and spawns as a subprocess, and an HTTPS call to the
+Anthropic API - the one egress. `anthropic` (the `anthropic` extra) is optional and only resolves
+the model alias with `models.retrieve`; `gitleaks` is optional and only adds a scan of the
+assembled prompt and of the review before it is saved.
+
+**Containment, in the order the SDK applies it.** Each layer is a pure function or a constant in
+`policy.py`, pinned by `tests/unit/tools/test_agent_reviewer.py` without the SDK or a network:
+
+| # | Layer | What it guarantees |
+|---|---|---|
+| 1 | `tools=` base set | The model is shown only `Read`, `Grep`, `Glob`, `Bash`: no `Write`, `Edit`, web or subagent tool exists for it. |
+| 2 | PreToolUse hook `deny_non_readonly_bash` | Runs first. A whitelist: `git diff\|log\|show` and `python -m pytest ... --collect-only` as one plain command; refuses the options that make those write a file (`--output`), run a program or read outside the repo (`--no-index`), shell syntax, unquoted globs and secret-file names. Silent when it has no objection, so it can only tighten. Fails closed. |
+| 3 | `disallowed_tools` deny rules | Evaluated even if the hook failed: writes, web, subagents, every actuation tool by name (a superset of `MCPConfig.actuation_tools`, pinned by a test), and reads of `*.env`, `docker.env*` and credential directories. |
+| 4 | `permission_mode="dontAsk"` | Anything not pre-approved is denied; a headless run has nobody to ask. |
+| 5 | `allowed_tools` | The allowlist: the read tools, the three Bash patterns, and `system_info` / `lidar_diagnostics` / `esp32_diagnostics`. |
+| 6 | MCP config | Only the `mousedroid` server, built from `.mcp.json`; `MOUSEDROID_MOCK_HARDWARE=true` and `MOUSEDROID_MCP__EXPOSE_ACTUATION_TOOLS=false` forced; only `MOUSEDROID_MCP__*` env survives (no rover host, no token); a `${...}` value is refused because it would be expanded from the environment that holds the API key; `strict_mcp_config` so the CLI loads no other server. |
+| 7 | `setting_sources=[]` | No user, project or local settings file can widen any of the above. |
+
+**Spend.** `--cap-usd` is both the amount `charge()` must find headroom for - it raises `CapExceeded`
+before any client is built - and the SDK's `max_budget_usd`. The row's cost is
+`ResultMessage.total_cost_usd`; when that is unknown the run is charged its cap rather than zero.
+The artifact and the ledger row are written whether the run succeeded, failed, timed out or was
+interrupted. `max_turns`, the model alias, the caps and the ledger path live in `.claude/workforce.yaml`.
+
+**Why no `RegexInjectionFilter`.** That filter guards natural language leaving the *rover* toward an
+actuation-bearing translation (CHARTER section 3). The reviewer holds no actuation or write tool,
+runs against a mock-hardware MCP, and a human reads its output before merge; an injection in
+repository text can at worst produce a wrong paragraph in an advisory review. The allowlist is the
+control, not a text filter.
+
+**Not claimed.** `Read` is not confined to the repository (the deny rules are a screen, not a
+sandbox), and `python -m pytest --collect-only` runs the repository's import-time code with the API
+key in the environment. The reviewer is for branches the operator would run.
+
 ## Why this shape
 
 **Hooks carry policy only.** The five primitives (`config`, `paths`, `hookio`,
@@ -189,4 +277,6 @@ scripts on Unix. The AQA gate verifies the helper exists and branches on
 - `docs/runbooks/secret-scanning.md` — the CI-side gitleaks gate (F-015)
 - `docs/architecture/ADR-013-f-number-namespaces.md` — F-number allocation
 - `openspec/changes/mouse-droid-claude-workforce/` — the change bundle and its peer review
+- `tools/agent_reviewer/README.md` — what the Agent-SDK reviewer may touch, what it never does, how to run the first review
+- `tests/unit/tools/test_agent_reviewer.py` — the reviewer's containment pins (allowlist, Bash guard, MCP config, ledger)
 - `tests/regression/test_cross_platform_portability_aqa.py` — portability invariant pins
