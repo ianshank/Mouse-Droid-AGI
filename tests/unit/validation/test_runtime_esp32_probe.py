@@ -107,11 +107,11 @@ async def test_silent_board_is_bounded_by_max_consecutive_timeouts(
 ) -> None:
     fake = _FakeDriver([])
     _install(monkeypatch, fake)
-    result = await collect_esp32_probe(_cfg(max_consecutive_timeouts=3))
+    result = await collect_esp32_probe(_cfg(max_consecutive_timeouts=_POLL_BUDGET))
     assert not result.responded
     assert result.frame_type is None
     assert result.battery_v is None
-    assert fake.calls.count("read") == 3
+    assert fake.calls.count("read") == _POLL_BUDGET
     assert "battery" not in fake.calls  # nothing to read the bus voltage from
     assert fake.calls[-1] == "disconnect"
     assert "no FEEDBACK_BASE_INFO" in result.detail

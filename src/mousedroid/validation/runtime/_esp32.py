@@ -16,7 +16,9 @@ _log = get_logger(__name__)
 
 @dataclass(frozen=True)
 class Esp32ProbeResult:
-    """One poll of the board through the public driver protocol.
+    """Outcome of up to ``esp32.max_consecutive_timeouts`` polls plus one battery read.
+
+    The polls and the read go through the public driver protocol.
 
     Attributes:
         responded: ``True`` when a stock ``FEEDBACK_BASE_INFO`` frame arrived
@@ -48,6 +50,9 @@ async def collect_esp32_probe(cfg: Settings) -> Esp32ProbeResult:
     ``esp32.max_consecutive_timeouts`` polls (the driver's own "link is dead"
     budget) because stock shares one stream across frame types. Legacy has no
     polled frame to witness, so it is refused rather than fabricated.
+
+    ``connect()`` arms the chassis heartbeat (T:136) when ``heartbeat_enabled``;
+    the probe is motion-free but not wire-passive.
 
     A silent or wrong-typed board is an ordinary ``responded=False`` result,
     not an exception. Driver failures from ``connect()`` propagate to the
@@ -109,6 +114,8 @@ async def collect_esp32_probe(cfg: Settings) -> Esp32ProbeResult:
             "esp32_probe_complete",
             responded=False,
             polls=esp32.max_consecutive_timeouts,
+            port=esp32.serial_port,
+            baud=esp32.serial_baud,
             elapsed_s=elapsed,
         )
         return Esp32ProbeResult(False, None, None, elapsed, detail)
