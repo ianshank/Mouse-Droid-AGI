@@ -63,10 +63,14 @@ the old key.
 The cost is `ResultMessage.total_cost_usd` (the CLI's whole-tree figure, subagents included; present on error
 results too). It, and the SDK's `max_budget_usd` that stops the run, are the CLI's client-side estimates, not the
 invoice - and the stop lands after the response that crosses the budget, so a run can end a little over its cap.
-Compare the ledger with the console after the first run. If the cost is missing, or the run died after starting with no result, the row is charged the run cap
-(`cost_source: cap_assumed`) - an over-count is fixed by reading the console, an under-count lets the next run
-overspend. A run that never started costs 0 (`not_started`). A review that looks like it contains a credential
-is **withheld** (status `output_withheld`, no text saved) but still charged.
+Compare the ledger with the console after the first run.
+
+When there is no trustworthy number the row is charged the run cap (`cost_source: cap_assumed`) rather than 0:
+the cost is missing, the run died after starting with no result, or the CLI reports 0 after a session crash (it
+zeroes its cost fields there) or beside token usage (a model missing from its price table). An over-count is
+fixed by reading the console; an under-count lets the next run overspend. A run that never started costs 0
+(`not_started`). A review that looks like it contains a credential is **withheld** (status `output_withheld`,
+no text saved) but still charged.
 
 Exit codes: `0` reviewed and recorded; `1` the review did not succeed, or its ledger row could not be written
 (the row is printed - append it by hand); `2` refused before any spend; `3` the cap would be exceeded; `130`

@@ -1051,6 +1051,29 @@ def test_accounting_charges_the_worst_case_when_the_cost_is_unknown(cost: object
     assert acc.cost_source == "cap_assumed"
 
 
+@pytest.mark.parametrize(
+    "result",
+    [
+        _result(total_cost_usd=0.0, usage={"input_tokens": 5}),
+        _result(total_cost_usd=0.0, model_usage={"claude-a": {"outputTokens": 1}}),
+        _result(total_cost_usd=0.0, subtype="error_during_execution", is_error=True),
+    ],
+)
+def test_accounting_does_not_believe_a_zero_the_evidence_contradicts(
+    result: SimpleNamespace,
+) -> None:
+    """After a crash the CLI zeroes its cost fields; tokens beside a $0 mean it is unknown."""
+    acc = reviewer_ledger.account_run(result, started=True, cap_usd=10.0, error=None)
+    assert (acc.cost_usd, acc.cost_source) == (10.0, "cap_assumed")
+
+
+def test_accounting_believes_a_zero_when_nothing_was_spent() -> None:
+    refused = _result(total_cost_usd=0.0, is_error=True, terminal_reason="api_error")
+    acc = reviewer_ledger.account_run(refused, started=True, cap_usd=10.0, error=None)
+    assert (acc.cost_usd, acc.cost_source) == (0.0, "ResultMessage.total_cost_usd")
+    assert acc.status == "error_api"
+
+
 def test_accounting_charges_nothing_for_a_run_that_never_started() -> None:
     acc = reviewer_ledger.account_run(
         None, started=False, cap_usd=10.0, error=FileNotFoundError("claude")

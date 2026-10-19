@@ -17,10 +17,17 @@ situation                                     cost_usd     cost_source
 ============================================  ===========  =====================
 result with a usable ``total_cost_usd``       that number  ``ResultMessage.total_cost_usd``
 result whose cost is missing / NaN / negative the run cap  ``cap_assumed``
+result reporting 0 after a session crash, or  the run cap  ``cap_assumed``
+with token usage beside it
 no result, the run had started (crash, ^C,    the run cap  ``cap_assumed``
 timeout)
 no result, nothing had started                0.0          ``not_started``
 ============================================  ===========  =====================
+
+A reported 0 is the one number that can silently defeat a cap, so it is believed only
+when nothing contradicts it: the CLI zeroes every cost field after a session crash
+(``error_during_execution``), and a model missing from its price table can report 0 for
+a run that moved tokens. In both cases the 0 means "unknown".
 
 "The run cap" is the ``--cap-usd`` the operator authorised, which is also the SDK's
 ``max_budget_usd``: a run cannot have knowingly spent more than it, so charging it
@@ -58,6 +65,7 @@ STATUS_NO_RESULT: Final = "error:no_result"
 STATUS_OUTPUT_WITHHELD: Final = "output_withheld"
 
 _RESULT_SUCCESS: Final = "success"
+_CRASH_SUBTYPE: Final = "error_during_execution"
 _TERMINAL_API_ERROR: Final = "api_error"
 
 
@@ -149,10 +157,19 @@ def _tokens_of(result: Any | None) -> tuple[int, int, int]:
     return 0, 0, 0
 
 
-def _cost_of(result: Any | None, *, started: bool, cap_usd: float) -> tuple[float, str]:
+def _zero_is_credible(result: Any, tokens: tuple[int, int, int]) -> bool:
+    """Whether a reported cost of 0 can be believed (see the module docstring)."""
+    if getattr(result, "subtype", None) == _CRASH_SUBTYPE:
+        return False
+    return sum(tokens) == 0
+
+
+def _cost_of(
+    result: Any | None, *, started: bool, cap_usd: float, tokens: tuple[int, int, int]
+) -> tuple[float, str]:
     if result is not None:
         reported = _usable_cost(getattr(result, "total_cost_usd", None))
-        if reported is not None:
+        if reported is not None and (reported > 0 or _zero_is_credible(result, tokens)):
             return reported, COST_SOURCE_SDK
         return cap_usd, COST_SOURCE_ASSUMED
     if not started:
@@ -200,8 +217,9 @@ def account_run(
     Returns:
         The cost, where it came from, the token counts and a status.
     """
-    cost_usd, cost_source = _cost_of(result, started=started, cap_usd=cap_usd)
-    input_tokens, output_tokens, cache_read_tokens = _tokens_of(result)
+    tokens = _tokens_of(result)
+    cost_usd, cost_source = _cost_of(result, started=started, cap_usd=cap_usd, tokens=tokens)
+    input_tokens, output_tokens, cache_read_tokens = tokens
     status = _result_status(result) if result is not None else _error_status(error)
     return RunAccounting(
         cost_usd=cost_usd,
