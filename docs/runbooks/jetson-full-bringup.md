@@ -64,6 +64,8 @@ MOUSEDROID_SMOKE_ALLOW_MOTION=1 \
   `rover-firmware-diagnosis` skill + grep the structlog:
   `esp32_raw_line`, `esp32_serial_port_overridden`, `power_chain_probe_complete`, `usbc_endpoint_*`.
 
+> For the stepwise F-008 retest (passive and active probes, esptool sync, reflash decision, dual-gated smoke stages), follow [`esp32-bench-ladder.md`](esp32-bench-ladder.md).
+
 > The two motion gates are distinct: `MOUSEDROID_SMOKE_ALLOW_MOTION=1` arms the **bash** motor stage;
 > `ESP32Config.smoke_test_allow_motion` (via `MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION=true`) arms
 > the **pytest** `test_motor_smoke.py` path.

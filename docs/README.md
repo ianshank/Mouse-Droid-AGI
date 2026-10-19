@@ -36,6 +36,8 @@ Jetson smoke docs of overlapping scope, kept for now — see the note below.)
 - [runbooks/jetson-full-bringup.md](runbooks/jetson-full-bringup.md) — full rover bring-up.
 - [runbooks/jetson-full-validation.md](runbooks/jetson-full-validation.md) — the full validation pipeline.
 - [runbooks/jetson-rover-smoke.md](runbooks/jetson-rover-smoke.md) — USB-C rover smoke test.
+- [runbooks/esp32-bench-ladder.md](runbooks/esp32-bench-ladder.md) — the F-008 ESP32 retest on the bench: signs of life,
+  USB-C and ttyTHS1 probes, esptool sync, hash-pinned reflash decision, dual-gated smoke stages, and the L1–L4 decision tree.
 - [runbooks/jetson-claude-pilot-deploy.md](runbooks/jetson-claude-pilot-deploy.md) — cloud/local LLM pilot deploy.
 - [runbooks/pc-to-jetson-promotion.md](runbooks/pc-to-jetson-promotion.md) — promotion + offline rollback
   (rover-WIP preservation, `--strict-health` gate). Deliberately narrow: it defers to `deployment.md`,
