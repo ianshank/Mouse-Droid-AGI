@@ -101,11 +101,25 @@ and any subprocess launcher (systemd, container ENTRYPOINT).
 |-----------------------|-------------|----------------------------------------------------------|
 | `health_check`        | non-actuation | Always available. Used by clients to confirm liveness.  |
 | `read_encoders`       | read-only   | Returns the latest wheel encoder + odometry snapshot.    |
+| `esp32_diagnostics`   | read-only   | Reports whether the ESP32 answers. Never moves or stops the rover and is NOT in `actuation_tools`, so it stays reachable. See below. |
 | `set_velocity`        | actuation   | Hidden unless `mcp.expose_actuation_tools: true`. Clamped to `cfg.esp32.max_velocity_mps` / `max_omega_rads`. Refused when the safety monitor is in emergency state. |
 | `emergency_stop`      | (special)   | NOT in `actuation_tools` — always callable, even during a safety emergency. |
 | `tensorrt_compile`    | actuation   | Hidden unless `mcp.expose_actuation_tools: true`.        |
 | `calibrate_ultrasonic`| actuation   | Hidden unless `mcp.expose_actuation_tools: true`.        |
 | `export_experience`   | actuation   | Hidden unless `mcp.expose_actuation_tools: true`.        |
+
+### Reading `esp32_diagnostics`
+
+Only `status: ok` is evidence that the board answered; each other status says why it did not.
+
+| `status`       | Meaning |
+|----------------|---------|
+| `unconfigured` | The registry was built without `Settings`, so there was nothing to ask. |
+| `mock`         | `mock_hardware` is on or `esp32.enabled` is `false` (the shipped production overlay): the driver is a mock, so no board was asked. |
+| `ok`           | A stock `FEEDBACK_BASE_INFO` frame arrived. `source` is `live_driver` (read through the orchestrator's own driver, which holds the exclusive serial port and is never reopened) or `probe` (a fresh connect, for a process that holds no port). `battery_v` is the bus voltage, or `null` when the board reported none. |
+| `no_frame`     | `source: live_driver`: no frame within `esp32.max_consecutive_timeouts` polls. |
+| `no_response`  | `source: probe`: the same, after a fresh connect. `detail` names the port and baud. |
+| `error`        | The read or the probe raised, or `esp32.command_set` is not `waveshare_stock` (the legacy dialect has no frame to witness). `detail` is `<Type>: <message>`. A failure is returned, not raised, so a dead board cannot trip the MCP circuit breaker for the other tools. |
 
 To enable actuation tools:
 
