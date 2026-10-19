@@ -155,9 +155,15 @@ The rover ESP32 is currently non-functional. The pass tolerates this:
   overlay is safe-by-default. After a bench repair, lift it with
   `MOUSEDROID_ESP32__ENABLED=true` in `/etc/mousedroid/docker.env` — see the
   probe-first flow in `docs/runbooks/jetson-full-bringup.md`.
-- **Preflight's `esp32` check is construction-only** — it never opens the serial
-  port, so with the driver mocked it reports a vacuous OK. Do **not** read that
-  line as ESP32 health; the real probe is `assert_power_chain` (post-F-008).
+- **Preflight's `esp32` check is a probe, not a construction check** — under
+  `command_set=waveshare_stock` it connects and polls `{"T":130}` for a
+  `FEEDBACK_BASE_INFO` frame. It is OK only when one arrives, and FAIL on
+  silence or a connect error (device node missing or unreadable). Run it cold:
+  the serial driver takes no exclusive lock, so a live container would contend
+  for the frames. `esp32.enabled=false` (this overlay's shipped posture) and
+  the legacy command set report **WARN** (aggregate DEGRADED), never OK
+  (F-059 D-3), so expect a DEGRADED aggregate until the board is enabled on
+  `waveshare_stock`.
 - The board must still **enumerate on USB**: `smoke:usbc` is blocking and
   `usbc_discovery` declares `rover_esp32` as `required: true`, and compose maps
   `${MOUSEDROID_ESP32_DEV:-/dev/ttyUSB0}` as a device. The CP2102N bridge is
