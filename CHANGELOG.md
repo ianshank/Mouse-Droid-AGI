@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Fixed — Smoke motor/power stages test the board, not the mock
+### Fixed — the smoke motor/power stages test the board, not the mock
 
 `config/jetson_production.yaml` ships `esp32.enabled: false`, so the `motor` and `power` stages of
 `scripts/jetson_smoke_test.sh` resolved `MockESP32Driver` and could pass with no board attached
@@ -17,12 +17,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 `esp32_stage_configs_csv` function: the base is `MOUSEDROID_JETSON_CONFIGS`, else
 `MOUSEDROID_JETSON_CONFIG`, else `config/jetson_production.yaml` — the order the Python loaders use —
 and the overlay is appended once. `MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY` selects it: unset uses the
-default file, set-but-empty opts out (for a run with no chassis attached) and any other value is that
-file. The `pytest` stage and the orchestrator's own stack are untouched, so `esp32.enabled` stays
-`false` there until F-008 is done, and the overlay never opens the Pydantic motion gate:
-`esp32.smoke_test_allow_motion` stays `false`, and a regression test pins that the overlay is exactly
-one key. **Operator-visible:** on a dead board these two stages now fail where they used to pass
-against the mock; `scripts/jetson_full_validation.sh` records them as non-blocking warnings.
+default file, set-but-empty is the explicit opt-out for a run with no chassis attached (both stages
+record SKIP and never run pytest) and any other value is that file. The `pytest` stage and the
+orchestrator's own stack are untouched, so `esp32.enabled` stays `false` there until F-008 is done,
+and the overlay never opens the Pydantic motion gate: `esp32.smoke_test_allow_motion` stays `false`,
+and a regression test pins that the overlay is exactly one key.
+
+A clean pytest exit is no longer a pass for either stage: pytest exits 0 when every test skips, and
+an exported `MOUSEDROID_ESP32__ENABLED=false` beats the overlay and makes them skip. `motor` and
+`power` now require their own test to report `PASSED`, and fail with the skip reason when there is
+one. The loopback test (`tests/hardware/test_esp32_loopback.py`) judges an encoder-less chassis
+(`chassis_has_wheel_encoders: false`, the WAVE ROVER) by a `FEEDBACK_BASE_INFO` (T:1001) frame after
+the command, witnessed by `EncoderReading.imu_valid` and polled for up to
+`esp32.max_consecutive_timeouts` reads, not by a wheel velocity the stock firmware merely echoes; a
+silent board fails. A non-zero command needs both motion gates open,
+`MOUSEDROID_SMOKE_ALLOW_MOTION=1` and `esp32.smoke_test_allow_motion`, and never exceeds
+`esp32.smoke_test_velocity_mps`, so `0.0` still locks all smoke motion; the e-stop is sent even when
+the command or a read raises. When pytest exits non-zero the `motor` FAIL line now names the cause,
+and pytest runs with `--color=no` so the `PASSED`/`SKIPPED` greps never meet ANSI codes.
+
+**Operator-visible:** on a dead board `power` now fails where it used to pass against the mock, and
+so does `motor` behind `MOUSEDROID_SMOKE_ALLOW_MOTION=1`. `scripts/jetson_full_validation.sh` forces
+motion off, so there `motor` SKIPs and `power` is the stage that measures the board; its failure is
+recorded as a non-blocking warning.
 
 ### Fixed — the nightly Spec Harness, red every night since 2026-09-08
 
