@@ -79,6 +79,67 @@ time (e.g. PyPI unreachable).
   - `anthropic_gateway_slow` — cloud call exceeded latency_target_ms (tune if noisy).
 - Confirm the 30 Hz loop / telemetry is unaffected throughout (Grafana dashboards).
 
+## Request profile — `llm.anthropic` (F-059 WS-A)
+
+Retargeting `llm.model_name` is not an id swap. Claude Haiku 5.5 and Sonnet 5.5
+answer HTTP 400 to any non-default `temperature`/`top_p`/`top_k`, and Haiku 5.5
+thinks by default (thinking tokens count toward `max_tokens`). A bare swap would
+400, flip the gateway to `_degraded`, and `FallbackLLMGateway` would quietly serve
+Phi-3 while the overlay still said Haiku. The optional `llm.anthropic` block says
+what the new model needs:
+
+```yaml
+llm:
+  model_name: "claude-haiku-5-5"
+  anthropic:
+    omit_sampling_params: true   # default: send no temperature
+    thinking: disabled           # or adaptive; omit to take the model default
+    effort: low                  # low | medium | high; omit for the model default
+```
+
+- **Block absent (the default; both shipped overlays today):** the request is
+  byte-identical to before — `temperature` is sent, nothing else is added.
+- **Block present:** `temperature` is omitted unless `omit_sampling_params: false`;
+  `thinking` / `output_config.effort` are sent only when set. `thinking: disabled`
+  is accepted by Haiku 5.5 at effort `high` or below (the schema stops at `high`)
+  and is a 400 on Sonnet 5.5, which needs `between_tools` instead.
+- **SDK version:** the gateway asks the *installed* `anthropic` what
+  `messages.create` takes. `anthropic>=1.0` removed the `temperature` keyword
+  (passing it is a `TypeError` before any request is made, i.e. a silent fall
+  back to Phi-3), so the legacy temperature is forwarded through `extra_body`; an
+  SDK without `output_config` is sent no `effort` (one
+  `anthropic_effort_unsupported_by_sdk` warning). `Dockerfile.jetson` installs
+  `anthropic>=0.40`, which resolves to 1.x on a rebuild; the rover-validated
+  hot-install above is `0.105.2`.
+- **Env:** `MOUSEDROID_LLM__ANTHROPIC__THINKING=disabled` sets one key;
+  `MOUSEDROID_LLM__ANTHROPIC=null` removes the block (the "before" half of a
+  paired probe run, with `MOUSEDROID_LLM__MODEL_NAME=claude-haiku-4-5`).
+
+**The overlay retarget lands with the probe evidence**, not before. The probe
+builds the same cloud + Phi-3 composite as the rover, so it loads a second Phi-3
+copy (see finding 5 below: pass the production config, mind iGPU/RAM contention).
+The block can be exercised without touching any overlay, using env alone (which
+also keeps the `config-compat` gate out of the way until the retarget PR):
+`MOUSEDROID_LLM__MODEL_NAME=claude-haiku-5-5 MOUSEDROID_LLM__ANTHROPIC__THINKING=disabled`.
+On the Jetson:
+
+```bash
+docker exec mousedroid python3 /opt/mousedroid/tools/llm_latency_probe.py \
+    --config /etc/mousedroid/jetson_production.yaml --iterations 20 \
+    --report-json /opt/mousedroid/reports/llm_latency/<date>/haiku-5-5.json
+```
+
+The report records `model_requested`, `model_resolved` (via `client.models.retrieve`),
+`served` and p50/p95/p99. `served` is `primary` only when the cloud tier answered
+**every** iteration; a run a fallback answered reads `fallback`, `passed: false`, and
+exits `4` — the latency of Phi-3 is not evidence about Haiku. Retarget the overlays
+only after `served: primary` with p95 under `latency_target_ms`, then record the run
+with `tools/credit_ledger.py` (caps live in `.claude/workforce.yaml` under `credit:`;
+`python -m tools.credit_ledger status`, run from the repo root, prints spend against
+them). The overlays carry an `anthropic:` key only from the retarget PR on; the
+deployed image's schema rejects unknown keys, so that PR also bumps
+`deployments/jetson-image.json` to a trunk SHA that has `AnthropicRequestConfig`.
+
 ## Rollback
 1. Restore `/etc/mousedroid/jetson_production.yaml` from the validated `.bak.<ts>`.
 2. `git -C /opt/mousedroid checkout <recorded-prior-branch>`.
