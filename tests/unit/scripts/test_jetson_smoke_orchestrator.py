@@ -400,3 +400,52 @@ def test_multi_config_csv_does_not_break_system_subcommand(tmp_path: Path) -> No
     assert "Smoke Test Summary" in result.stdout
     assert "SKIP: torch.cuda.is_available" in result.stdout
     assert result.returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# F-059: the motor/power stages stack the bench ESP32 overlay
+# ---------------------------------------------------------------------------
+
+_STUB_PYTHON = """#!/usr/bin/env bash
+if [[ "$1" == "-m" && "$2" == "pytest" && "$3" == "--version" ]]; then echo "pytest 0"; exit 0; fi
+printf '%s\\n' "${MOUSEDROID_JETSON_CONFIGS:-}" >> "${SMOKE_STUB_CAPTURE}"
+echo "tests/hardware/test_esp32_loopback.py::test_send_velocity_moves_encoders PASSED"
+echo "tests/hardware/test_esp32_loopback.py::test_emergency_stop_latency PASSED"
+"""
+_BENCH = f"{_REPO_ROOT}/config/jetson_bench_esp32.yaml"
+_PROD = f"{_REPO_ROOT}/config/jetson_production.yaml"
+
+
+@_BASH_AVAILABLE
+@pytest.mark.parametrize(
+    ("given", "extra", "expected"),
+    [
+        ("", {}, f"{_PROD},{_BENCH}"),
+        (
+            "/etc/mousedroid/a.yaml,/etc/mousedroid/b.yaml",
+            {},
+            f"/etc/mousedroid/a.yaml,/etc/mousedroid/b.yaml,{_BENCH}",
+        ),
+        (f"{_PROD},{_BENCH}", {}, f"{_PROD},{_BENCH}"),  # no double append
+        (_PROD, {"MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY": ""}, _PROD),  # set-but-empty opts out
+    ],
+)
+def test_motor_stage_stacks_the_bench_esp32_overlay(
+    tmp_path: Path, given: str, extra: dict[str, str], expected: str
+) -> None:
+    stub = tmp_path / "python"
+    stub.write_text(_STUB_PYTHON, encoding="utf-8")
+    stub.chmod(0o755)
+    capture = tmp_path / "configs.txt"
+    result = _run_smoke(
+        "motor",
+        env_extra={
+            "MOUSEDROID_SMOKE_PYTHON": str(stub),
+            "SMOKE_STUB_CAPTURE": str(capture),
+            "MOUSEDROID_SMOKE_ALLOW_MOTION": "1",
+            "MOUSEDROID_JETSON_CONFIGS": given,
+            **extra,
+        },
+    )
+    assert "PASS: motor loopback smoke" in result.stdout, result.stdout
+    assert capture.read_text(encoding="utf-8").splitlines() == [expected]

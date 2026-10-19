@@ -16,6 +16,19 @@
 #   bash scripts/jetson_smoke_test.sh app           # Run only application health check
 #   bash scripts/jetson_smoke_test.sh pytest        # Run only hardware pytest suite
 #   bash scripts/jetson_smoke_test.sh e2e           # Run only E2E 5-second run
+#
+# Environment:
+#   MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY   (F-059) YAML stacked AFTER the config
+#       stack for the `motor` and `power` stages ONLY. Those stages must talk to
+#       the ESP32, but jetson_production.yaml ships esp32.enabled: false (the
+#       factory then builds MockESP32Driver), so without the overlay they would
+#       measure a mock. The orchestrator's own stack is untouched.
+#         unset       -> <repo>/config/jetson_bench_esp32.yaml
+#         set, empty  -> no stacking (the no-chassis checkpoint uses this)
+#         <path>      -> that file
+#       The `pytest` stage never stacks it: the whole hardware suite stays on the
+#       orchestrator's stack, because enabling the board there would open the
+#       serial port for every module.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -43,6 +56,22 @@ if [[ -n "${CONFIGS_CSV}" ]]; then
         fi
     done
 fi
+
+# F-059: unset -> repo default overlay; set-but-empty -> no stacking (opt-out
+# for the no-chassis checkpoint); otherwise that file.
+BENCH_ESP32_OVERLAY="${MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY-${PROJECT_DIR}/config/jetson_bench_esp32.yaml}"
+
+# Prints the config CSV the ESP32-owned stages (motor, power) pass as
+# MOUSEDROID_JETSON_CONFIGS: the orchestrator's stack with the bench overlay
+# appended once. printf '%s' (no newline) so $(...) captures it exactly.
+esp32_stage_configs_csv() {
+    local base="${CONFIGS_CSV:-${PROJECT_DIR}/config/jetson_production.yaml}"
+    if [[ -z "${BENCH_ESP32_OVERLAY}" ]]; then printf '%s' "${base}"; return; fi
+    case ",${base}," in
+        *",${BENCH_ESP32_OVERLAY},"*) printf '%s' "${base}" ;;
+        *) printf '%s,%s' "${base}" "${BENCH_ESP32_OVERLAY}" ;;
+    esac
+}
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -488,12 +517,16 @@ test_motor() {
         return
     fi
 
+    local esp32_configs
+    esp32_configs="$(esp32_stage_configs_csv)"
+    log_step "ESP32 stage config stack: ${esp32_configs}"
+
     local pytest_output
-    if pytest_output="$(MOUSEDROID_JETSON_CONFIGS="${CONFIGS_CSV}" MOUSEDROID_MOCK_HARDWARE=false "${PYTHON}" -m pytest -m hardware -ra -v "${test_file}" 2>&1)"; then
+    if pytest_output="$(MOUSEDROID_JETSON_CONFIGS="${esp32_configs}" MOUSEDROID_MOCK_HARDWARE=false "${PYTHON}" -m pytest -m hardware -ra -v "${test_file}" 2>&1)"; then
         echo "${pytest_output}"
         if ! echo "${pytest_output}" | grep -q "test_send_velocity_moves_encoders PASSED"; then
             local motor_reason
-            motor_reason="$(echo "${pytest_output}" | grep -m1 "encoder loopback inactive" | sed 's/^.*encoder loopback inactive/encoder loopback inactive/' || true)"
+            motor_reason="$(echo "${pytest_output}" | grep -m1 -E "encoder loopback inactive|esp32.enabled=false|no FEEDBACK_BASE_INFO|serial device .* not found" | sed 's/^.*encoder loopback inactive/encoder loopback inactive/' || true)"
             if [[ -n "${motor_reason}" ]]; then
                 record_fail "motor loopback smoke" "${motor_reason}"
             else
@@ -532,8 +565,12 @@ test_power() {
         return
     fi
 
+    local esp32_configs
+    esp32_configs="$(esp32_stage_configs_csv)"
+    log_step "ESP32 stage config stack: ${esp32_configs}"
+
     local pytest_output
-    if pytest_output="$(MOUSEDROID_JETSON_CONFIGS="${CONFIGS_CSV}" MOUSEDROID_MOCK_HARDWARE=false \
+    if pytest_output="$(MOUSEDROID_JETSON_CONFIGS="${esp32_configs}" MOUSEDROID_MOCK_HARDWARE=false \
             "${PYTHON}" -m pytest -m hardware -ra -v "${test_file}" 2>&1)"; then
         echo "${pytest_output}"
         record_pass "power chain smoke"

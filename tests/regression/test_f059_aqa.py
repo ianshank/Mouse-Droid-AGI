@@ -8,7 +8,12 @@ from pathlib import Path
 import pytest
 import yaml
 
+from mousedroid.config.loader import load_settings
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+_CONFIG_DIR = _REPO_ROOT / "config"
+_PROD = _CONFIG_DIR / "jetson_production.yaml"
+_BENCH = _CONFIG_DIR / "jetson_bench_esp32.yaml"
 
 
 def _features() -> dict[str, dict]:
@@ -49,3 +54,20 @@ def test_select_next_returns_f059_while_it_is_in_progress() -> None:
     sel = spec.select_next(feats)
     assert sel.feature is not None, sel
     assert sel.feature["id"] == "F-059", sel
+
+
+def test_bench_overlay_flips_exactly_esp32_enabled_on_top_of_production() -> None:
+    """R3-2 / EX-1: one key, stacked after production; nothing else moves."""
+    prod = load_settings(_PROD, config_dir=_CONFIG_DIR)
+    bench = load_settings(_PROD, _BENCH, config_dir=_CONFIG_DIR)
+    assert prod.esp32.enabled is False
+    assert bench.esp32.enabled is True
+    assert bench.esp32.model_copy(update={"enabled": False}) == prod.esp32
+    assert bench.safety == prod.safety
+    assert yaml.safe_load(_BENCH.read_text(encoding="utf-8")) == {"esp32": {"enabled": True}}
+
+
+def test_bench_overlay_leaves_the_motion_gate_closed() -> None:
+    """Review focus 2: enabling the board never opens the Pydantic motion gate."""
+    bench = load_settings(_PROD, _BENCH, config_dir=_CONFIG_DIR)
+    assert bench.esp32.smoke_test_allow_motion is False
