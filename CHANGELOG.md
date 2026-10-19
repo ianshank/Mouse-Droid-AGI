@@ -36,6 +36,35 @@ the credit workstreams: `charge(ws, estimate_usd)` raises `CapExceeded` before a
 `record(entry)` appends one JSON line per run, and the caps come from the new `credit:` block of
 `.claude/workforce.yaml` (A 10 / B 60 / C 15 USD) — an unconfigured workstream cannot spend.
 
+### Added — a Batch-API triage of the vulture findings, priced from the workforce config before it spends (F-059 WS-C)
+
+`scripts/dead_code_audit.py` lists what `vulture` found no caller for (433 findings on this tree),
+and in a Protocol- and DI-heavy codebase most of them are alive: a method called through a
+`@runtime_checkable` Protocol, a pydantic validator, a factory hook. `tools/dead_code_triage_batch.py`
+sorts them into `keep` / `delete` / `verify` with the Message Batches API, one request per package
+(44 requests for those 433, estimated at about $1.3 against the $15 workstream cap), and writes a
+ranked document: `delete` rows by vulture confidence, then `verify`, then `keep`, under a header that
+records the audit JSON's sha256 and the vulture version. It deletes nothing and edits nothing under
+`src/`: a `delete` row is a candidate that a later PR must still prove with `prove-pin-fails`.
+
+`submit` builds every request offline and prices the batch from the new `credit.prices` block
+(Sonnet 5.5, batch rate) before it calls anything. It refuses (`CapExceeded`) when the estimate passes
+`--cap-usd` or the workstream's cap, counting batches already submitted but not yet collected, and it
+creates the batch once with the SDK's automatic retry off, because a retried create would be a second
+batch. A file name matching `credit.batch_triage.refuse_globs` (`*.env`, `docker.env*`, ...), a path
+outside the repository, and any excerpt shaped like a credential are refused before a request is built.
+`collect` waits for `processing_status == "ended"`, joins results to requests by `custom_id` and never
+by position, validates every answer against the same schema it asked for, turns anything it cannot
+trust into `verify` with the reason, and appends one ledger row with the real token usage, once. Run it
+only after the API key is rotated; the procedure is the tool's module docstring, and the key is read
+from the environment by the SDK, with no flag for it.
+
+`.claude/workforce.yaml` gains `credit.prices` and `credit.batch_triage` (both defaulted, so an older
+file still loads; an unpriced model cannot be submitted). `vulture-audit`'s advisory window is extended
+from 90 to 180 days (`since` unchanged) with the reason that the triage document is the decision input
+for "strict on a curated allowlist"; `scripts/check_advisory_promotions.py` had reported it overdue
+(108 d / 90 d). `test-windows` is left alone: that decision is the operator's.
+
 ### Fixed — the nightly Spec Harness, red every night since 2026-09-08
 
 `validate-slow` runs `--strict-git`, which needs every `done` feature's `implemented_in` to resolve.

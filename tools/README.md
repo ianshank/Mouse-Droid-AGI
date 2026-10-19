@@ -16,6 +16,11 @@ Probes and dev utilities (not shipped in the runtime path):
 - `credit_ledger.py` — F-059 credit workstreams: `charge(ws, estimate_usd)` refuses an API call before it is
   made when the workstream's recorded spend would pass its cap, `record(entry)` appends one JSON line per run;
   caps and the ledger path come from `credit:` in `.claude/workforce.yaml`
+- `dead_code_triage_batch.py` — F-059 WS-C: sorts the `scripts/dead_code_audit.py` findings into keep / delete /
+  verify with the Message Batches API, one request per package. `submit` prices the batch from `credit.prices`
+  and refuses over a cap before any call; `collect` joins results by `custom_id`, writes
+  `docs/analysis/dead-code-triage-<date>.md` and records the real cost in the ledger once. It deletes nothing;
+  the procedure is the module docstring (`python -m tools.dead_code_triage_batch submit --dry-run ...` first)
 - `spikes/` — throwaway investigation spikes
 
 `tools/` is inside the `ruff` lint + format scope — in `pyproject.toml`, in
