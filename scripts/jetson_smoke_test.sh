@@ -577,6 +577,15 @@ test_power() {
     if pytest_output="$(MOUSEDROID_JETSON_CONFIGS="${esp32_configs}" MOUSEDROID_MOCK_HARDWARE=false \
             "${PYTHON}" -m pytest -m hardware -ra -v "${test_file}" 2>&1)"; then
         echo "${pytest_output}"
+        # pytest exits 0 when every test skips (esp32.enabled=false routes to the mock, so the
+        # test skips with its remedy), so a clean exit is not a measurement: the test itself
+        # must have PASSED, exactly as the motor stage requires of its own test.
+        if ! echo "${pytest_output}" | grep -q "test_power_chain_within_budget PASSED"; then
+            local power_reason
+            power_reason="$(echo "${pytest_output}" | grep -m1 -E "^SKIPPED \[" | sed -E 's/^SKIPPED \[[0-9]+\] [^ ]+: //' || true)"
+            record_fail "power chain smoke" "${power_reason:-power chain test did not pass}"
+            return
+        fi
         record_pass "power chain smoke"
     else
         echo "${pytest_output}"

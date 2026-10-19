@@ -114,8 +114,11 @@ def test_motor_stage_runs_the_loopback_module_and_greps_its_test_name() -> None:
     assert 'test_file="${PROJECT_DIR}/tests/hardware/test_esp32_loopback.py"' in body
     assert 'grep -q "test_send_velocity_moves_encoders PASSED"' in body
     assert "esp32_stage_configs_csv" in body
-    # The power stage shares the overlay wiring; its behavioural test alone left it unpinned.
-    assert "esp32_stage_configs_csv" in _bash_function(text, "test_power")
+    # The power stage shares the overlay wiring, and must see its own test PASS: pytest exits 0
+    # when every test skips (e.g. under esp32.enabled=false), so a bare exit status proves nothing.
+    power = _bash_function(text, "test_power")
+    assert "esp32_stage_configs_csv" in power
+    assert 'grep -q "test_power_chain_within_budget PASSED"' in power
 
 
 def test_loopback_motion_tests_branch_on_the_encoder_flag_and_the_motion_gate() -> None:

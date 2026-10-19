@@ -406,13 +406,16 @@ def test_multi_config_csv_does_not_break_system_subcommand(tmp_path: Path) -> No
 # F-059: the motor/power stages stack the bench ESP32 overlay
 # ---------------------------------------------------------------------------
 
-# One stub serves both stages: test_motor greps the two PASSED lines, test_power only
-# checks pytest's exit status, and the stub exits 0.
+# One stub serves both stages, and each stage greps the output for the PASSED line of its own
+# test(s): a bare exit 0 proves nothing, because pytest exits 0 when every test skips. The power
+# test's output can be replaced (SMOKE_STUB_POWER_OUTPUT) to script a skip; unset, it passes.
 _STUB_PYTHON = """#!/usr/bin/env bash
 if [[ "$1" == "-m" && "$2" == "pytest" && "$3" == "--version" ]]; then echo "pytest 0"; exit 0; fi
 printf '%s\\n' "${MOUSEDROID_JETSON_CONFIGS:-}" >> "${SMOKE_STUB_CAPTURE}"
 echo "tests/hardware/test_esp32_loopback.py::test_send_velocity_moves_encoders PASSED"
 echo "tests/hardware/test_esp32_loopback.py::test_emergency_stop_latency PASSED"
+power_passed="tests/hardware/test_power_chain_smoke.py::test_power_chain_within_budget PASSED"
+echo "${SMOKE_STUB_POWER_OUTPUT-${power_passed}}"
 """
 _BENCH = f"{_REPO_ROOT}/config/jetson_bench_esp32.yaml"
 _PROD = f"{_REPO_ROOT}/config/jetson_production.yaml"
@@ -496,3 +499,49 @@ def test_esp32_stages_stack_the_bench_overlay(
     )
     assert pass_line in result.stdout, result.stdout
     assert capture.read_text(encoding="utf-8").splitlines() == [expected]
+
+
+# What `pytest -ra -v` prints for the power test when it skips: the run still exits 0.
+_POWER_SKIP_REASON = (
+    "esp32.enabled=false routes to MockESP32Driver; "
+    "stack config/jetson_bench_esp32.yaml to probe the board"
+)
+_POWER_SKIPPED_OUTPUT = (
+    "tests/hardware/test_power_chain_smoke.py::test_power_chain_within_budget SKIPPED [100%]\n"
+    f"SKIPPED [1] tests/hardware/test_power_chain_smoke.py:21: {_POWER_SKIP_REASON}\n"
+    "1 skipped in 0.01s"
+)
+
+
+@_BASH_AVAILABLE
+@pytest.mark.parametrize(
+    ("power_output", "reason"),
+    [
+        (_POWER_SKIPPED_OUTPUT, _POWER_SKIP_REASON),
+        ("1 deselected in 0.01s", "power chain test did not pass"),
+    ],
+    ids=["skipped", "neither-passed-nor-skipped"],
+)
+def test_power_stage_fails_unless_its_test_passes(
+    tmp_path: Path, power_output: str, reason: str
+) -> None:
+    """A clean pytest exit is not a measurement: the power stage needs its test to PASS (R3-2).
+
+    pytest exits 0 when every test skips, and an exported MOUSEDROID_ESP32__ENABLED=false beats
+    the bench overlay, so the power test skips with its remedy. The stage must not record PASS:
+    it records FAIL and carries the skip reason (or a generic one) into the line.
+    """
+    stub = tmp_path / "python"
+    stub.write_text(_STUB_PYTHON, encoding="utf-8")
+    stub.chmod(0o755)
+    result = _run_smoke(
+        "power",
+        env_extra={
+            "MOUSEDROID_SMOKE_PYTHON": str(stub),
+            "SMOKE_STUB_CAPTURE": str(tmp_path / "configs.txt"),
+            "SMOKE_STUB_POWER_OUTPUT": power_output,
+        },
+    )
+    assert f"FAIL: power chain smoke {reason}" in result.stdout, result.stdout
+    assert "PASS: power chain smoke" not in result.stdout, result.stdout
+    assert result.returncode == 1, result.stdout
