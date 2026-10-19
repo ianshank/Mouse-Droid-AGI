@@ -21,6 +21,7 @@ import re
 import subprocess
 import sys
 import types
+import typing
 from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -2349,6 +2350,42 @@ def test_requests_use_only_parameters_the_installed_sdk_declares(repo: Path) -> 
         assert {"max_tokens", "messages", "model"} <= set(params)
         assert set(params) <= declared, set(params) - declared
         assert set(params["output_config"]) <= set(OutputConfigParam.__annotations__)
+
+
+def _literal_values(annotation: Any) -> set[Any]:
+    """Every value of every ``Literal`` inside ``annotation`` (through ``Optional`` / ``Union``)."""
+    if typing.get_origin(annotation) is typing.Literal:
+        return set(typing.get_args(annotation))
+    found: set[Any] = set()
+    for arg in typing.get_args(annotation):
+        found |= _literal_values(arg)
+    return found
+
+
+def test_the_effort_and_thinking_modes_the_config_allows_exist_in_the_sdk(repo: Path) -> None:
+    _real_sdk()
+    from anthropic.types.output_config_param import OutputConfigParam
+    from anthropic.types.thinking_config_adaptive_param import ThinkingConfigAdaptiveParam
+    from anthropic.types.thinking_config_between_tools_param import (
+        ThinkingConfigBetweenToolsParam,
+    )
+
+    sdk_efforts = _literal_values(typing.get_type_hints(OutputConfigParam)["effort"])
+    config_efforts = _literal_values(BatchTriageConfig.model_fields["effort"].annotation)
+    assert config_efforts <= sdk_efforts
+
+    sdk_modes = {
+        _literal_values(typing.get_type_hints(cls)["type"]).pop()
+        for cls in (ThinkingConfigAdaptiveParam, ThinkingConfigBetweenToolsParam)
+    }
+    config_modes = _literal_values(BatchTriageConfig.model_fields["thinking"].annotation)
+    assert config_modes == sdk_modes
+
+    finding = _finding(f"{_SRC}/beta/engine.py", 20, "value_20", "variable")
+    for mode in sorted(config_modes):
+        settings = BatchTriageConfig(thinking=mode)
+        request = triage.build_request(f"{_SRC}/beta", [finding], repo, settings=settings)
+        assert request["params"]["thinking"] == {"type": mode}
 
 
 def test_the_sdk_puts_the_structured_output_request_on_the_wire(repo: Path) -> None:
