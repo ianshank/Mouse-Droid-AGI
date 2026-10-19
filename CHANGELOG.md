@@ -16,8 +16,9 @@ against. The new record `deployments/esp32-firmware.json` pins the four factory 
 partitions, `boot_app0` and the `General_Driver` app (sha256 `ebedf216…`) — by size and hash, with
 their flash offsets and the 115200 connect baud. `scripts/flash_esp32.sh` now verifies size and
 sha256 of every part before any `esptool.py` call, dry-runs by default, and writes only with
-`--write`. `scripts/jetson_qspi_update.sh` is removed: an unconditional `reboot` made half of it
-unreachable, and nothing referenced it.
+`--write`; its command line changed from positional `<port> <firmware.bin>` to flags (`--port`,
+`--bin-dir`, `--record`, `--baud`). `scripts/jetson_qspi_update.sh` is removed: an unconditional
+`reboot` made half of it unreachable, and nothing referenced it.
 
 ### Fixed — the nightly Spec Harness, red every night since 2026-09-08
 

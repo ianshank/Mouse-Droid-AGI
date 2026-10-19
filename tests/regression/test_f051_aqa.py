@@ -288,13 +288,14 @@ def test_the_deploy_record_carries_the_model_digest_and_provider_fields() -> Non
 
 
 def test_no_parallel_deploy_manifest_was_introduced() -> None:
-    """``deployments/`` holds one record per platform artifact and nothing else.
+    """``deployments/`` is a two-name allow-list: ``esp32-firmware.json`` and ``jetson-image.json``.
 
-    ``jetson-image.json`` pins the container image and ``esp32-firmware.json``
-    pins the stock ESP32 image set. A second manifest *format* is what the spec
-    forbids, and a third file would be one. ``check_config_compat.py``,
-    ``repin_tags.sh`` and ``archive_stale_branches.sh`` read ``jetson-image.json``
-    by name, so the ESP32 record is invisible to them.
+    Each name pins one platform artifact (the stock ESP32 image set, the Jetson container image),
+    so the directory holds one record per platform and nothing else. A third file, or a second
+    format for either record, is the parallel manifest the spec forbids; supporting another
+    platform means adding its name to this list on purpose. ``check_config_compat.py``,
+    ``repin_tags.sh`` and ``archive_stale_branches.sh`` read ``jetson-image.json`` by name, so the
+    ESP32 record is invisible to them.
     """
     manifests = sorted(p.name for p in (_REPO_ROOT / "deployments").glob("*"))
     assert manifests == ["esp32-firmware.json", "jetson-image.json"], (

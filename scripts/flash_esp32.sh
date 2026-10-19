@@ -6,25 +6,28 @@
 # written without --write. Afterwards send {"T":900,"main":2,"module":2} once.
 #
 # Usage: bash scripts/flash_esp32.sh --port /dev/ttyUSB0 [--bin-dir firmware]
-#        [--record deployments/esp32-firmware.json] [--baud 115200] [--write]
+#        [--record deployments/esp32-firmware.json] [--baud 115200] [--write | --dry-run]
+#        --dry-run (the default) always wins over --write, in either order.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "${SCRIPT_DIR}")"
 PORT=""; BIN_DIR="${PROJECT_DIR}/firmware"
-RECORD="${PROJECT_DIR}/deployments/esp32-firmware.json"; BAUD=""; WRITE=0
+RECORD="${PROJECT_DIR}/deployments/esp32-firmware.json"; BAUD=""; WRITE=0; DRY_RUN_SEEN=0
 die() { echo "ERROR: $*" >&2; exit 1; }
+need_value() { [[ $# -ge 2 ]] || die "$1 needs a value"; }
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --port)    PORT="$2"; shift 2 ;;
-        --bin-dir) BIN_DIR="$2"; shift 2 ;;
-        --record)  RECORD="$2"; shift 2 ;;
-        --baud)    BAUD="$2"; shift 2 ;;
+        --port)    need_value "$@"; PORT="$2"; shift 2 ;;
+        --bin-dir) need_value "$@"; BIN_DIR="$2"; shift 2 ;;
+        --record)  need_value "$@"; RECORD="$2"; shift 2 ;;
+        --baud)    need_value "$@"; BAUD="$2"; shift 2 ;;
         --write)   WRITE=1; shift ;;
-        --dry-run) WRITE=0; shift ;;
-        --help|-h) sed -n '2,9p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --dry-run) DRY_RUN_SEEN=1; shift ;;
+        --help|-h) sed -n '2,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) die "unknown argument: $1" ;;
     esac
 done
+if [[ "${DRY_RUN_SEEN}" -eq 1 ]]; then WRITE=0; fi
 [[ -n "${PORT}" ]] || die "--port is required (e.g. /dev/ttyUSB0)"
 [[ -f "${RECORD}" ]] || die "firmware record not found: ${RECORD}"
 [[ -d "${BIN_DIR}" ]] || die "firmware directory not found: ${BIN_DIR}"
@@ -34,7 +37,7 @@ PY_BIN="${MOUSEDROID_PYTHON:-}"
 sha256_of() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi; }
 RECORD_BAUD="$("${PY_BIN}" -c 'import json,sys;print(int(json.load(open(sys.argv[1],encoding="utf-8"))["connect_baud"]))' "${RECORD}")" || die "could not read connect_baud"
 BAUD="${BAUD:-${RECORD_BAUD}}"
-mapfile -t PARTS < <("${PY_BIN}" - "${RECORD}" <<'PY'
+PARTS_TXT="$("${PY_BIN}" - "${RECORD}" <<'PY'
 import json, re, sys
 parts = json.load(open(sys.argv[1], encoding="utf-8"))["parts"]
 if len(parts) != 4:
@@ -45,7 +48,9 @@ for p in parts:
     if "/" in p["file"] or p["file"] in ("", ".", ".."): sys.exit(f"bad file name {p['file']!r}")
     print(p["offset"], p["file"], p["sha256"], int(p["size"]))
 PY
-) || die "could not read parts from ${RECORD}"
+)" || die "could not read parts from ${RECORD}"
+PARTS=()
+while IFS= read -r line; do PARTS+=("${line}"); done <<< "${PARTS_TXT}"
 [[ ${#PARTS[@]} -eq 4 ]] || die "expected 4 parts from ${RECORD}, got ${#PARTS[@]}"
 ARGS=()
 for line in "${PARTS[@]}"; do
@@ -59,6 +64,7 @@ for line in "${PARTS[@]}"; do
     echo "verified ${file} @ ${offset} sha256=${expected}"
     ARGS+=("${offset}" "${path}")
 done
+# Factory flags: the esptool block of the record documents them and a unit test pins the two.
 COMMON=(esptool.py --chip esp32 --port "${PORT}" --baud "${BAUD}" --before default_reset --after no_reset)
 WRITE_CMD=("${COMMON[@]}" write_flash --flash_mode keep --flash_freq keep --flash_size keep --compress "${ARGS[@]}")
 VERIFY_CMD=("${COMMON[@]}" verify_flash "${ARGS[@]}")
