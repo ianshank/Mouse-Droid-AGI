@@ -127,6 +127,7 @@ from mousedroid.config.schema.learning import (
     OnDeviceLearningConfig,
 )
 from mousedroid.config.schema.llm import (
+    AnthropicRequestConfig,
     LLMConfig,
     LLMReplannerConfig,
     MissionConfig,
@@ -213,6 +214,7 @@ __all__ = [
     "DEFAULT_UCB_CANDIDATES",
     "DEFAULT_UCB_TARGET_MS",
     "WAVESHARE_STOCK_BAUD",
+    "AnthropicRequestConfig",
     "Any",
     "ArmConfig",
     "ArmCurriculumConfig",
