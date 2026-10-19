@@ -15,7 +15,8 @@ Pinned:
 * **``scripts/deploy_remote.sh``** — the three modes, the host-resolution order
   and the remote path defaults are untouched; the newly env-overridable
   ``REMOTE_SRC`` / ``REMOTE_CONFIG`` keep their previous literal values as
-  defaults.
+  defaults. One deliberate reversal since: ``REMOTE_SRC`` now defaults to the
+  rover's checkout root (F-059 2.4b, pinned below).
 * **No new YAML key** — every shipped ``config/*.yaml`` still loads, none gains
   a ``world_model:`` block (design D-7) and none gains a
   ``jetson.tensorrt_cache_dir`` override: the cache directory is a schema
@@ -160,9 +161,18 @@ def test_docker_deploy_still_rejects_an_unknown_flag() -> None:
 
 
 def test_remote_path_defaults_are_the_previous_literals() -> None:
-    """The paths became env-overridable; their values did not change."""
+    """The paths became env-overridable; their values did not change -- except one.
+
+    REVERSAL (F-059 2.4b): the old ``REMOTE_SRC`` literal nested the repo under the package
+    parent and ``--delete``d ``/opt/mousedroid/src/mousedroid/`` on a clean rover (peer-review
+    R3-3). It is now the checkout root, which is also what the compose bind mount and both
+    systemd units run from. ``REMOTE_CONFIG`` and ``REMOTE_USER`` keep their previous literals.
+    """
     text = _DEPLOY_REMOTE.read_text(encoding="utf-8")
-    assert 'REMOTE_SRC="${MOUSEDROID_REMOTE_SRC:-/opt/mousedroid/src}"' in text
+    assert 'REMOTE_SRC="${MOUSEDROID_REMOTE_SRC:-/opt/mousedroid}"' in text
+    assert "MOUSEDROID_REMOTE_SRC:-/opt/mousedroid/src}" not in text, (
+        "the old default must not survive as a fallback anywhere in the script"
+    )
     assert 'REMOTE_CONFIG="${MOUSEDROID_CONFIG_DIR:-/etc/mousedroid}"' in text
     assert 'REMOTE_USER="${MOUSEDROID_REMOTE_USER:-jetson}"' in text
 

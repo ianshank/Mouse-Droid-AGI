@@ -6,6 +6,16 @@
 #                                     [--confirm-dirty]
 #        bash scripts/deploy_remote.sh --print-rsync-args
 #
+# Modes:
+#   --code-only    (default) Sync the repo to the rover's checkout root, reinstall the
+#                  package, then restart the Docker unit (and the bare-metal one, if that
+#                  is enabled). It does NOT rebuild the image: a dependency change needs
+#                  'docker compose build' on the rover.
+#   --config-only  Install config/*.yaml and restart. Refuses a remote tree that predates the
+#                  battery plausibility floor (F-025): deploy code first, config second.
+#   --full         The bare-metal venv path: it runs deploy_jetson.sh WITHOUT --container.
+#                  Do not run it against the Docker-spine rover.
+#
 # Host resolution order:
 #   1. First positional argument
 #   2. ~/.mousedroid/jetson_host file
@@ -19,8 +29,9 @@
 #
 # Environment variables (all optional):
 #   MOUSEDROID_REMOTE_USER            SSH user (default: jetson)
-#   MOUSEDROID_REMOTE_SRC             Rsync destination on the rover
-#                                     (default: /opt/mousedroid/src)
+#   MOUSEDROID_REMOTE_SRC             Rsync destination on the rover: the repo root, the
+#                                     checkout the compose bind mount and both systemd units
+#                                     run from (default: /opt/mousedroid)
 #   MOUSEDROID_CONFIG_DIR             Remote config dir (default: /etc/mousedroid)
 #   MOUSEDROID_DEPLOY_CONFIRM_DIRTY   1/true = same as --confirm-dirty
 #   MOUSEDROID_DEPLOY_ARCHIVE_DIR     Where rover WIP archives land on THIS
@@ -33,10 +44,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "${SCRIPT_DIR}")"
 REMOTE_USER="${MOUSEDROID_REMOTE_USER:-jetson}"
 # Env-overridable, same idiom as docker_deploy.sh's MOUSEDROID_INSTALL_DIR /
-# MOUSEDROID_CONFIG_DIR. Defaults are unchanged; making them knobs is what lets
-# the WIP guard below be exercised against a throwaway checkout in
+# MOUSEDROID_CONFIG_DIR. Making them knobs is what lets the WIP guard below be
+# exercised against a throwaway checkout in
 # tests/unit/scripts/test_deploy_remote_guard.py instead of only on a rover.
-REMOTE_SRC="${MOUSEDROID_REMOTE_SRC:-/opt/mousedroid/src}"
+# REMOTE_SRC defaults to the rover's repo ROOT, the checkout that the compose bind mount
+# and both systemd units run from (F-059, peer-review R3-3). It used to be the package
+# parent one level down, /opt/mousedroid/src: syncing the whole repo there nested a second
+# copy inside the first, and --delete removed the live package directory beneath it.
+REMOTE_SRC="${MOUSEDROID_REMOTE_SRC:-/opt/mousedroid}"
 REMOTE_CONFIG="${MOUSEDROID_CONFIG_DIR:-/etc/mousedroid}"
 # The rover's install root, and the venv deploy_jetson.sh creates under it. One
 # constant instead of the literal repeated at each use. It is deliberately NOT a
@@ -48,31 +63,37 @@ REMOTE_CONFIG="${MOUSEDROID_CONFIG_DIR:-/etc/mousedroid}"
 # unit's ExecStart by tests/unit/scripts/test_deploy_remote_guard.py.
 REMOTE_INSTALL_DIR=/opt/mousedroid
 REMOTE_VENV="${REMOTE_INSTALL_DIR}/venv"
+# The container the Docker spine runs. Not a knob either: docker-compose.jetson.yml pins
+# container_name, and docker exec needs the real name. Pinned to the compose file by
+# tests/unit/scripts/test_deploy_remote_guard.py.
+REMOTE_CONTAINER=mousedroid
 
 # F-059 (R-2/R3-3/R3-4): `rsync --delete` must never remove rover runtime state.
 # The explicit excludes are the fence: the `:- .gitignore` merge alone protects nothing
 # on a first deploy (the rover has no .gitignore yet) and afterwards only what the
 # rover's copy of it names.
-#   FENCED: the seven runtime roots, anchored to the transfer root (/venv/ ...
-#     /tensorrt_cache/): never shipped, never deleted. A same-named directory deeper in
+#   FENCED: the seven runtime roots, anchored to the transfer root and spelt without a
+#     trailing slash (/venv ... /tensorrt_cache): never shipped, never deleted. A trailing
+#     slash would make a pattern match directories only, and a root that is a symlink
+#     (models/ pointing at NVMe) would then be deleted. A same-named directory deeper in
 #     the tree (docs/reports, src/mousedroid/models) is source and ships.
 #   SHIPS: every working-tree file `.gitignore` does not ignore, plus every .gitkeep
-#     sentinel. The merge drops `!` re-includes, so the first rule restores sentinels;
-#     it must precede the merge, and it wins only where the ignore is file-level
-#     (`dir/*`) because rsync never descends into an ignored directory.
+#     sentinel, except the nine dev-tool names excluded below (.git, __pycache__, .venv,
+#     ...), which never ship at any depth. The merge drops `!` re-includes, so the
+#     first rule restores sentinels; it must precede the merge, and it wins only where the
+#     ignore is file-level (`dir/*`) because rsync never descends into an ignored directory.
 #   DOES NOT SHIP (accepted): anything tracked under a root (reports/*.json and the
 #     reports/endurance/.gitkeep sentinel) and any other tracked file `.gitignore`
 #     ignores or re-includes with `!` (.vscode/*.json, docs/planning/SMOKE_REPORT_TEMPLATE.md).
-# Pinned in tests/unit/scripts/test_deploy_remote_guard.py. Until the retarget (2.4b) lands,
-# do not run this against the rover with default paths (R3-3).
+# Pinned in tests/unit/scripts/test_deploy_remote_guard.py.
 RSYNC_PROTECT_ARGS=(
     --filter='+ **/.gitkeep'
     --filter=':- .gitignore'
     --exclude '.git' --exclude '__pycache__' --exclude '.venv' --exclude '*.egg-info'
     --exclude 'node_modules' --exclude '.mypy_cache' --exclude '.pytest_cache'
     --exclude '.ruff_cache' --exclude '.claude'
-    --exclude '/venv/' --exclude '/weights/' --exclude '/models/' --exclude '/logs/'
-    --exclude '/reports/' --exclude '/estop_latch/' --exclude '/tensorrt_cache/'
+    --exclude '/venv' --exclude '/weights' --exclude '/models' --exclude '/logs'
+    --exclude '/reports' --exclude '/estop_latch' --exclude '/tensorrt_cache'
 )
 
 DEPLOY_MODE="code-only"
@@ -161,6 +182,7 @@ require_safe_remote_path "MOUSEDROID_CONFIG_DIR" "${REMOTE_CONFIG}"
 REMOTE_SRC_Q="$(printf '%q' "${REMOTE_SRC}")"
 REMOTE_CONFIG_Q="$(printf '%q' "${REMOTE_CONFIG}")"
 REMOTE_VENV_Q="$(printf '%q' "${REMOTE_VENV}")"
+REMOTE_INSTALL_DIR_Q="$(printf '%q' "${REMOTE_INSTALL_DIR}")"
 
 remote_cmd() {
     ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
@@ -231,9 +253,14 @@ parse_args() {
                 echo "                                    [--confirm-dirty]"
                 echo ""
                 echo "Modes:"
-                echo "  --full         Full setup: system + hardware + rsync + deploy + restart"
-                echo "  --code-only    (default) Rsync code + pip reinstall + restart service"
-                echo "  --config-only  Update config files + restart service"
+                echo "  --full         Bare-metal venv path (deploy_jetson.sh WITHOUT --container):"
+                echo "                 system + hardware + rsync + deploy + restart."
+                echo "                 Do not run it against the Docker-spine rover."
+                echo "  --code-only    (default) Rsync code to the checkout root + pip reinstall +"
+                echo "                 restart the Docker unit. Does NOT rebuild the image: a"
+                echo "                 dependency change needs 'docker compose build' on the rover."
+                echo "  --config-only  Update config files + restart service. Refuses a remote tree"
+                echo "                 that predates the battery plausibility floor: deploy code first."
                 echo ""
                 echo "Rover-local work:"
                 echo "  A dirty sync target is REFUSED (rsync --delete would destroy it)."
@@ -390,7 +417,19 @@ rsync_code() {
 # Deploy config overlays
 # ---------------------------------------------------------------------------
 
+# Config is written against the newest schema, so it must never land ahead of the code that
+# understands it. safety.battery_implausible_below_v (the F-025 plausibility floor) is the
+# marker: a tree that predates it reads a missing battery voltage as 0.0 V, so an overlay
+# that arms the battery thresholds would latch an e-stop on it. Refuse to install YAML onto
+# such a tree. After the sync (--code-only, --full) the probe passes by construction; for
+# --config-only it is the only protection, and the remedy it names is: deploy code first.
+require_remote_safety_floor() {
+    remote_cmd "grep -q battery_implausible_below_v ${REMOTE_SRC_Q}/src/mousedroid/config/schema/reward_safety.py" \
+        || die "remote source at ${REMOTE_SRC} predates safety.battery_implausible_below_v — deploy code first (--code-only or git fetch), then config"
+}
+
 deploy_config() {
+    require_remote_safety_floor
     log_section "Deploying configuration"
     remote_sudo bash -c "mkdir -p ${REMOTE_CONFIG_Q}"
 
@@ -464,19 +503,21 @@ pip_reinstall() {
 # ---------------------------------------------------------------------------
 
 restart_service() {
-    log_section "Restarting mousedroid service"
+    log_section "Restarting mousedroid service(s)"
     remote_sudo systemctl daemon-reload
-
-    if remote_sudo systemctl is-enabled mousedroid &>/dev/null; then
-        remote_sudo systemctl restart mousedroid
-        log_step "Service restarted"
-        sleep 2
-        local status
-        status="$(remote_sudo systemctl is-active mousedroid 2>/dev/null || true)"
-        log_step "Service status: ${status}"
-    else
-        log_step "Service not enabled — skipping restart"
+    local restarted=false
+    # Docker spine: the unit's ExecStartPre re-syncs the overlay and runs
+    # preflight_check.sh, so the synced tree goes live through the fail-closed path.
+    if remote_sudo systemctl is-enabled mousedroid-docker &>/dev/null; then
+        remote_sudo systemctl restart mousedroid-docker
+        restarted=true
+        log_step "mousedroid-docker: $(remote_sudo systemctl is-active mousedroid-docker 2>/dev/null || true)"
     fi
+    if remote_sudo systemctl is-enabled mousedroid &>/dev/null; then
+        remote_sudo systemctl restart mousedroid; restarted=true; sleep 2
+        log_step "mousedroid: $(remote_sudo systemctl is-active mousedroid 2>/dev/null || true)"
+    fi
+    [[ "${restarted}" == true ]] || log_step "No mousedroid unit enabled — skipping restart"
 }
 
 # ---------------------------------------------------------------------------
@@ -485,12 +526,13 @@ restart_service() {
 
 run_health_check() {
     log_section "Running remote health check"
+    if remote_cmd "docker ps --filter name=^/${REMOTE_CONTAINER}\$ --format '{{.Names}}' | grep -qx ${REMOTE_CONTAINER}"; then
+        remote_cmd "docker exec -w ${REMOTE_INSTALL_DIR_Q} ${REMOTE_CONTAINER} python3 -m mousedroid.main --health-check" \
+            || echo "WARNING: container health check returned non-zero exit code"
+    fi
     if remote_cmd "test -d ${REMOTE_VENV_Q}"; then
-        remote_cmd "MOUSEDROID_MOCK_HARDWARE=false ${REMOTE_VENV_Q}/bin/python -m mousedroid.main --health-check" || {
-            echo "WARNING: Health check returned non-zero exit code"
-        }
-    else
-        log_step "SKIP: venv not found, cannot run health check"
+        remote_cmd "MOUSEDROID_MOCK_HARDWARE=false ${REMOTE_VENV_Q}/bin/python -m mousedroid.main --health-check" \
+            || echo "WARNING: Health check returned non-zero exit code"
     fi
 }
 

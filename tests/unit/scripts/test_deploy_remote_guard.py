@@ -9,8 +9,9 @@ layers:
    against a bare-remote fixture.
 2. ``scripts/deploy_remote.sh`` driven end-to-end with ``ssh``/``rsync``/``scp``
    shims on ``PATH``, so the wiring — refuse, or preserve *then* sync — is
-   proven by whether the rsync shim was ever invoked. No rover, no SSH, no
-   network, no Docker.
+   proven by whether the rsync shim was ever invoked, and the Docker-spine
+   steps (restart the unit, check the container, config only after code) by
+   the commands the ssh shim recorded. No rover, no SSH, no network, no Docker.
 3. The rsync fence (``RSYNC_PROTECT_ARGS``): the args ``--print-rsync-args``
    emits, fed to REAL ``rsync -n --delete`` between two throwaway trees, so what
    the sync would delete is observed rather than inferred from the script's text.
@@ -37,11 +38,14 @@ import tarfile
 from pathlib import Path
 
 import pytest
+import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SCRIPTS = _REPO_ROOT / "scripts"
 _GUARD = _SCRIPTS / "rover_wip_guard.sh"
 _DEPLOY = _SCRIPTS / "deploy_remote.sh"
+_COMPOSE = _REPO_ROOT / "docker-compose.jetson.yml"
+_DOCKER_UNIT = _SCRIPTS / "mousedroid-docker.service"
 
 # Byte-for-byte the guard ``test_repin_tags.py`` uses, and for the same reason:
 # on the GitHub Windows runner ``bash`` resolves to the WSL shim, so which()
@@ -380,16 +384,37 @@ def test_the_guard_runs_before_the_destructive_rsync_in_source_order() -> None:
 # which it runs locally with stdin still carrying the piped guard script. So the
 # real guard makes the real decision against a real checkout, while nothing
 # else leaves the machine.
-_SSH_SHIM = """#!/usr/bin/env bash
+_SSH_SHIM_HEAD = """#!/usr/bin/env bash
 set -uo pipefail
 if [ -n "${SSH_LOG:-}" ]; then printf '%s\\n' "$*" >> "$SSH_LOG"; fi
 cmd="${!#}"
 case "$cmd" in
     *"bash -s --"*) exec bash -c "$cmd" ;;
 esac
-echo ok
+"""
+
+_SSH_SHIM_TAIL = """echo ok
 exit 0
 """
+
+
+def _ssh_shim_body(fail_when_contains: str | None = None) -> str:
+    """The ``ssh`` shim: ``ok`` for every remote command.
+
+    With ``fail_when_contains`` any remote command whose arguments contain that text exits 1
+    instead, which is how a test makes one probe (is the unit enabled? does the remote tree carry
+    the safety floor?) come back negative while everything else keeps working. The match is on
+    all the arguments, not the last: ``remote_sudo`` passes ``systemctl is-enabled <unit>`` as
+    separate words, so the last one alone would be just the unit name. The guard's own
+    invocation is matched first and never reaches that clause.
+    """
+    fail = (
+        f'case "$*" in\n    *"{fail_when_contains}"*) exit 1 ;;\nesac\n'
+        if fail_when_contains
+        else ""
+    )
+    return _SSH_SHIM_HEAD + fail + _SSH_SHIM_TAIL
+
 
 _RSYNC_SHIM = """#!/usr/bin/env bash
 set -uo pipefail
@@ -405,10 +430,19 @@ exit 0
 @pytest.fixture
 def deploy_env(tmp_path: Path, rover_repo: Path) -> dict[str, str]:
     """PATH shims plus the env knobs that point deploy_remote.sh at the
-    throwaway checkout instead of a rover."""
+    throwaway checkout instead of a rover.
+
+    The sync target is the checkout ROOT, as on the rover: ``REMOTE_SRC`` defaults to
+    ``/opt/mousedroid``, not to the ``src`` directory below it. ``SSH_LOG`` records every
+    command that crosses the ssh boundary, for the tests that assert on them.
+    """
     shim_dir = tmp_path / "shims"
     shim_dir.mkdir()
-    for name, body in (("ssh", _SSH_SHIM), ("rsync", _RSYNC_SHIM), ("scp", _SCP_SHIM)):
+    for name, body in (
+        ("ssh", _ssh_shim_body()),
+        ("rsync", _RSYNC_SHIM),
+        ("scp", _SCP_SHIM),
+    ):
         path = shim_dir / name
         path.write_text(body, encoding="utf-8")
         path.chmod(0o755)
@@ -420,7 +454,8 @@ def deploy_env(tmp_path: Path, rover_repo: Path) -> dict[str, str]:
         "PATH": f"{shim_dir}{os.pathsep}{os.environ.get('PATH', '')}",
         "HOME": str(home),
         "RSYNC_MARKER": str(tmp_path / "rsync-was-called.txt"),
-        "MOUSEDROID_REMOTE_SRC": str(rover_repo / "src"),
+        "SSH_LOG": str(tmp_path / "ssh.log"),
+        "MOUSEDROID_REMOTE_SRC": str(rover_repo),
         "MOUSEDROID_CONFIG_DIR": str(tmp_path / "remote-etc"),
         "MOUSEDROID_DEPLOY_ARCHIVE_DIR": str(tmp_path / "archives"),
         "MOUSEDROID_ROVER_WIP_DATE": _WIP_DATE,
@@ -436,6 +471,17 @@ def _run_deploy(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[
         timeout=300,
         env=env,
     )
+
+
+def _install_ssh_shim(tmp_path: Path, *, fail_when_contains: str | None = None) -> None:
+    """Rewrite the ``ssh`` shim ``deploy_env`` installed.
+
+    The shim directory is already first on ``PATH``, so replacing the file in place is all a test
+    needs to make one class of remote command fail (see ``_ssh_shim_body``).
+    """
+    shim = tmp_path / "shims" / "ssh"
+    shim.write_text(_ssh_shim_body(fail_when_contains), encoding="utf-8")
+    shim.chmod(0o755)
 
 
 def test_deploy_refuses_a_dirty_rover_and_never_reaches_rsync(
@@ -497,6 +543,85 @@ def test_deploy_on_a_clean_rover_syncs_without_creating_an_archive(
     archives = tmp_path / "archives"
     assert not archives.exists() or not list(archives.iterdir())
     assert _git(rover_repo, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+
+
+# ---------------------------------------------------------------------------
+# The Docker spine: restart its unit, check its container, config only after code
+# ---------------------------------------------------------------------------
+# The rover runs the bind-mounted checkout in a container under mousedroid-docker.service.
+# A deploy that restarted only the bare-metal unit synced the tree and left the old code
+# running, so the Docker unit is restarted when it is enabled and the container is checked
+# afterwards. And config never lands ahead of the code that understands it: an overlay is
+# written against the newest schema, and a tree that predates the plausibility floor
+# (safety.battery_implausible_below_v, F-025) reads a missing battery voltage as 0.0 V and
+# e-stops. Driven through the real script and the ssh shim, and asserted on what actually
+# crossed the ssh boundary.
+
+
+def _ssh_log(deploy_env: dict[str, str]) -> str:
+    return Path(deploy_env["SSH_LOG"]).read_text(encoding="utf-8")
+
+
+def test_code_only_restarts_the_docker_unit_when_enabled(deploy_env: dict[str, str]) -> None:
+    result = _run_deploy(deploy_env, "--code-only")
+    assert result.returncode == 0, result.stdout + result.stderr
+    sent = _ssh_log(deploy_env)
+    health = "docker exec -w /opt/mousedroid mousedroid python3 -m mousedroid.main --health-check"
+    assert "systemctl restart mousedroid-docker" in sent
+    assert health in sent
+    # Checked AFTER the restart: a health check before it would be checking the old code.
+    assert sent.index("systemctl restart mousedroid-docker") < sent.index(health)
+
+
+def test_code_only_skips_the_docker_unit_when_absent(
+    tmp_path: Path, deploy_env: dict[str, str]
+) -> None:
+    _install_ssh_shim(tmp_path, fail_when_contains="is-enabled mousedroid-docker")
+    result = _run_deploy(deploy_env, "--code-only")
+    assert result.returncode == 0, result.stdout + result.stderr
+    sent = _ssh_log(deploy_env)
+    assert "is-enabled mousedroid-docker" in sent, "premise: the unit was probed"
+    assert "restart mousedroid-docker" not in sent
+
+
+def test_config_only_refuses_a_remote_tree_without_the_safety_floor(
+    tmp_path: Path, deploy_env: dict[str, str]
+) -> None:
+    """Review focus 3: an old image with a new YAML would e-stop on 0.0 V; code goes first."""
+    _install_ssh_shim(tmp_path, fail_when_contains="grep -q battery_implausible_below_v")
+    result = _run_deploy(deploy_env, "--config-only")
+    assert result.returncode != 0
+    assert "deploy code first" in result.stderr
+    sent = _ssh_log(deploy_env)
+    assert "battery_implausible_below_v" in sent, "premise: the remote tree was probed"
+    assert "schema/reward_safety.py" in sent, "premise: the probe read the schema file"
+    assert deploy_env["MOUSEDROID_CONFIG_DIR"] not in sent, "config was touched despite the refusal"
+
+
+def test_config_only_installs_config_when_the_remote_tree_has_the_safety_floor(
+    deploy_env: dict[str, str],
+) -> None:
+    """The control for the refusal above: the same run, floor present, does reach the config dir.
+
+    Without it the refusal's "config was never touched" assertion could pass for the wrong reason.
+    """
+    result = _run_deploy(deploy_env, "--config-only")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert deploy_env["MOUSEDROID_CONFIG_DIR"] in _ssh_log(deploy_env)
+
+
+def test_the_remote_container_is_the_one_compose_pins() -> None:
+    """``docker exec`` needs the real name, so the constant is not a knob: compose fixes it."""
+    compose = yaml.safe_load(_COMPOSE.read_text(encoding="utf-8"))
+    pinned = compose["services"]["mousedroid"]["container_name"]
+    constant = re.search(r"^REMOTE_CONTAINER=(\S+)$", _DEPLOY.read_text(encoding="utf-8"), re.M)
+    assert constant is not None, "deploy_remote.sh no longer declares REMOTE_CONTAINER"
+    assert constant.group(1) == pinned
+
+
+def test_the_unit_the_deploy_restarts_is_one_the_repo_ships() -> None:
+    assert _DOCKER_UNIT.is_file()
+    assert f"systemctl restart {_DOCKER_UNIT.stem}" in _DEPLOY.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -665,7 +790,7 @@ def test_a_traversing_remote_path_is_refused(payload: str) -> None:
 
 def test_a_plain_absolute_path_is_still_accepted() -> None:
     """The guard must not break the legitimate override the tests rely on."""
-    result = _deploy_help("/opt/mousedroid/src")
+    result = _deploy_help("/opt/mousedroid")
     assert result.returncode == 0, result.stderr
 
 
@@ -818,11 +943,13 @@ def test_no_remote_command_string_interpolates_a_raw_validated_path() -> None:
 # none, and a first deploy has none -- which leaves the explicit list as the only
 # thing protecting the rover. That is the layer worth pinning.
 #
-# Two further properties are pinned beyond "nothing is deleted". The runtime-root
+# Three further properties are pinned beyond "nothing is deleted". The runtime-root
 # excludes are anchored to the transfer root, so a same-named directory deeper in the
-# tree (docs/reports, src/mousedroid/models) is source and still ships. And a tracked
+# tree (docs/reports, src/mousedroid/models) is source and still ships. A tracked
 # .gitkeep sentinel survives the .gitignore merge, which drops the negation lines that
-# would otherwise re-include it.
+# would otherwise re-include it. And a root that is itself a symlink (models/ pointing at
+# NVMe) is held too: the excludes carry no trailing slash, because one would make them
+# match directories only and rsync does not count a symlink as a directory.
 
 _rsync_required = pytest.mark.skipif(
     shutil.which("rsync") is None,
@@ -873,6 +1000,8 @@ def pc_checkout(tmp_path: Path) -> Path:
     src = tmp_path / "pc-checkout"
     src.mkdir()
     _git(tmp_path, "init", "-q", "-b", "main", str(src))
+    # The root entries are anchored (/models/, not models/): an unanchored one would also
+    # ignore src/mousedroid/models/, which the nested-name test needs the checkout to track.
     ignored = (
         "/venv/",
         "/weights/",
@@ -899,7 +1028,9 @@ def pc_checkout(tmp_path: Path) -> Path:
     for rel, body in tracked:
         (src / rel).parent.mkdir(parents=True, exist_ok=True)
         (src / rel).write_text(body, encoding="utf-8")
-    _git(src, "add", "-A")
+    # -f: a developer's global excludes (a logs/ or venv/ line is common) must not drop
+    # the nested same-named directories from this fixture.
+    _git(src, "add", "-f", "-A")
     _git(src, "commit", "-qm", "baseline")
     # Generated beside the sentinel and ignored by `cfg/runtime/*`: it must never ship.
     (src / "cfg" / "runtime" / "generated.yml").write_text("generated: true\n", encoding="utf-8")
@@ -909,20 +1040,32 @@ def pc_checkout(tmp_path: Path) -> Path:
 @pytest.fixture
 def rover_tree(tmp_path: Path) -> Path:
     """The rover side: state under every runtime root, plus one source file the PC
-    no longer has -- the one thing ``--delete`` is *supposed* to remove."""
+    no longer has -- the one thing ``--delete`` is *supposed* to remove.
+
+    ``models`` is a symlink to a directory outside the tree, as it is on a rover that keeps its
+    GGUFs on NVMe. Where the platform cannot symlink it is a plain directory instead, and the
+    one case that needs the link skips itself.
+    """
     rover = tmp_path / "rover-tree"
     for rel in (
         "venv/bin/python",
         "weights/bdi/policy.onnx",
-        "models/Phi-3-mini.gguf",
         "logs/mousedroid.log",
         "reports/jetson_smoke/2026-10-16/run.json",
+        "reports/endurance/.gitkeep",
         "estop_latch/latched.json",
         "tensorrt_cache/engine.plan",
         "src/mousedroid/removed_module.py",
     ):
         (rover / rel).parent.mkdir(parents=True, exist_ok=True)
         (rover / rel).write_text("rover-only\n", encoding="utf-8")
+    nvme = tmp_path / "nvme-models"
+    nvme.mkdir()
+    (nvme / "Phi-3-mini.gguf").write_text("rover-only\n", encoding="utf-8")
+    try:
+        (rover / "models").symlink_to(nvme, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        shutil.copytree(nvme, rover / "models")
     return rover
 
 
@@ -950,6 +1093,24 @@ def test_delete_never_touches_runtime_state(pc_checkout: Path, rover_tree: Path)
     assert "src/mousedroid/removed_module.py" in deleting, "premise: --delete is still live"
     at_risk = sorted(p for p in deleting if p.split("/")[0] in _RUNTIME_ROOTS)
     assert not at_risk, f"--delete would remove rover runtime state: {at_risk}"
+    # The sentinel inside a fenced root stays where it is: never shipped (the transfer test
+    # below pins that half), but never deleted from the rover either.
+    assert "reports/endurance/.gitkeep" not in deleting, "the fenced-root sentinel was deleted"
+
+
+@_rsync_required
+def test_a_symlinked_runtime_root_is_held_too(pc_checkout: Path, rover_tree: Path) -> None:
+    """``models`` as a symlink to NVMe is state, not source: ``--delete`` must leave the link.
+
+    A trailing-slash exclude (``/models/``) matches directories only, and rsync does not count
+    a symlink as one, so the link would be removed and the rover left without its models. The
+    fence is spelt without the slash for exactly this case.
+    """
+    if not (rover_tree / "models").is_symlink():
+        pytest.skip("this platform cannot create a symlink")
+    deleting, _ = _dry_run(pc_checkout, rover_tree)
+    assert "src/mousedroid/removed_module.py" in deleting, "premise: --delete is still live"
+    assert "models" not in deleting, "--delete would remove the models symlink"
 
 
 @_rsync_required
@@ -980,9 +1141,9 @@ def test_every_tracked_file_outside_the_fenced_roots_is_transferred(
 
 @_rsync_required
 def test_runtime_root_excludes_are_anchored(pc_checkout: Path, rover_tree: Path) -> None:
-    """Rulings 14/15: a directory that merely shares a root's NAME is source, not state.
+    """A directory that merely shares a root's NAME is source, not state.
 
-    ``/models/`` is anchored to the transfer root; an unanchored ``models/`` also drops
+    ``/models`` is anchored to the transfer root; an unanchored ``models`` also drops
     ``src/mousedroid/models/`` and ``docs/reports/`` from the sync without a word, while
     the root-level state it exists to protect stays protected either way. One nested
     directory per root, so un-anchoring any single exclude turns this red.

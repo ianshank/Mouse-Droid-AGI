@@ -8,6 +8,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — deploy_remote.sh can no longer delete rover runtime state, and targets the checkout root
+
+`rsync -avz --delete` removes whatever the destination holds that the source lacks. The default
+destination, `/opt/mousedroid/src`, is the package parent *inside* the rover's checkout, so
+syncing the repository there nested a second copy of it and deleted the live package
+(`/opt/mousedroid/src/mousedroid/`) on a clean rover. `REMOTE_SRC` now defaults to
+`/opt/mousedroid`, the checkout root that the compose bind mount and both systemd units run
+from. **Behaviour change** for anyone who relied on the old default; `MOUSEDROID_REMOTE_SRC`
+still overrides it. The sync now carries one fence, `RSYNC_PROTECT_ARGS`, which
+`--print-rsync-args` prints: the seven runtime roots (`venv`, `weights`, `models`,
+`logs`, `reports`, `estop_latch`, `tensorrt_cache`) are excluded anchored to the transfer
+root and without a trailing slash, so a same-named source directory deeper in the tree still
+ships and a symlinked root is held too; the `.gitignore` merge keeps ignored files off the
+rover; and a `.gitkeep` include rule, placed ahead of that merge (which drops `!` re-includes),
+ships the tracked sentinels. Real `rsync -n --delete` fixture tests pin what the sync would delete
+and what it would transfer.
+
+The deploy also restarts what actually runs the code. It restarts `mousedroid-docker` when that
+unit is enabled (its `ExecStartPre` re-syncs the overlay and runs the preflight, so the new tree
+goes live through the fail-closed path), then the bare-metal unit if that is enabled too, and
+health-checks the container with `docker exec`. `--code-only` still does not rebuild the image.
+`--config-only` now refuses a remote tree whose schema lacks `safety.battery_implausible_below_v`
+("deploy code first"): an old tree handed a YAML that arms the battery thresholds reads a missing
+voltage as 0.0 V and e-stops.
+
 ### Fixed — the nightly Spec Harness, red every night since 2026-09-08
 
 `validate-slow` runs `--strict-git`, which needs every `done` feature's `implemented_in` to resolve.

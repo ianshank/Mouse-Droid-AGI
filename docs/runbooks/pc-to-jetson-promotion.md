@@ -50,6 +50,12 @@ bash scripts/deploy_remote.sh "$JETSON_HOST" --code-only
 bash scripts/deploy_remote.sh "$JETSON_HOST" --code-only --confirm-dirty
 ```
 
+The sync target is the checkout root, `/opt/mousedroid` (`MOUSEDROID_REMOTE_SRC`
+overrides it): the directory the compose bind mount and both systemd units run from.
+`--code-only` restarts the Docker unit when it is enabled but does not rebuild the image,
+so a dependency change still needs `docker compose build` on the rover. `--full` is the
+bare-metal venv path and is not for this rover.
+
 With `--confirm-dirty` the guard (`scripts/rover_wip_guard.sh`, piped over
 `ssh` so it does not have to already be on the rover) does two things, in this
 order:
@@ -74,6 +80,32 @@ The archive may contain rover-local files, so treat it as sensitive: it stays on
 the operator machine and is never published as a CI artifact.
 `/etc/mousedroid/docker.env` is outside the sync target and is never
 transferred.
+
+### Fallback — move the checkout with git instead of rsync
+
+Use this when the sync cannot run: the PC has no route to the rover, or the guard cannot
+read the checkout. The checkout must be clean first (`git -C /opt/mousedroid status --porcelain`
+prints nothing); preserve rover-local work as above if it does not. **Code first, overlay
+second**: the overlay is written against the newest schema, and a tree that predates
+`safety.battery_implausible_below_v` reads a missing battery voltage as 0.0 V and e-stops.
+(`deploy_remote.sh --config-only` refuses such a tree for the same reason.)
+
+```bash
+# On the rover.
+sudo chown -R ian:ian /opt/mousedroid    # the known root-ownership drift breaks git as ian
+git config --global --add safe.directory /opt/mousedroid
+git -C /opt/mousedroid fetch origin && git -C /opt/mousedroid checkout --detach <sha>
+sudo bash /opt/mousedroid/scripts/sync_jetson_overlay.sh    # the overlay, after the code
+
+# Then restart: the unit when it is enabled, otherwise the container.
+if systemctl is-enabled mousedroid-docker >/dev/null 2>&1; then
+    sudo systemctl restart mousedroid-docker
+else
+    docker compose --env-file /dev/null -f /opt/mousedroid/docker-compose.jetson.yml restart mousedroid
+fi
+```
+
+This moves code only: a dependency change still needs `docker compose build` first.
 
 ## 2. Pre-tag the rollback anchor — before the rebuild
 
