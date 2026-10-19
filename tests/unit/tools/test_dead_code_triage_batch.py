@@ -1395,11 +1395,12 @@ def _collect(
     *,
     out: Path | None = None,
     clock: _Clock | None = None,
+    batch_id: str = "msgbatch_test01",
     **kwargs: Any,
 ) -> triage.CollectOutcome:
     clock = clock or _Clock()
     return triage.collect(
-        "msgbatch_test01",
+        batch_id,
         out or (repo / "docs" / "analysis" / f"dead-code-triage-{_FIXED_DATE}.md"),
         repo_root=repo,
         client=client,
@@ -2418,6 +2419,86 @@ def test_a_failing_create_is_sent_once_through_the_real_sdk(repo: Path) -> None:
         _submit(repo, client)
 
     assert paths.count("/v1/messages/batches") == 1
+
+
+def test_submit_then_collect_through_the_real_sdk_over_a_mock_http_server(repo: Path) -> None:
+    """Every call the tool makes, as real SDK calls whose HTTP layer is a fixed script.
+
+    This is the only test where ``retrieve`` / ``results`` return the SDK's own objects
+    decoded from bytes (the JSONL stream included), so it is the one that proves the
+    attribute names the tool reads exist on them.
+    """
+    http = _real_http()
+    plan = _plan(repo)
+    batch_id = "msgbatch_wire3"
+    results_url = f"http://mock.invalid/v1/messages/batches/{batch_id}/results"
+    jsonl: list[str] = []
+    for planned in plan.requests:
+        entries = [
+            _entry(f, "delete" if f.name == "orphan_helper" else "keep", f"why {f.name}")
+            for f in planned.findings
+        ]
+        message = {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5-5",
+            "content": [{"type": "text", "text": _answer(entries)}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1000, "output_tokens": 100},
+        }
+        result = {"type": "succeeded", "message": message}
+        jsonl.append(json.dumps({"custom_id": planned.custom_id, "result": result}))
+    jsonl.reverse()  # the API promises no order
+    model_json = {
+        "id": "claude-sonnet-5-5",
+        "type": "model",
+        "display_name": "Claude Sonnet 5.5",
+        "created_at": "2026-09-01T00:00:00Z",
+        "lifecycle": "active",
+    }
+    counts = {"processing": 0, "succeeded": 3, "errored": 0, "canceled": 0, "expired": 0}
+    ended = {
+        **_BATCH_JSON,
+        "id": batch_id,
+        "processing_status": "ended",
+        "ended_at": "2026-10-19T15:00:00Z",
+        "results_url": results_url,
+        "request_counts": counts,
+    }
+
+    calls: list[str] = []
+
+    def _handler(request: Any) -> Any:
+        path = request.url.path
+        calls.append(f"{request.method} {path}")
+        if path.startswith("/v1/models/"):
+            return http.Response(200, json=model_json)
+        if request.method == "POST" and path == "/v1/messages/batches":
+            return http.Response(200, json={**_BATCH_JSON, "id": batch_id})
+        if path == f"/v1/messages/batches/{batch_id}":
+            return http.Response(200, json=ended)
+        if path == f"/v1/messages/batches/{batch_id}/results":
+            body = ("\n".join(jsonl) + "\n").encode("utf-8")
+            return http.Response(200, content=body, headers={"content-type": "application/binary"})
+        return http.Response(404, json={"type": "error", "error": {"type": "not_found_error"}})
+
+    client = _real_client(_handler)
+
+    submitted = _submit(repo, client)
+    outcome = _collect(repo, client, batch_id=batch_id)
+
+    assert f"GET /v1/messages/batches/{batch_id}/results" in calls  # the JSONL really was streamed
+    assert calls.count("POST /v1/messages/batches") == 1
+    assert submitted.batch_id == batch_id
+    assert outcome.verdict_counts == {"delete": 1, "verify": 0, "keep": 5}
+    assert outcome.usage.input_tokens == 3000
+    assert outcome.usage.output_tokens == 300
+    assert outcome.status == "ok"
+    document = outcome.out_path.read_text(encoding="utf-8")
+    assert re.search(r"`orphan_helper`.*service\.py", document)
+    assert "why value_30" in document
 
 
 def test_results_in_the_sdks_own_shape_are_read_correctly(repo: Path) -> None:
