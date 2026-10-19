@@ -28,7 +28,12 @@ and what it would transfer.
 The deploy also restarts what actually runs the code. It restarts `mousedroid-docker` when that
 unit is enabled (its `ExecStartPre` re-syncs the overlay and runs the preflight, so the new tree
 goes live through the fail-closed path), then the bare-metal unit if that is enabled too, and
-health-checks the container with `docker exec`. `--code-only` still does not rebuild the image.
+health-checks the container with `docker exec`, waiting up to `MOUSEDROID_REMOTE_HEALTH_WAIT_S`
+(30 s) for it to be listed after the restart and warning, not skipping, if it never is.
+`--code-only` still does not rebuild the image, and it no longer falls through to the bare-metal
+installer when the rover has no venv, which is what the Docker-spine rover looks like: only `--full`
+runs `deploy_jetson.sh`. With the Docker unit enabled it logs that the bind mount serves the package;
+with neither a venv nor the unit it warns; either way it carries on.
 `--config-only` now refuses a remote tree whose schema lacks `safety.battery_implausible_below_v`
 ("deploy code first"): an old tree handed a YAML that arms the battery thresholds reads a missing
 voltage as 0.0 V and e-stops.

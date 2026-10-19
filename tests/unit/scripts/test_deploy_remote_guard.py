@@ -35,6 +35,7 @@ import re
 import shutil
 import subprocess
 import tarfile
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -398,22 +399,42 @@ exit 0
 """
 
 
-def _ssh_shim_body(fail_when_contains: str | None = None) -> str:
+def _ssh_shim_body(
+    fail_when_contains: str | Sequence[str] | None = None,
+    *,
+    succeed_on_nth: tuple[str, int] | None = None,
+) -> str:
     """The ``ssh`` shim: ``ok`` for every remote command.
 
-    With ``fail_when_contains`` any remote command whose arguments contain that text exits 1
-    instead, which is how a test makes one probe (is the unit enabled? does the remote tree carry
-    the safety floor?) come back negative while everything else keeps working. The match is on
-    all the arguments, not the last: ``remote_sudo`` passes ``systemctl is-enabled <unit>`` as
-    separate words, so the last one alone would be just the unit name. The guard's own
-    invocation is matched first and never reaches that clause.
+    With ``fail_when_contains`` (one needle or several) any remote command whose arguments
+    contain one of them exits 1 instead, which is how a test makes a probe (is the unit enabled?
+    is there a venv? does the remote tree carry the safety floor?) come back negative while
+    everything else keeps working. The match is on all the arguments, not the last:
+    ``remote_sudo`` passes ``systemctl is-enabled <unit>`` as separate words, so the last one
+    alone would be just the unit name. ``succeed_on_nth=(needle, n)`` makes a probe come back
+    negative until it has been seen ``n`` times (the shim counts the lines it has already
+    logged), which is a container that shows up a moment after the restart; each sighting is
+    stamped, in whole seconds, into ``<SSH_LOG>.ticks`` so a test can check the spacing. The guard's
+    own invocation is matched first and never reaches either clause.
     """
-    fail = (
-        f'case "$*" in\n    *"{fail_when_contains}"*) exit 1 ;;\nesac\n'
-        if fail_when_contains
-        else ""
-    )
-    return _SSH_SHIM_HEAD + fail + _SSH_SHIM_TAIL
+    if fail_when_contains is None:
+        needles: list[str] = []
+    elif isinstance(fail_when_contains, str):
+        needles = [fail_when_contains]
+    else:
+        needles = list(fail_when_contains)
+    clauses = ""
+    if needles:
+        patterns = "|".join(f'*"{needle}"*' for needle in needles)
+        clauses += f'case "$*" in\n    {patterns}) exit 1 ;;\nesac\n'
+    if succeed_on_nth is not None:
+        needle, nth = succeed_on_nth
+        clauses += (
+            f'case "$*" in\n    *"{needle}"*)'
+            ' date +%s >> "$SSH_LOG.ticks";'
+            f' [ "$(grep -c "{needle}" "$SSH_LOG")" -ge {nth} ] || exit 1 ;;\nesac\n'
+        )
+    return _SSH_SHIM_HEAD + clauses + _SSH_SHIM_TAIL
 
 
 _RSYNC_SHIM = """#!/usr/bin/env bash
@@ -455,6 +476,9 @@ def deploy_env(tmp_path: Path, rover_repo: Path) -> dict[str, str]:
         "HOME": str(home),
         "RSYNC_MARKER": str(tmp_path / "rsync-was-called.txt"),
         "SSH_LOG": str(tmp_path / "ssh.log"),
+        # No test waits for a container by default: the shim answers at once, and the one that
+        # wants the polling loop to run says so.
+        "MOUSEDROID_REMOTE_HEALTH_WAIT_S": "0",
         "MOUSEDROID_REMOTE_SRC": str(rover_repo),
         "MOUSEDROID_CONFIG_DIR": str(tmp_path / "remote-etc"),
         "MOUSEDROID_DEPLOY_ARCHIVE_DIR": str(tmp_path / "archives"),
@@ -473,14 +497,20 @@ def _run_deploy(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[
     )
 
 
-def _install_ssh_shim(tmp_path: Path, *, fail_when_contains: str | None = None) -> None:
+def _install_ssh_shim(
+    tmp_path: Path,
+    *,
+    fail_when_contains: str | Sequence[str] | None = None,
+    succeed_on_nth: tuple[str, int] | None = None,
+) -> None:
     """Rewrite the ``ssh`` shim ``deploy_env`` installed.
 
     The shim directory is already first on ``PATH``, so replacing the file in place is all a test
-    needs to make one class of remote command fail (see ``_ssh_shim_body``).
+    needs to make a class of remote command fail (see ``_ssh_shim_body``).
     """
     shim = tmp_path / "shims" / "ssh"
-    shim.write_text(_ssh_shim_body(fail_when_contains), encoding="utf-8")
+    body = _ssh_shim_body(fail_when_contains, succeed_on_nth=succeed_on_nth)
+    shim.write_text(body, encoding="utf-8")
     shim.chmod(0o755)
 
 
@@ -556,6 +586,13 @@ def test_deploy_on_a_clean_rover_syncs_without_creating_an_archive(
 # (safety.battery_implausible_below_v, F-025) reads a missing battery voltage as 0.0 V and
 # e-stops. Driven through the real script and the ssh shim, and asserted on what actually
 # crossed the ssh boundary.
+#
+# Two more hazards sit in the same steps. A missing venv is not a cue to build one: only --full
+# runs deploy_jetson.sh (apt, a venv, PyTorch, a health check against live hardware; that mode is
+# pinned by test_a_full_deploy_hands_deploy_jetson_no_install_root), so --code-only on the Docker
+# spine reinstalls nothing and says why. And a restart returns before compose has the container
+# up, so the health check waits a bounded window for it and warns, rather than skipping in
+# silence, when it never appears.
 
 
 def _ssh_log(deploy_env: dict[str, str]) -> str:
@@ -608,6 +645,98 @@ def test_config_only_installs_config_when_the_remote_tree_has_the_safety_floor(
     result = _run_deploy(deploy_env, "--config-only")
     assert result.returncode == 0, result.stdout + result.stderr
     assert deploy_env["MOUSEDROID_CONFIG_DIR"] in _ssh_log(deploy_env)
+
+
+def test_code_only_without_a_venv_leaves_the_bare_metal_installer_alone(
+    tmp_path: Path, deploy_env: dict[str, str]
+) -> None:
+    """The Docker-spine rover has no venv, and that is not a cue to build one.
+
+    deploy_jetson.sh without --container (apt, a venv, PyTorch, a health check against live
+    hardware) is --full's. --code-only used to reach it by falling through pip_reinstall.
+    """
+    no_venv = f"test -d {_service_venv()}"
+    _install_ssh_shim(tmp_path, fail_when_contains=no_venv)
+    result = _run_deploy(deploy_env, "--code-only")
+    assert result.returncode == 0, result.stdout + result.stderr
+    sent = _ssh_log(deploy_env)
+    assert no_venv in sent, "premise: the venv was probed"
+    assert "deploy_jetson.sh" not in sent
+    assert "pip install" not in sent
+    assert "systemctl restart mousedroid-docker" in sent
+    assert "the Docker spine serves the package from the bind mount" in result.stdout
+
+
+def test_code_only_with_neither_a_venv_nor_the_docker_unit_warns_and_carries_on(
+    tmp_path: Path, deploy_env: dict[str, str]
+) -> None:
+    no_venv = f"test -d {_service_venv()}"
+    no_unit = "is-enabled mousedroid-docker"
+    _install_ssh_shim(tmp_path, fail_when_contains=(no_venv, no_unit))
+    result = _run_deploy(deploy_env, "--code-only")
+    assert result.returncode == 0, result.stdout + result.stderr
+    sent = _ssh_log(deploy_env)
+    assert no_venv in sent, "premise: the venv was probed"
+    assert no_unit in sent, "premise: the Docker unit was probed"
+    assert "deploy_jetson.sh" not in sent
+    assert "restart mousedroid-docker" not in sent
+    assert "WARNING: no venv and no mousedroid-docker unit" in result.stdout
+
+
+def test_the_health_check_warns_when_the_container_is_never_listed(
+    tmp_path: Path, deploy_env: dict[str, str]
+) -> None:
+    _install_ssh_shim(tmp_path, fail_when_contains="docker ps")
+    result = _run_deploy({**deploy_env, "MOUSEDROID_REMOTE_HEALTH_WAIT_S": "0"}, "--code-only")
+    assert result.returncode == 0, result.stdout + result.stderr
+    sent = _ssh_log(deploy_env)
+    assert sent.count("docker ps") == 1, "premise: a zero window probes once and never sleeps"
+    assert "docker exec" not in sent
+    assert "WARNING: container mousedroid not running after 0s" in result.stdout
+    assert "container health check skipped" in result.stdout
+
+
+def test_the_health_check_waits_for_the_container_to_be_listed(
+    tmp_path: Path, deploy_env: dict[str, str]
+) -> None:
+    """A restart returns before compose has the container up, so the check polls for it.
+
+    The container shows up on the second probe: one real one-second wait, then the check runs.
+    The window is spelt 08 on purpose: bash reads that as a bad octal literal unless the script
+    forces base 10, and a loop that never gets going would skip the check and fail this test.
+    """
+    _install_ssh_shim(tmp_path, succeed_on_nth=("docker ps", 2))
+    result = _run_deploy({**deploy_env, "MOUSEDROID_REMOTE_HEALTH_WAIT_S": "08"}, "--code-only")
+    assert result.returncode == 0, result.stdout + result.stderr
+    sent = _ssh_log(deploy_env)
+    assert sent.count("docker ps") == 2, "one miss, one hit, then it stops polling"
+    assert sent.index("docker exec") > sent.rindex("docker ps")
+    assert "WARNING: container" not in result.stdout
+    # Spaced by the one-second poll interval, not N probes fired back to back (whole seconds, so
+    # a real sleep always shows a gap of at least one and no sleep almost never does).
+    ticks = Path(f"{deploy_env['SSH_LOG']}.ticks").read_text(encoding="utf-8").split()
+    assert len(ticks) == 2, ticks
+    assert int(ticks[1]) - int(ticks[0]) >= 1, ticks
+
+
+@pytest.mark.parametrize("value", ["abc", "-1", "1.5", "30s", "0x10", "10000", " 5", "5 "])
+def test_a_malformed_health_wait_is_refused(value: str) -> None:
+    """The window is read by shell arithmetic, so only a short run of digits gets in."""
+    env = dict(os.environ, MOUSEDROID_REMOTE_HEALTH_WAIT_S=value)
+    result = subprocess.run(
+        ["bash", str(_DEPLOY), "--help"], capture_output=True, text=True, env=env, check=False
+    )
+    assert result.returncode != 0, f"accepted a malformed wait: {value!r}"
+    assert "MOUSEDROID_REMOTE_HEALTH_WAIT_S" in result.stderr, result.stderr
+
+
+@pytest.mark.parametrize("value", ["0", "30", "08", "9999"])
+def test_a_whole_number_of_seconds_is_accepted_as_the_health_wait(value: str) -> None:
+    env = dict(os.environ, MOUSEDROID_REMOTE_HEALTH_WAIT_S=value)
+    result = subprocess.run(
+        ["bash", str(_DEPLOY), "--help"], capture_output=True, text=True, env=env, check=False
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_the_remote_container_is_the_one_compose_pins() -> None:

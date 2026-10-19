@@ -7,10 +7,12 @@
 #        bash scripts/deploy_remote.sh --print-rsync-args
 #
 # Modes:
-#   --code-only    (default) Sync the repo to the rover's checkout root, reinstall the
-#                  package, then restart the Docker unit (and the bare-metal one, if that
-#                  is enabled). It does NOT rebuild the image: a dependency change needs
-#                  'docker compose build' on the rover.
+#   --code-only    (default) Sync the repo to the rover's checkout root, refresh the package in
+#                  the bare-metal venv if there is one, then restart the Docker unit (and the
+#                  bare-metal one, if that is enabled). It never runs deploy_jetson.sh (that is
+#                  --full) and does NOT rebuild the image: the Docker spine serves the package
+#                  from the bind mount, and a dependency change needs 'docker compose build'
+#                  on the rover.
 #   --config-only  Install config/*.yaml and restart. Refuses a remote tree that predates the
 #                  battery plausibility floor (F-025): deploy code first, config second.
 #   --full         The bare-metal venv path: it runs deploy_jetson.sh WITHOUT --container.
@@ -32,6 +34,9 @@
 #   MOUSEDROID_REMOTE_SRC             Rsync destination on the rover: the repo root, the
 #                                     checkout the compose bind mount and both systemd units
 #                                     run from (default: /opt/mousedroid)
+#   MOUSEDROID_REMOTE_HEALTH_WAIT_S   Seconds to wait, polling once a second, for the container
+#                                     to be listed before its health check (default: 30; 0 probes
+#                                     once). A container that never appears is a WARNING.
 #   MOUSEDROID_CONFIG_DIR             Remote config dir (default: /etc/mousedroid)
 #   MOUSEDROID_DEPLOY_CONFIRM_DIRTY   1/true = same as --confirm-dirty
 #   MOUSEDROID_DEPLOY_ARCHIVE_DIR     Where rover WIP archives land on THIS
@@ -53,6 +58,10 @@ REMOTE_USER="${MOUSEDROID_REMOTE_USER:-jetson}"
 # copy inside the first, and --delete removed the live package directory beneath it.
 REMOTE_SRC="${MOUSEDROID_REMOTE_SRC:-/opt/mousedroid}"
 REMOTE_CONFIG="${MOUSEDROID_CONFIG_DIR:-/etc/mousedroid}"
+# How long run_health_check waits, polling once a second, for the container to be listed. A
+# restart returns before compose has it up, so a probe made at once would find nothing and the
+# check would be skipped in silence. Validated below, because shell arithmetic reads it.
+REMOTE_HEALTH_WAIT_S="${MOUSEDROID_REMOTE_HEALTH_WAIT_S:-30}"
 # The rover's install root, and the venv deploy_jetson.sh creates under it. One
 # constant instead of the literal repeated at each use. It is deliberately NOT a
 # knob: the install that actually runs is fixed by scripts/mousedroid.service
@@ -177,6 +186,12 @@ require_safe_remote_path() {
 require_safe_remote_path "MOUSEDROID_REMOTE_SRC" "${REMOTE_SRC}"
 require_safe_remote_path "MOUSEDROID_CONFIG_DIR" "${REMOTE_CONFIG}"
 
+# A short run of digits only: the wait is read by shell arithmetic, where a padded 08 is a
+# bad octal literal. Forcing base 10 below also drops the padding from the message.
+[[ "${REMOTE_HEALTH_WAIT_S}" =~ ^[0-9]{1,4}$ ]] \
+    || die "MOUSEDROID_REMOTE_HEALTH_WAIT_S must be a whole number of seconds (0-9999), got: ${REMOTE_HEALTH_WAIT_S}"
+REMOTE_HEALTH_WAIT_S=$((10#${REMOTE_HEALTH_WAIT_S}))
+
 # Pre-quoted forms for interpolation into remote command strings. Use these,
 # not the raw variables, anywhere the value crosses into a shell on the rover.
 REMOTE_SRC_Q="$(printf '%q' "${REMOTE_SRC}")"
@@ -256,8 +271,9 @@ parse_args() {
                 echo "  --full         Bare-metal venv path (deploy_jetson.sh WITHOUT --container):"
                 echo "                 system + hardware + rsync + deploy + restart."
                 echo "                 Do not run it against the Docker-spine rover."
-                echo "  --code-only    (default) Rsync code to the checkout root + pip reinstall +"
-                echo "                 restart the Docker unit. Does NOT rebuild the image: a"
+                echo "  --code-only    (default) Rsync code to the checkout root, pip reinstall into the"
+                echo "                 venv if there is one, restart the Docker unit. Never runs"
+                echo "                 deploy_jetson.sh (that is --full). Does NOT rebuild the image: a"
                 echo "                 dependency change needs 'docker compose build' on the rover."
                 echo "  --config-only  Update config files + restart service. Refuses a remote tree"
                 echo "                 that predates the battery plausibility floor: deploy code first."
@@ -477,6 +493,7 @@ run_hardware_setup() {
 # Remote deploy (pip install + systemd)
 # ---------------------------------------------------------------------------
 
+# The bare-metal installer (no --container). Only --full calls it; --code-only never does.
 run_deploy() {
     log_section "Running deploy_jetson.sh on remote"
     remote_sudo bash "${REMOTE_SRC_Q}/scripts/deploy_jetson.sh"
@@ -485,6 +502,15 @@ run_deploy() {
 # ---------------------------------------------------------------------------
 # Pip reinstall (code-only mode)
 # ---------------------------------------------------------------------------
+# --code-only never runs the bare-metal installer. deploy_jetson.sh without --container is
+# --full's (apt, a venv, PyTorch, a systemd unit, a health check against live hardware), and
+# building one beside the container that already serves the rover would leave two runtimes for
+# one set of hardware. So a missing venv is not a cue to install one:
+#   venv present  -> refresh the editable install (the bare-metal rover).
+#   Docker unit   -> nothing to reinstall. The container imports the package from the bind
+#                    mount, so the synced tree is already what runs. The image is NOT rebuilt:
+#                    a dependency change needs 'docker compose build' on the rover.
+#   neither       -> warn and carry on; there is nothing here to reinstall into.
 
 pip_reinstall() {
     log_section "Reinstalling mousedroid package"
@@ -492,9 +518,10 @@ pip_reinstall() {
         local pip_target_q
         pip_target_q="$(printf '%q' "${REMOTE_SRC}[hardware,jetson]")"
         remote_sudo "${REMOTE_VENV_Q}/bin/pip" install --quiet -e "${pip_target_q}"
+    elif remote_sudo systemctl is-enabled mousedroid-docker &>/dev/null; then
+        log_step "No venv: the Docker spine serves the package from the bind mount (image not rebuilt; dependency changes need 'docker compose build' on the rover)"
     else
-        log_step "Venv not found — running full deploy_jetson.sh"
-        run_deploy
+        echo "WARNING: no venv and no mousedroid-docker unit on the rover — nothing to reinstall (the bare-metal path is --full)"
     fi
 }
 
@@ -524,11 +551,25 @@ restart_service() {
 # Health check
 # ---------------------------------------------------------------------------
 
+# Poll once a second, for at most REMOTE_HEALTH_WAIT_S seconds, until REMOTE_CONTAINER is listed.
+# A restart returns before compose has the container up. One probe, then up to N more a second
+# apart; 0 probes once and never sleeps. Succeeds as soon as the container is listed.
+wait_for_container() {
+    local waited=0
+    until remote_cmd "docker ps --filter name=^/${REMOTE_CONTAINER}\$ --format '{{.Names}}' | grep -qx ${REMOTE_CONTAINER}"; do
+        (( waited < REMOTE_HEALTH_WAIT_S )) || return 1
+        sleep 1
+        waited=$((waited + 1))
+    done
+}
+
 run_health_check() {
     log_section "Running remote health check"
-    if remote_cmd "docker ps --filter name=^/${REMOTE_CONTAINER}\$ --format '{{.Names}}' | grep -qx ${REMOTE_CONTAINER}"; then
+    if wait_for_container; then
         remote_cmd "docker exec -w ${REMOTE_INSTALL_DIR_Q} ${REMOTE_CONTAINER} python3 -m mousedroid.main --health-check" \
             || echo "WARNING: container health check returned non-zero exit code"
+    else
+        echo "WARNING: container ${REMOTE_CONTAINER} not running after ${REMOTE_HEALTH_WAIT_S}s — container health check skipped"
     fi
     if remote_cmd "test -d ${REMOTE_VENV_Q}"; then
         remote_cmd "MOUSEDROID_MOCK_HARDWARE=false ${REMOTE_VENV_Q}/bin/python -m mousedroid.main --health-check" \

@@ -54,7 +54,9 @@ The sync target is the checkout root, `/opt/mousedroid` (`MOUSEDROID_REMOTE_SRC`
 overrides it): the directory the compose bind mount and both systemd units run from.
 `--code-only` restarts the Docker unit when it is enabled but does not rebuild the image,
 so a dependency change still needs `docker compose build` on the rover. `--full` is the
-bare-metal venv path and is not for this rover.
+bare-metal venv path and is not for this rover. An rsync leaves the rover's tree different from its
+`HEAD` (`.git` is never synced), so the next run's WIP guard reports the checkout dirty and
+needs `--confirm-dirty`; prefer the git-fetch path below when the rover can reach `origin`.
 
 With `--confirm-dirty` the guard (`scripts/rover_wip_guard.sh`, piped over
 `ssh` so it does not have to already be on the rover) does two things, in this
