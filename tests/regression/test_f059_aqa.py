@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -75,10 +76,15 @@ def test_bench_overlay_leaves_the_motion_gate_closed() -> None:
 
 
 def _bash_function(text: str, name: str) -> str:
-    """Body of the top-level shell function ``name``: its opening line to the first bare ``}``."""
+    """Code of the top-level shell function ``name``: its opening line to the first bare ``}``.
+
+    Whole-line ``#`` comments are dropped, so prose that mentions a token cannot satisfy a pin
+    on the code that must contain it.
+    """
     lines = text.splitlines()
     start = lines.index(f"{name}() {{")
-    return "\n".join(lines[start : lines.index("}", start)])
+    body = lines[start : lines.index("}", start)]
+    return "\n".join(line for line in body if not line.lstrip().startswith("#"))
 
 
 def _hardware_functions(module: str) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
@@ -106,19 +112,44 @@ def _code_names(fn: ast.AST) -> set[str]:
     return names
 
 
-def test_motor_stage_runs_the_loopback_module_and_greps_its_test_name() -> None:
-    """R-1 pin 1: the stage ↔ test pairing the gate depends on."""
+@pytest.mark.parametrize(
+    ("stage", "module", "passed_line"),
+    [
+        ("test_motor", "test_esp32_loopback.py", "test_send_velocity_moves_encoders PASSED"),
+        ("test_power", "test_power_chain_smoke.py", "test_power_chain_within_budget PASSED"),
+    ],
+    ids=["motor", "power"],
+)
+def test_esp32_stages_run_their_hardware_modules_and_grep_passed(
+    stage: str, module: str, passed_line: str
+) -> None:
+    """R-1 pin 1 + R3-2: the stage <-> test pairing the gate depends on, for both ESP32 stages.
+
+    pytest exits 0 when every test skips (e.g. under esp32.enabled=false), so a bare exit status
+    proves nothing: each stage must see its own test PASS. The explicit opt-out (the overlay
+    variable set empty) SKIPs before pytest runs, and ANSI codes must never break the greps.
+    """
     text = (_REPO_ROOT / "scripts" / "jetson_smoke_test.sh").read_text(encoding="utf-8")
-    body = _bash_function(text, "test_motor")
+    body = _bash_function(text, stage)
     # The assignment, not the bare path: the stage's own "not found" messages also name it.
-    assert 'test_file="${PROJECT_DIR}/tests/hardware/test_esp32_loopback.py"' in body
-    assert 'grep -q "test_send_velocity_moves_encoders PASSED"' in body
-    assert "esp32_stage_configs_csv" in body
-    # The power stage shares the overlay wiring, and must see its own test PASS: pytest exits 0
-    # when every test skips (e.g. under esp32.enabled=false), so a bare exit status proves nothing.
-    power = _bash_function(text, "test_power")
-    assert "esp32_stage_configs_csv" in power
-    assert 'grep -q "test_power_chain_within_budget PASSED"' in power
+    assignment = f'test_file="${{PROJECT_DIR}}/tests/hardware/{module}"'
+    assert assignment in body, f"{stage} must run tests/hardware/{module}"
+    assert f'grep -q "{passed_line}"' in body, (
+        f"{stage} must require '{passed_line}' in the output, not just a zero exit status"
+    )
+    assert "esp32_stage_configs_csv" in body, (
+        f"{stage} must stack the bench overlay through esp32_stage_configs_csv"
+    )
+    assert re.search(r"-m pytest -m hardware [^\n]*--color=no", body), (
+        f"{stage} must run pytest with --color=no so the PASSED/SKIPPED greps never meet ANSI codes"
+    )
+    opt_out = re.search(
+        r'\[\[ -z "\$\{BENCH_ESP32_OVERLAY\}" \]\]; then\s+record_skip [^\n]+\s+return\b', body
+    )
+    assert opt_out, f"{stage} must record a SKIP and return when the bench overlay is opted out"
+    assert opt_out.start() < body.index("-m pytest -m hardware"), (
+        f"{stage} must decide the opt-out before it invokes pytest"
+    )
 
 
 def test_loopback_motion_tests_branch_on_the_encoder_flag_and_the_motion_gate() -> None:
