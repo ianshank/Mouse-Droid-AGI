@@ -12,6 +12,10 @@ Probes and dev utilities (not shipped in the runtime path):
 - `doc_hygiene.py` — `NEXT_STEPS.md` budget guard
 - `validate_skill_commands.py` — skill-doc path / host hygiene (CLI + importable library)
 - `llm_latency_probe.py`, `lidar_telemetry_probe.py`, `jetson_remote_llm_probe.py` — latency / telemetry probes
+  (`llm_latency_probe.py --report-json PATH` also writes the model-retarget evidence: which tier served)
+- `credit_ledger.py` — F-059 credit workstreams: `charge(ws, estimate_usd)` refuses an API call before it is
+  made when the workstream's recorded spend would pass its cap, `record(entry)` appends one JSON line per run;
+  caps and the ledger path come from `credit:` in `.claude/workforce.yaml`
 - `spikes/` — throwaway investigation spikes
 
 `tools/` is inside the `ruff` lint + format scope — in `pyproject.toml`, in

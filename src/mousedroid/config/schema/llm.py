@@ -16,6 +16,52 @@ from pydantic import ConfigDict, Field, SecretStr
 from mousedroid.config.schema._primitives import StrictBaseModel, VLABackendLiteral
 
 
+class AnthropicRequestConfig(StrictBaseModel):
+    """Per-model request shape for the Anthropic backend (F-059 WS-A).
+
+    Optional sub-block of :class:`LLMConfig` (``llm.anthropic``). Per the model
+    table (cache 2026-10-06; to be confirmed on the bench by the probe run),
+    Claude Haiku 5.5 and Sonnet 5.5 answer HTTP 400 to any non-default
+    ``temperature`` / ``top_p`` / ``top_k``, Haiku 5.5 thinks by default, and
+    ``output_config.effort`` is the cost / latency lever - so retargeting an
+    overlay is not just an id swap. This block says what the new model needs;
+    :class:`LLMConfig` leaves it ``None`` so every existing deployment keeps the
+    request the gateway has always sent.
+    """
+
+    omit_sampling_params: bool = Field(
+        True,
+        description=(
+            "Do not send temperature/top_p/top_k; per the model table (cache "
+            "2026-10-06) Haiku 5.5 and Sonnet 5.5 reject non-default values with "
+            "HTTP 400. The gateway only ever sends "
+            "``temperature`` (the value is ``LLMConfig.temperature``), so True drops "
+            "that one field and False keeps sending it for models that still honour it."
+        ),
+    )
+    thinking: Literal["adaptive", "disabled"] | None = Field(
+        None,
+        description=(
+            "Explicit thinking mode; None sends no thinking field (model default). "
+            "Per the model table (cache 2026-10-06): 'disabled' is accepted on "
+            "Haiku 5.5 only at effort high or below, and is rejected with HTTP 400 "
+            "by models that always think (Sonnet 5.5); Haiku 5.5 thinks adaptively "
+            "by default and thinking tokens count toward ``max_tokens``, so a "
+            "small ``max_tokens`` can be spent before any text."
+        ),
+    )
+    effort: Literal["low", "medium", "high"] | None = Field(
+        None,
+        description=(
+            "output_config.effort; None sends none (model default, medium on Haiku "
+            "5.5). Capped at 'high' because, per the model table (cache 2026-10-06), "
+            "xhigh/max reject 'thinking: disabled' on Haiku 5.5. Not sent (one "
+            "anthropic_effort_unsupported_by_sdk warning) when the installed "
+            "anthropic SDK has no output_config parameter."
+        ),
+    )
+
+
 class LLMConfig(StrictBaseModel):
     """LLM Gateway configuration for NL command interface."""
 
@@ -150,6 +196,21 @@ class LLMConfig(StrictBaseModel):
             "Smaller than the orchestrator's tick budget so a slow LLM never "
             "starves the control loop. Cloud Claude round-trips are seconds — "
             "raise this (e.g. 15-30s) when ``backend='anthropic'``."
+        ),
+    )
+    anthropic: AnthropicRequestConfig | None = Field(
+        default=None,
+        description=(
+            "Optional per-model request shape for ``backend='anthropic'`` "
+            "(F-059 WS-A): whether to omit sampling parameters and an explicit "
+            "``thinking`` mode / ``output_config.effort``. ``None`` (default) "
+            "keeps the request byte-identical to the pre-F-059 one - "
+            "``temperature`` is sent and no ``thinking`` / ``output_config`` "
+            "field is added - so existing YAML is unchanged. Per the model table "
+            "(cache 2026-10-06) Claude Haiku 5.5 and Sonnet 5.5 reject a "
+            "non-default ``temperature`` with HTTP 400, so an overlay that "
+            "retargets to them must set this block. Env "
+            "override per key: ``MOUSEDROID_LLM__ANTHROPIC__THINKING`` etc."
         ),
     )
 

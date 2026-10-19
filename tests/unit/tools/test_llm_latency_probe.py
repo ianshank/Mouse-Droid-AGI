@@ -9,8 +9,10 @@ download / inference happens in CI.
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
 import sys
+import types
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -334,3 +336,471 @@ def test_main_cli_help_flag_exits_zero(probe: Any) -> None:
     with pytest.raises(SystemExit) as excinfo:
         probe.main(["--help"])
     assert excinfo.value.code == 0
+
+
+# --------------------------------------------------------------------------- #
+# F-059 WS-A - ``--report-json``: which tier served, and which model it was
+#
+# Driven through the REAL ``FallbackLLMGateway`` composite and the REAL
+# ``AnthropicLLMGateway`` (faked SDK, no network), so "served" is derived from
+# the same degrade semantics production uses rather than from a hand-set flag.
+# --------------------------------------------------------------------------- #
+_REPORT_KEYS = {
+    "model_requested",
+    "model_resolved",
+    "resolved_via",
+    "backend",
+    "served",
+    "cold_start_ms",
+    "p50_ms",
+    "p95_ms",
+    "p99_ms",
+    "iterations",
+    "neutral_replies",
+    "passed",
+}
+_GOOD_REPLY = '{"vx": 0.0, "vy": 0.0, "omega": 0.5}'
+# What a thinking-starved Haiku 5.5 hands back: the whole token budget went on
+# thinking, so there is no text block at all (or prose with no JSON object).
+_UNPARSEABLE_REPLY = "I would turn left, slowly."
+
+
+class _FakeModels:
+    """``client.models`` - ``retrieve`` is how the probe resolves the served model id."""
+
+    def __init__(self, *, resolved: str | None = None, exc: Exception | None = None) -> None:
+        self.requested: list[str] = []
+        self._resolved = resolved
+        self._exc = exc
+
+    async def retrieve(self, model_id: str) -> Any:
+        self.requested.append(model_id)
+        if self._exc is not None:
+            raise self._exc
+        return types.SimpleNamespace(id=self._resolved)
+
+
+class _FakeMessages:
+    """``client.messages`` - fails on the call indices in ``fail_on`` (0-based)."""
+
+    def __init__(
+        self,
+        *,
+        fail_on: frozenset[int] = frozenset(),
+        always_fail: bool = False,
+        reply: str = _GOOD_REPLY,
+    ) -> None:
+        self.calls = 0
+        self._fail_on = fail_on
+        self._always_fail = always_fail
+        self._reply = reply
+
+    async def create(self, **_kwargs: Any) -> Any:
+        index = self.calls
+        self.calls += 1
+        if self._always_fail or index in self._fail_on:
+            raise RuntimeError("503 overloaded")
+        return types.SimpleNamespace(content=[types.SimpleNamespace(text=self._reply)])
+
+
+class _LocalSecondary:
+    """A healthy local fallback that answers a recognisably different goal."""
+
+    is_ready = True
+    is_degraded = False
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def start(self) -> None:
+        return None
+
+    async def translate_mission(self, _command: str) -> Any:
+        from mousedroid.llm_gateway.protocol import GoalVector
+
+        self.calls += 1
+        return GoalVector(vx_target=0.25)
+
+    async def stop(self) -> None:
+        return None
+
+
+def _composite(
+    messages: _FakeMessages,
+    models: _FakeModels | None = None,
+    *,
+    clock: Any = None,
+    cooldown_s: float = 30.0,
+    primary_enabled: bool = True,
+) -> tuple[Any, _LocalSecondary]:
+    """A real cloud-primary / local-secondary composite over a faked SDK."""
+    from mousedroid.config.schema import LLMConfig
+    from mousedroid.llm_gateway.anthropic_gateway import AnthropicLLMGateway
+    from mousedroid.llm_gateway.fallback_gateway import FallbackLLMGateway
+
+    class _Client:
+        def __init__(self, **_kwargs: Any) -> None:
+            self.messages = messages
+            self.models = models if models is not None else _FakeModels(resolved="claude-haiku-5-5")
+
+    cfg = LLMConfig(backend="anthropic", model_name="claude-haiku-5-5", enabled=primary_enabled)
+    primary = AnthropicLLMGateway(cfg, sdk=types.SimpleNamespace(AsyncAnthropic=_Client))
+    secondary = _LocalSecondary()
+    gateway = FallbackLLMGateway(primary, secondary, retry_cooldown_s=cooldown_s, clock=clock)
+    return gateway, secondary
+
+
+def _wire_probe(
+    probe: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_cfg: Any,
+    gateway: Any,
+) -> None:
+    stub_cfg.llm.model_name = "claude-haiku-5-5"
+    stub_cfg.llm.backend = "anthropic"
+    stub_cfg.llm.request_timeout_s = 5.0
+    stub_cfg.llm.latency_target_ms = 5000.0
+    monkeypatch.setattr(probe, "build_llm_gateway", lambda _cfg, **_kw: gateway)
+    monkeypatch.setattr(probe, "build_injection_filter", lambda _cfg: MagicMock())
+    monkeypatch.setattr(
+        probe,
+        "_tegrastats_snapshot",
+        lambda: {"ram_used_mb": None, "ram_total_mb": None, "raw_line": None},
+    )
+    monkeypatch.setattr(probe, "load_settings", lambda *_paths: stub_cfg)
+
+
+def _report_args(probe: Any, report: Path, iterations: int = 1) -> Any:
+    return probe.argparse.Namespace(
+        config=None, mission="turn left slowly", iterations=iterations, report_json=report
+    )
+
+
+@pytest.mark.asyncio
+async def test_probe_report_marks_primary_when_the_cloud_tier_answers(
+    probe: Any, monkeypatch: pytest.MonkeyPatch, stub_cfg: Any, tmp_path: Path
+) -> None:
+    models = _FakeModels(resolved="claude-haiku-5-5")
+    gateway, secondary = _composite(_FakeMessages(), models)
+    _wire_probe(probe, monkeypatch, stub_cfg, gateway)
+    report_path = tmp_path / "haiku-5-5.json"
+
+    rc = await probe._main(_report_args(probe, report_path, iterations=3))
+
+    assert rc == 0
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["served"] == "primary"
+    assert report["passed"] is True
+    assert report["iterations"] == 3
+    assert report["model_requested"] == "claude-haiku-5-5"
+    assert report["model_resolved"] == "claude-haiku-5-5"
+    assert report["resolved_via"] == "models.retrieve"
+    assert report["backend"] == "anthropic"
+    assert models.requested == ["claude-haiku-5-5"]
+    assert secondary.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_probe_report_marks_fallback_when_primary_degraded(
+    probe: Any, monkeypatch: pytest.MonkeyPatch, stub_cfg: Any, tmp_path: Path
+) -> None:
+    """R10: a 400 / outage must not read as a pass because the local tier answered quickly."""
+    gateway, secondary = _composite(_FakeMessages(always_fail=True))
+    _wire_probe(probe, monkeypatch, stub_cfg, gateway)
+    report_path = tmp_path / "haiku-5-5.json"
+
+    rc = await probe._main(_report_args(probe, report_path, iterations=2))
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["served"] == "fallback"
+    assert report["passed"] is False, "a fallback-served run must never be reported as a pass"
+    assert secondary.calls == 2  # the local tier really did answer
+    assert rc == probe._EXIT_PRIMARY_NOT_SERVED
+
+
+@pytest.mark.asyncio
+async def test_probe_report_remembers_an_early_fallback_even_if_the_primary_recovers(
+    probe: Any, monkeypatch: pytest.MonkeyPatch, stub_cfg: Any, tmp_path: Path
+) -> None:
+    """Iteration 0 fails over, the cooldown elapses, later iterations are cloud again.
+
+    Judging by the final state alone would call this run "primary"; it was not.
+    """
+    ticks = iter(range(0, 10_000, 100))  # the composite's clock jumps 100 s per read
+    gateway, secondary = _composite(
+        _FakeMessages(fail_on=frozenset({0})),
+        clock=lambda: float(next(ticks)),
+        cooldown_s=30.0,
+    )
+    _wire_probe(probe, monkeypatch, stub_cfg, gateway)
+    report_path = tmp_path / "report.json"
+
+    rc = await probe._main(_report_args(probe, report_path, iterations=3))
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert secondary.calls == 1  # only iteration 0 was served locally
+    assert gateway._primary.is_degraded is False  # ...and the primary is healthy again
+    assert report["served"] == "fallback"
+    assert report["passed"] is False
+    assert rc == probe._EXIT_PRIMARY_NOT_SERVED
+
+
+class _RecordingProbeLog:
+    """Stands in for the probe's module logger (structlog capture is order-dependent)."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str, dict[str, Any]]] = []
+
+    def _record(self, level: str, event: str, **kw: Any) -> None:
+        self.events.append((level, event, kw))
+
+    def debug(self, event: str, **kw: Any) -> None:
+        self._record("debug", event, **kw)
+
+    def info(self, event: str, **kw: Any) -> None:
+        self._record("info", event, **kw)
+
+    def warning(self, event: str, **kw: Any) -> None:
+        self._record("warning", event, **kw)
+
+    def error(self, event: str, **kw: Any) -> None:
+        self._record("error", event, **kw)
+
+    def named(self, event: str) -> list[dict[str, Any]]:
+        return [kw for _level, name, kw in self.events if name == event]
+
+
+@pytest.mark.asyncio
+async def test_probe_report_counts_zero_neutral_replies_for_a_real_answer(
+    probe: Any, monkeypatch: pytest.MonkeyPatch, stub_cfg: Any, tmp_path: Path
+) -> None:
+    gateway, _ = _composite(_FakeMessages())
+    _wire_probe(probe, monkeypatch, stub_cfg, gateway)
+    report_path = tmp_path / "report.json"
+
+    await probe._main(_report_args(probe, report_path, iterations=3))
+
+    assert json.loads(report_path.read_text(encoding="utf-8"))["neutral_replies"] == 0
+
+
+@pytest.mark.asyncio
+async def test_probe_report_surfaces_replies_the_primary_gave_that_parsed_to_nothing(
+    probe: Any, monkeypatch: pytest.MonkeyPatch, stub_cfg: Any, tmp_path: Path
+) -> None:
+    """Unparseable output does NOT degrade the gateway, so ``served`` alone cannot see it.
+
+    A thinking-starved Haiku 5.5 round-trips fine and the gateway deliberately
+    returns a neutral goal without flipping ``is_degraded``; the run therefore reads
+    ``served: primary``. ``neutral_replies`` is the signal that it was useless. It
+    is surfaced, not gated: a neutral goal is the right answer to a "stop" mission.
+    """
+    log = _RecordingProbeLog()
+    monkeypatch.setattr(probe, "_log", log)
+    gateway, secondary = _composite(_FakeMessages(reply=_UNPARSEABLE_REPLY))
+    _wire_probe(probe, monkeypatch, stub_cfg, gateway)
+    report_path = tmp_path / "report.json"
+
+    rc = await probe._main(_report_args(probe, report_path, iterations=3))
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["served"] == "primary"
+    assert gateway._primary.is_degraded is False
+    assert secondary.calls == 0
+    assert report["neutral_replies"] == 3
+    assert report["passed"] is True  # surfaced, not gated (see docstring)
+    assert rc == 0
+    warned = log.named("llm_probe_every_reply_neutral")
+    assert len(warned) == 1
+    assert warned[0]["neutral_replies"] == 3
+    assert warned[0]["iterations"] == 3
+
+
+@pytest.mark.asyncio
+async def test_probe_does_not_warn_when_only_some_replies_are_neutral(
+    probe: Any, monkeypatch: pytest.MonkeyPatch, stub_cfg: Any, tmp_path: Path
+) -> None:
+    """Counting is per reply; the every-reply warning is for the all-neutral run only."""
+    log = _RecordingProbeLog()
+    monkeypatch.setattr(probe, "_log", log)
+    messages = _FakeMessages(reply=_GOOD_REPLY)
+    gateway, _ = _composite(messages)
+    _wire_probe(probe, monkeypatch, stub_cfg, gateway)
+    original = messages.create
+    state = {"n": 0}
+
+    async def _first_reply_garbled(**kwargs: Any) -> Any:
+        state["n"] += 1
+        response = await original(**kwargs)
+        if state["n"] == 1:
+            response.content[0].text = _UNPARSEABLE_REPLY
+        return response
+
+    monkeypatch.setattr(messages, "create", _first_reply_garbled)
+    report_path = tmp_path / "report.json"
+
+    await probe._main(_report_args(probe, report_path, iterations=3))
+
+    assert json.loads(report_path.read_text(encoding="utf-8"))["neutral_replies"] == 1
+    assert log.named("llm_probe_every_reply_neutral") == []
+
+
+@pytest.mark.asyncio
+async def test_probe_report_marks_fallback_when_the_primary_never_became_ready(
+    probe: Any, monkeypatch: pytest.MonkeyPatch, stub_cfg: Any, tmp_path: Path
+) -> None:
+    """A disabled / never-started primary is not DEGRADED, but it did not serve either."""
+    gateway, secondary = _composite(_FakeMessages(), primary_enabled=False)
+    _wire_probe(probe, monkeypatch, stub_cfg, gateway)
+    report_path = tmp_path / "report.json"
+
+    rc = await probe._main(_report_args(probe, report_path))
+
+    assert gateway._primary.is_degraded is False  # the trap: healthy-looking, but not serving
+    assert gateway._primary.is_ready is False
+    assert secondary.calls == 1
+    assert json.loads(report_path.read_text(encoding="utf-8"))["served"] == "fallback"
+    assert rc == probe._EXIT_PRIMARY_NOT_SERVED
+
+
+@pytest.mark.asyncio
+async def test_probe_report_has_exactly_the_documented_shape(
+    probe: Any, monkeypatch: pytest.MonkeyPatch, stub_cfg: Any, tmp_path: Path
+) -> None:
+    gateway, _ = _composite(_FakeMessages())
+    _wire_probe(probe, monkeypatch, stub_cfg, gateway)
+    report_path = tmp_path / "report.json"
+
+    await probe._main(_report_args(probe, report_path, iterations=4))
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert set(report) == _REPORT_KEYS
+    assert report["served"] in {"primary", "fallback"}
+    assert report["resolved_via"] in {"models.retrieve", "config"}
+    for key in ("cold_start_ms", "p50_ms", "p95_ms", "p99_ms"):
+        assert isinstance(report[key], float), key
+        assert report[key] >= 0.0, key
+    assert report["p50_ms"] <= report["p95_ms"] <= report["p99_ms"]
+    assert isinstance(report["iterations"], int)
+    assert isinstance(report["passed"], bool)
+    assert report_path.read_text(encoding="utf-8").endswith("\n")
+
+
+@pytest.mark.asyncio
+async def test_probe_report_falls_back_to_the_config_id_when_retrieve_fails(
+    probe: Any, monkeypatch: pytest.MonkeyPatch, stub_cfg: Any, tmp_path: Path
+) -> None:
+    models = _FakeModels(exc=RuntimeError("404 not_found_error"))
+    gateway, _ = _composite(_FakeMessages(), models)
+    _wire_probe(probe, monkeypatch, stub_cfg, gateway)
+    report_path = tmp_path / "report.json"
+
+    rc = await probe._main(_report_args(probe, report_path))
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["model_resolved"] == "claude-haiku-5-5"
+    assert report["resolved_via"] == "config"
+    assert rc == 0  # a failed id lookup does not fail an otherwise healthy run
+
+
+@pytest.mark.asyncio
+async def test_probe_report_records_the_resolved_id_when_it_differs_from_the_request(
+    probe: Any, monkeypatch: pytest.MonkeyPatch, stub_cfg: Any, tmp_path: Path
+) -> None:
+    models = _FakeModels(resolved="claude-haiku-5-5-20261001")
+    gateway, _ = _composite(_FakeMessages(), models)
+    _wire_probe(probe, monkeypatch, stub_cfg, gateway)
+    report_path = tmp_path / "report.json"
+
+    await probe._main(_report_args(probe, report_path))
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["model_requested"] == "claude-haiku-5-5"
+    assert report["model_resolved"] == "claude-haiku-5-5-20261001"
+    assert report["resolved_via"] == "models.retrieve"
+
+
+@pytest.mark.asyncio
+async def test_probe_report_uses_the_config_id_when_the_gateway_has_no_client(
+    probe: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_cfg: Any,
+    stub_goal_vector: Any,
+    tmp_path: Path,
+) -> None:
+    """A local (llama-cpp) gateway has no Anthropic client to ask."""
+    gateway = MagicMock(spec=["is_ready", "is_degraded", "start", "stop", "translate_mission"])
+    gateway.is_ready = True
+    gateway.is_degraded = False
+    gateway.start = AsyncMock()
+    gateway.stop = AsyncMock()
+    gateway.translate_mission = AsyncMock(return_value=stub_goal_vector)
+    _wire_probe(probe, monkeypatch, stub_cfg, gateway)
+    stub_cfg.llm.backend = "llama_cpp"
+    report_path = tmp_path / "report.json"
+
+    rc = await probe._main(_report_args(probe, report_path))
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["resolved_via"] == "config"
+    assert report["model_resolved"] == report["model_requested"]
+    assert report["backend"] == "llama_cpp"
+    assert report["served"] == "primary"  # nothing to fall back to: the gateway IS the primary
+    assert rc == 0
+
+
+@pytest.mark.asyncio
+async def test_probe_report_creates_missing_parent_directories(
+    probe: Any, monkeypatch: pytest.MonkeyPatch, stub_cfg: Any, tmp_path: Path
+) -> None:
+    gateway, _ = _composite(_FakeMessages())
+    _wire_probe(probe, monkeypatch, stub_cfg, gateway)
+    report_path = tmp_path / "reports" / "llm_latency" / "2026-10-19" / "haiku-5-5.json"
+
+    await probe._main(_report_args(probe, report_path))
+
+    assert report_path.is_file()
+
+
+@pytest.mark.asyncio
+async def test_probe_without_the_flag_writes_no_report_and_keeps_legacy_exit_codes(
+    probe: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_cfg: Any,
+    tmp_path: Path,
+) -> None:
+    """No ``--report-json``: nothing is written and a fallback-served run is NOT re-judged."""
+    gateway, secondary = _composite(_FakeMessages(always_fail=True))
+    _wire_probe(probe, monkeypatch, stub_cfg, gateway)
+    monkeypatch.chdir(tmp_path)
+
+    args = probe.argparse.Namespace(config=None, mission="turn left slowly")
+    rc = await probe._main(args)
+
+    assert rc == 0  # legacy behaviour: latency under target is the whole verdict
+    assert secondary.calls == 1
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_main_cli_parses_report_json_as_a_path(probe: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, Any] = {}
+
+    async def _fake_main(args: Any) -> int:
+        seen["report_json"] = args.report_json
+        return 0
+
+    monkeypatch.setattr(probe, "_main", _fake_main)
+    rc = probe.main(["--iterations", "2", "--report-json", "out/report.json"])
+    assert rc == 0
+    assert seen["report_json"] == Path("out/report.json")
+
+
+def test_main_cli_report_json_defaults_to_none(probe: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, Any] = {}
+
+    async def _fake_main(args: Any) -> int:
+        seen["report_json"] = args.report_json
+        return 0
+
+    monkeypatch.setattr(probe, "_main", _fake_main)
+    probe.main([])
+    assert seen["report_json"] is None

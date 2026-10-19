@@ -14,6 +14,7 @@ load time instead of silently disabling a gate.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
@@ -356,6 +357,69 @@ class RatchetBudgetsConfig(BaseModel):
     )
 
 
+class CreditConfig(BaseModel):
+    """Spend caps and ledger location for the F-059 credit workstreams.
+
+    Consumed by ``tools/credit_ledger.py``: ``charge()`` refuses an API call
+    BEFORE it is made when the workstream's recorded spend plus the estimate
+    would exceed its cap, and ``record()`` appends one JSON object per run to
+    :attr:`ledger`. The numbers live in ``.claude/workforce.yaml``, never in code.
+
+    Fails closed: :attr:`caps_usd` defaults to empty, so a repository that has
+    not adopted the block — or an unknown workstream name — cannot spend. This
+    is the one section whose "missing means permissive" default would be wrong:
+    every other section defaults to today's behaviour; this one guards money.
+    """
+
+    model_config = _STRICT
+
+    caps_usd: dict[str, float] = Field(
+        default_factory=dict,
+        description=(
+            "Per-workstream spend cap in USD, keyed by workstream name (A/B/C in "
+            "the F-059 plan). A workstream absent from this map has no cap and "
+            "may not spend; a cap of 0 disables a workstream explicitly."
+        ),
+    )
+    ledger: str = Field(
+        default="reports/credit/ledger.jsonl",
+        description=(
+            "Repo-relative path of the append-only JSON-lines spend ledger "
+            "(tracked: it is the evidence that ledgers stayed under their caps)."
+        ),
+    )
+
+    @field_validator("caps_usd")
+    @classmethod
+    def _validate_caps(cls, value: dict[str, float]) -> dict[str, float]:
+        """Reject blank workstream names and caps that cannot bound spend.
+
+        ``nan`` fails every comparison (a ``nan`` cap would never be exceeded),
+        ``inf`` is no cap at all, and a negative cap is a typo for a number.
+        """
+        for workstream, cap in value.items():
+            if not workstream.strip():
+                raise ValueError("workstream names must not be empty or whitespace-only")
+            if not math.isfinite(cap) or cap < 0:
+                raise ValueError(f"cap for workstream {workstream!r} must be a finite number >= 0")
+        return value
+
+    @field_validator("ledger")
+    @classmethod
+    def _reject_unsafe_ledger_path(cls, value: str) -> str:
+        """Keep the ledger inside the checkout (it is joined onto the repo root)."""
+        p = Path(value)
+        if (
+            not value.strip()
+            or p.is_absolute()
+            or PurePosixPath(value).is_absolute()
+            or PureWindowsPath(value).is_absolute()
+            or ".." in p.parts
+        ):
+            raise ValueError("must be a non-empty repo-relative path without '..' traversal")
+        return value
+
+
 class WorkforceConfig(BaseModel):
     """Root workforce configuration."""
 
@@ -370,6 +434,7 @@ class WorkforceConfig(BaseModel):
     evidence: EvidenceConfig = Field(default_factory=EvidenceConfig)
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     ratchet_budgets: RatchetBudgetsConfig = Field(default_factory=RatchetBudgetsConfig)
+    credit: CreditConfig = Field(default_factory=CreditConfig)
 
 
 def load_config(

@@ -21,6 +21,20 @@ Architecture invariants (per CLAUDE.md):
   temperature, max tokens, request timeout, API key) comes from
   :class:`LLMConfig`. The Claude model id lives in ``cfg.llm.model_name``;
   there is deliberately no baked-in default model.
+* **Request profile (F-059 WS-A)** — ``cfg.llm.anthropic`` is an optional
+  :class:`~mousedroid.config.schema.AnthropicRequestConfig`. Absent, the
+  request is the one this gateway has always sent (``temperature`` included,
+  nothing else added). Present, sampling parameters are omitted (per the
+  model table, cache 2026-10-06, Claude Haiku 5.5 / Sonnet 5.5 answer HTTP
+  400 to non-default values; the on-Jetson probe run is what confirms it) and
+  ``thinking`` / ``output_config.effort`` are added only when configured.
+  ``temperature`` and ``output_config`` are checked against the INSTALLED
+  SDK's ``messages.create`` signature first: ``anthropic>=1.0`` has no
+  ``temperature`` keyword (passing one is a ``TypeError``), so the legacy value
+  rides ``extra_body``, and an SDK without ``output_config`` simply does not
+  get ``effort``. ``thinking`` is sent whenever configured: an SDK too old to
+  have it fails loudly (degrade + ``anthropic_gateway_request_failed``) rather
+  than silently ignoring an explicit operator setting.
 * **Never raises on a backend failure** — on any transport / parse failure
   the gateway logs a structured event, sets ``_degraded=True``, and returns
   a neutral :class:`GoalVector` so the orchestrator's 30 Hz loop never
@@ -42,6 +56,7 @@ Architecture invariants (per CLAUDE.md):
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import re
 import time
@@ -57,6 +72,8 @@ from mousedroid.security.injection_filter import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from mousedroid.config.schema import LLMConfig
     from mousedroid.telemetry.metrics import MetricsRegistry
 
@@ -78,6 +95,26 @@ _clamp_unit = clamp_unit
 # format. ``DOTALL`` lets the object span newlines; the greedy ``.*``
 # captures the outermost object so nested braces survive.
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
+def _accepts_keyword(func: Callable[..., Any], name: str) -> bool:
+    """Return whether ``func`` can be called with the keyword argument ``name``.
+
+    Used to ask the INSTALLED SDK what ``messages.create`` takes instead of
+    assuming it: the typed parameter list changes between SDK majors
+    (``anthropic>=1.0`` dropped ``temperature`` / ``top_p`` / ``top_k``; older
+    releases have no ``output_config``). A ``**kwargs`` callable accepts
+    anything, and one whose signature cannot be read (a C extension, some
+    mocks) is assumed to — never raise from a capability probe.
+    """
+    try:
+        parameters = inspect.signature(func).parameters
+    except (TypeError, ValueError):
+        return True
+    declared = parameters.get(name)
+    if declared is not None and declared.kind is not inspect.Parameter.POSITIONAL_ONLY:
+        return True
+    return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values())
 
 
 class AnthropicLLMGateway:
@@ -123,6 +160,10 @@ class AnthropicLLMGateway:
         self._ready = False
         self._degraded = False
         self._metrics = metrics
+        # Latches for the one-shot SDK-fork events (``_add_effort`` /
+        # ``_add_temperature``); per gateway so each fires once, not per request.
+        self._effort_unsupported_logged = False
+        self._temperature_fork_logged = False
         if injection_filter is None:
             injection_filter = RegexInjectionFilter(
                 cfg.injection_patterns,
@@ -320,14 +361,10 @@ class AnthropicLLMGateway:
 
         start = time.monotonic()
         try:
-            response = await self._client.messages.create(
-                model=self._cfg.model_name,
-                max_tokens=max_tokens,
-                temperature=self._cfg.temperature,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_content}],
-                timeout=self._cfg.request_timeout_s,
-            )
+            # Built INSIDE the try so a request-assembly failure degrades like any
+            # other backend failure instead of escaping the never-raises contract.
+            kwargs = self._build_request(system_prompt, user_content, max_tokens)
+            response = await self._client.messages.create(**kwargs)
         except asyncio.CancelledError:
             # Cooperative cancellation (orchestrator loop teardown / e-stop).
             # Propagate without flipping ``_degraded`` — the request never
@@ -370,6 +407,91 @@ class AnthropicLLMGateway:
             output_tokens=output_tokens,
         )
         return response
+
+    def _build_request(
+        self, system_prompt: str, user_content: str, max_tokens: int
+    ) -> dict[str, Any]:
+        """Assemble the keyword arguments for one ``messages.create`` call.
+
+        With ``cfg.anthropic`` unset this is the request the gateway has always
+        built: ``temperature`` is sent and nothing else is added. With the block
+        set, sampling parameters are omitted unless the operator opted back in
+        (``omit_sampling_params: false``), and ``thinking`` / ``output_config``
+        are added only when configured.
+
+        Args:
+            system_prompt: System prompt for this call.
+            user_content: The (already sanitised) user message.
+            max_tokens: Generation cap for this call.
+
+        Returns:
+            The kwargs to splat into ``client.messages.create``.
+        """
+        cfg = self._cfg
+        kwargs: dict[str, Any] = {
+            "model": cfg.model_name,
+            "max_tokens": max_tokens,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_content}],
+            "timeout": cfg.request_timeout_s,
+        }
+        profile = cfg.anthropic
+        if profile is None or not profile.omit_sampling_params:
+            self._add_temperature(kwargs)
+        if profile is not None and profile.thinking is not None:
+            kwargs["thinking"] = {"type": profile.thinking}
+        if profile is not None and profile.effort is not None:
+            self._add_effort(kwargs, profile.effort)
+        return kwargs
+
+    def _add_temperature(self, kwargs: dict[str, Any]) -> None:
+        """Send ``cfg.temperature`` the way the installed SDK can carry it.
+
+        ``anthropic<1.0`` takes it as a keyword. ``anthropic>=1.0`` removed the
+        keyword — passing it raises ``TypeError`` before any request leaves the
+        rover, which would silently degrade the cloud tier to the local
+        fallback on every call — but the API still honours it for the models
+        that accept it, so it rides ``extra_body`` (the SDK's documented
+        migration path), which is merged into the request JSON as-is. The fork
+        depends on the installed SDK, not on config, so it is announced once
+        (``anthropic_legacy_temperature_via_extra_body``) rather than left silent.
+        """
+        if self._accepts("temperature"):
+            kwargs["temperature"] = self._cfg.temperature
+            return
+        kwargs["extra_body"] = {"temperature": self._cfg.temperature}
+        if not self._temperature_fork_logged:
+            self._temperature_fork_logged = True
+            _log.info(
+                "anthropic_legacy_temperature_via_extra_body",
+                temperature=self._cfg.temperature,
+                model=self._cfg.model_name,
+                sdk_version=getattr(self._sdk, "__version__", None),
+                reason="sdk_has_no_temperature_keyword",
+            )
+
+    def _add_effort(self, kwargs: dict[str, Any], effort: str) -> None:
+        """Send ``output_config.effort`` iff the installed SDK has ``output_config``.
+
+        An SDK without it would raise ``TypeError`` for the unknown keyword, so
+        the setting is skipped instead — with one warning per gateway, so the
+        operator learns it is not taking effect without a log line per request.
+        """
+        if self._accepts("output_config"):
+            kwargs["output_config"] = {"effort": effort}
+            return
+        if not self._effort_unsupported_logged:
+            self._effort_unsupported_logged = True
+            _log.warning(
+                "anthropic_effort_unsupported_by_sdk",
+                effort=effort,
+                model=self._cfg.model_name,
+                sdk_version=getattr(self._sdk, "__version__", None),
+            )
+
+    def _accepts(self, name: str) -> bool:
+        """Whether the live client's ``messages.create`` takes keyword ``name``."""
+        return _accepts_keyword(self._client.messages.create, name)
 
     @staticmethod
     def _usage_of(response: Any) -> Any:

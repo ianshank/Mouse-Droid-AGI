@@ -160,3 +160,17 @@ agents:
         - "("
         - ")"
         - "*"
+
+# F-059 credit workstreams (A = Anthropic request profile + latency probe,
+# B = Agent-SDK peer reviewer, C = Batch triage). tools/credit_ledger.py reads
+# this block: charge(ws, estimate_usd) raises CapExceeded BEFORE any API call
+# when the workstream's recorded spend plus the estimate would exceed its cap,
+# and record(entry) appends one JSON object per run to `ledger`. A workstream
+# missing from caps_usd has no cap and may not spend. The ledger is tracked so
+# the DoD ("every ledger row under its cap") is checkable from the repository.
+credit:
+    caps_usd:
+        A: 10
+        B: 60
+        C: 15
+    ledger: reports/credit/ledger.jsonl

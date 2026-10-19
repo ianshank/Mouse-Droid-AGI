@@ -8,6 +8,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — an Anthropic request profile, a probe report that cannot read a fallback as a pass, and a spend ledger (F-059 WS-A, part 1)
+
+Per the model table (cache 2026-10-06; to be confirmed on the bench by the probe run), Claude Haiku
+5.5 and Sonnet 5.5 answer HTTP 400 to any non-default `temperature`, and Haiku 5.5 thinks by
+default, so retargeting `llm.model_name` is not an id swap: the 400 would flip
+`AnthropicLLMGateway` to degraded and `FallbackLLMGateway` would quietly serve Phi-3 while the
+overlay still said Haiku. The optional `llm.anthropic` block (`AnthropicRequestConfig`:
+`omit_sampling_params`, `thinking`, `effort`) says what the new model needs; absent — the default,
+and both shipped overlays — the request is byte-identical to before. The gateway now also asks the
+*installed* SDK what `messages.create` takes. `anthropic>=1.0` removed the `temperature` keyword
+(passing it is a `TypeError` before any request leaves the rover), and `Dockerfile.jetson`'s
+unbounded `anthropic>=0.40` resolves to 1.x on a rebuild, so the legacy temperature now rides
+`extra_body` there (announced once as `anthropic_legacy_temperature_via_extra_body`), and `effort`
+is skipped with one `anthropic_effort_unsupported_by_sdk` warning on an SDK without
+`output_config`. The overlays are not retargeted here; that follows the on-Jetson probe.
+
+`tools/llm_latency_probe.py --report-json PATH` writes the evidence for that retarget: model
+requested and resolved (`client.models.retrieve`), p50/p95/p99, `served` and `neutral_replies`. A
+cloud primary with a local fallback hides a rejected request behind the fallback's fast answer;
+`served` is `primary` only if the cloud tier answered every iteration, `passed` requires it, and the
+run exits `4` otherwise. Unparseable output deliberately does not degrade the gateway, so a
+thinking-starved reply would still read `served: primary`; `neutral_replies` counts the all-zero
+goals (surfaced, not gated) so the go criterion can require it to be 0.
+Without the flag the probe is unchanged. `tools/credit_ledger.py` is the pre-call spend guard for
+the credit workstreams: `charge(ws, estimate_usd)` raises `CapExceeded` before any API call,
+`record(entry)` appends one JSON line per run, and the caps come from the new `credit:` block of
+`.claude/workforce.yaml` (A 10 / B 60 / C 15 USD) — an unconfigured workstream cannot spend.
+
 ### Fixed — the nightly Spec Harness, red every night since 2026-09-08
 
 `validate-slow` runs `--strict-git`, which needs every `done` feature's `implemented_in` to resolve.
