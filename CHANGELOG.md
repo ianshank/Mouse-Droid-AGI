@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — Stock ESP32 firmware is hash-pinned and the flash helper refuses unverified parts
+
+The WAVE ROVER ESP32 runs stock Waveshare `General_Driver`, but the repository recorded no image for
+it and `scripts/flash_esp32.sh` flashed one caller-supplied file at `0x0` with nothing to check it
+against. The new record `deployments/esp32-firmware.json` pins the four factory parts — bootloader,
+partitions, `boot_app0` and the `General_Driver` app (sha256 `ebedf216…`) — by size and hash, with
+their flash offsets and the 115200 connect baud. `scripts/flash_esp32.sh` now verifies size and
+sha256 of every part before any `esptool.py` call, dry-runs by default, and writes only with
+`--write`; its command line changed from positional `<port> <firmware.bin>` to flags (`--port`,
+`--bin-dir`, `--record`, `--baud`). `scripts/jetson_qspi_update.sh` is removed: an unconditional
+`reboot` made half of it unreachable, and nothing referenced it. The record validator runs in
+isolated mode (`python -I`), so a `json.py` in the working directory cannot stand in for the real
+module; `--baud` and the record's file names are validated, and `/firmware/` is gitignored so staged
+images and the vendor's PASS logs cannot be committed.
+
 ### Fixed — the nightly Spec Harness, red every night since 2026-09-08
 
 `validate-slow` runs `--strict-git`, which needs every `done` feature's `implemented_in` to resolve.
