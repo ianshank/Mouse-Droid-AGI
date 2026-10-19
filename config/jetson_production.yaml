@@ -20,6 +20,15 @@ safety:
   # ticks in config/schema/reward_safety.py), so this rig needs no override.
   # Set them here only if bring-up shows this Jetson needs different numbers.
 
+  # F-059 CF-2: an emergency stop stays latched across ticks AND restarts until an
+  # operator clears it: `python -m mousedroid.cli.rearm --operator <you>
+  # --confirm-area-clear` — docs/runbooks/emergency-stop-rearm.md.
+  # jetson_lidar_only.yaml turns it back OFF explicitly: its `emergency` policy +
+  # 0.5 s grace would latch on one lost LiDAR acquisition, and that stack is the
+  # shipped validation default.
+  emergency_latch:
+    enabled: true
+
   # --- Why there is no lidar_unavailable_policy here (peer review D-3) ---
   # This looks like an obvious gap. It is not -- setting it here would brake
   # or emergency-stop this rig permanently, on every tick, forever.

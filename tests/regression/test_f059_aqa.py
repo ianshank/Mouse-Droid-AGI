@@ -17,6 +17,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CONFIG_DIR = _REPO_ROOT / "config"
 _PROD = _CONFIG_DIR / "jetson_production.yaml"
 _BENCH = _CONFIG_DIR / "jetson_bench_esp32.yaml"
+_LIDAR_ONLY = _CONFIG_DIR / "jetson_lidar_only.yaml"
 
 
 def _features() -> dict[str, dict]:
@@ -295,3 +296,22 @@ def test_production_overlay_arms_battery_thresholds_and_the_power_gate_has_no_fl
     )
     # R-6: the gate is stricter than the runtime
     assert "battery_voltage_v >= jetson_settings.safety.battery_critical_v" in power
+
+
+def test_latch_is_armed_on_production_and_explicitly_off_on_the_lidar_only_stack() -> None:
+    """CF-2 / R-7: production latches an e-stop; the lidar-only stack opts out explicitly."""
+    assert load_settings(_PROD, config_dir=_CONFIG_DIR).safety.emergency_latch.enabled is True
+    # jetson_validate.sh's default stack.
+    stack = load_settings(_PROD, _LIDAR_ONLY, config_dir=_CONFIG_DIR)
+    # Premise: this is the stack that would latch.
+    assert stack.safety.lidar_unavailable_policy == "emergency"
+    assert stack.safety.emergency_latch.enabled is False
+    raw = yaml.safe_load(_LIDAR_ONLY.read_text(encoding="utf-8"))
+    assert raw["safety"]["emergency_latch"]["enabled"] is False  # explicit, not inherited (R-7)
+
+
+def test_runbooks_point_operators_at_the_rearm_cli() -> None:
+    """CF-2: an armed latch needs the re-arm command in the runbooks operators already use."""
+    for name in ("jetson-rover-smoke.md", "jetson-full-bringup.md"):
+        text = (_REPO_ROOT / "docs" / "runbooks" / name).read_text(encoding="utf-8")
+        assert "mousedroid.cli.rearm" in text, name

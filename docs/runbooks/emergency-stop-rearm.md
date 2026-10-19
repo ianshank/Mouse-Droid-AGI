@@ -1,7 +1,10 @@
 # Runbook — clearing a latched emergency stop
 
-> Applies when `safety.emergency_latch.enabled` is `true`. It ships **false**,
-> so on a stock deployment there is nothing to clear and this runbook is inert.
+> Applies when `safety.emergency_latch.enabled` is `true`. It ships **true** on
+> `config/jetson_production.yaml` (F-059 CF-2) and so on any stack built on it,
+> **false** on the lidar-only stack (an explicit override) and on every config
+> that does not start from production; where it is false there is nothing to
+> clear and this runbook is inert.
 
 ## What a latch is, and why it exists
 

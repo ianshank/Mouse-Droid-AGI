@@ -154,6 +154,7 @@ bench experiments.
 | `lidar` FAIL | `udevadm info /dev/serial/by-id/usb-Silicon_Labs_CP2102_*` to confirm the LD19 sits on the lidar bridge, not the rover bridge. |
 | `e2e` FAIL with camera reason | See `verify_sensors.py`'s `_diagnose_camera_host` output — surfaced in `e2e.log`. |
 | `voice` FAIL | `SUMMARY.md` emits a "Rocky voice prerequisites" remediation section listing the specific Piper / model-path / device issue. |
+| Rover boots but will not move; `estop_latch_active_at_boot` in the container log (a log line, not a `SUMMARY.md` stage result) | A latched emergency stop, not a dead board: `config/jetson_production.yaml` arms `safety.emergency_latch` (F-059 CF-2). Look first with `python -m mousedroid.cli.rearm --status` (exit `1` = latched). Once the hazard is gone and the path is clear, `python -m mousedroid.cli.rearm --operator <you> --confirm-area-clear`, then restart the service. On a container deployment run both inside the service; the bare-metal form and the reasoning are in [`emergency-stop-rearm.md`](emergency-stop-rearm.md). |
 
 ## Reading the logs
 

@@ -105,3 +105,8 @@ safety:
   # read this as human keep-out being live.
   projector:
     enabled: true
+
+  # F-059 R-7: explicit, not inherited — this stack's `emergency` policy would
+  # latch on a 0.5 s dropout; revisit once the bench measures the dropout rate.
+  emergency_latch:
+    enabled: false

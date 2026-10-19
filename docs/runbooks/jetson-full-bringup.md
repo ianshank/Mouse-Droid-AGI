@@ -68,6 +68,19 @@ MOUSEDROID_SMOKE_ALLOW_MOTION=1 \
 > `ESP32Config.smoke_test_allow_motion` (via `MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION=true`) arms
 > the **pytest** `test_motor_smoke.py` path.
 
+> **Latched emergency stop (F-059 CF-2):** `config/jetson_production.yaml` arms
+> `safety.emergency_latch`, so a stop held from an earlier run survives the restart. A rover that
+> comes up but will not move, with `estop_latch_active_at_boot` in `docker logs mousedroid`, is
+> latched rather than dead. Once the container is up (step 4), look first, then clear it from
+> inside the service and restart it ([`emergency-stop-rearm.md`](emergency-stop-rearm.md) has the
+> bare-metal form):
+>
+> ```bash
+> docker compose -f docker-compose.jetson.yml exec mousedroid python -m mousedroid.cli.rearm --status
+> docker compose -f docker-compose.jetson.yml exec mousedroid \
+>     python -m mousedroid.cli.rearm --operator <you> --confirm-area-clear
+> ```
+
 ## Step 4 — Build + up
 
 ```bash
