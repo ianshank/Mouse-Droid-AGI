@@ -41,8 +41,9 @@ the credit workstreams: `charge(ws, estimate_usd)` raises `CapExceeded` before a
 `scripts/dead_code_audit.py` lists what `vulture` found no caller for (433 findings on this tree),
 and in a Protocol- and DI-heavy codebase most of them are alive: a method called through a
 `@runtime_checkable` Protocol, a pydantic validator, a factory hook. `tools/dead_code_triage_batch.py`
-sorts them into `keep` / `delete` / `verify` with the Message Batches API, one request per package
-(44 requests for those 433, estimated at about $1.3 against the $15 workstream cap), and writes a
+sorts them into `keep` / `delete` / `verify` with the Message Batches API, a package at a time and at
+most 20 findings to a request (44 requests for the 33 packages on this tree, estimated at about $1.3
+against the $15 workstream cap), and writes a
 ranked document: `delete` rows by vulture confidence, then `verify`, then `keep`, under a header that
 records the audit JSON's sha256 and the vulture version. It deletes nothing and edits nothing under
 `src/`: a `delete` row is a candidate that a later PR must still prove with `prove-pin-fails`.
@@ -51,10 +52,20 @@ records the audit JSON's sha256 and the vulture version. It deletes nothing and 
 (Sonnet 5.5, batch rate) before it calls anything. It refuses (`CapExceeded`) when the estimate passes
 `--cap-usd` or the workstream's cap, counting batches already submitted but not yet collected, and it
 creates the batch once with the SDK's automatic retry off, because a retried create would be a second
-batch. A file name matching `credit.batch_triage.refuse_globs` (`*.env`, `docker.env*`, ...), a path
-outside the repository, and any excerpt shaped like a credential are refused before a request is built,
-and an audit JSON that looks older than the checkout (a symbol no longer near its recorded line) is
-warned about before anything is spent.
+batch. Source leaves the machine, so three layers stand in front of that. A finding in a file whose
+name matches `credit.batch_triage.refuse_globs` (`*.env`, `docker.env*`, ...), that is not a `.py`, or
+that lies outside the repository is WITHHELD: never sent, and listed in the document as `verify` with the
+reason. A link that resolves outside the repository, or an excerpt shaped like a credential (a short
+built-in list: Anthropic, OpenAI, Google, GitHub, Hugging Face, Slack and AWS keys, private-key blocks,
+JWTs, bearer tokens, a URL with a password in it, and a quoted value assigned to a name that ends in
+password, secret, token or key), stops the whole submit. And every
+assembled prompt goes through the repository's own scanner (`gitleaks` with `.gitleaks.toml`), which a
+real submit REQUIRES: with no `gitleaks` on PATH, with `secret_scan.enabled: false`, or after a scanner
+timeout, `submit` exits 3 rather than send on the built-in list alone. `--allow-unscanned-egress` is the
+override; it is printed and written into the batch record (`unscanned_egress: true`, with the scanner's
+reason), and `secret_scan.strict: true` in `.claude/workforce.yaml` forbids it. `--dry-run` sends nothing,
+so it only warns. An audit JSON that looks older than the checkout (a symbol no longer near its recorded
+line) is warned about before anything is spent.
 `collect` waits for `processing_status == "ended"`, joins results to requests by `custom_id` and never
 by position, validates every answer against the same schema it asked for, turns anything it cannot
 trust into `verify` with the reason, and appends one ledger row with the real token usage, once. Run it

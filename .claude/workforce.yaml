@@ -210,7 +210,11 @@ credit:
         source_root: src/mousedroid
         batches_dir: reports/credit/batches
         analysis_dir: docs/analysis
-        # File names the prompt builder refuses to read (fnmatch, case-insensitive).
+        # File names the prompt builder will not read or send (fnmatch, case-insensitive);
+        # a finding in one is withheld from the API and listed as `verify`. Separately, a
+        # real submit needs the repository secret scanner (gitleaks) to run on every
+        # prompt and refuses without it unless --allow-unscanned-egress is given;
+        # secret_scan.strict: true takes that flag away.
         refuse_globs:
             - "*.env"
             - "docker.env*"

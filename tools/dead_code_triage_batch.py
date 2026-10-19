@@ -10,10 +10,11 @@ one request per package, and writes the result as a ranked Markdown document. It
 candidate for a human and for a later PR that proves its regression pin fails
 without the symbol (``prove-pin-fails``).
 
-Operator procedure. It needs the SDK extra (``pip install -e ".[anthropic]"``) and
-``ANTHROPIC_API_KEY`` exported in the shell: the SDK reads the key from the
-environment and there is deliberately no flag for it. Rotate the key first (see
-NEXT_STEPS), then run from the repository root::
+Operator procedure. It needs the SDK extra (``pip install -e ".[anthropic]"``),
+``gitleaks`` on PATH (a real ``submit`` refuses to send source without the repository's
+secret scanner, see below) and ``ANTHROPIC_API_KEY`` exported in the shell: the SDK
+reads the key from the environment and there is deliberately no flag for it. Rotate the
+key first (see NEXT_STEPS), then run from the repository root::
 
     python scripts/dead_code_audit.py                       # -> reports/dead_code/<date>.json
     python -m tools.dead_code_triage_batch submit --dry-run \\
@@ -33,14 +34,31 @@ ledger row with the real token usage.
 
 What leaves the machine: for each finding, its symbol name, location and about
 ``credit.batch_triage.context_lines`` lines of source either side, plus the names
-of the package's Protocol members and pydantic validators. A file name matching
-``credit.batch_triage.refuse_globs`` (``*.env``, ``docker.env*``, ...), a path
-outside the repository or not ``.py``, and any excerpt that looks like a
-credential are refused before a request is built, because a model that reads the
-repository must never be handed a secret. This is not ``RegexInjectionFilter``, which
-guards natural-language mission text on its way to the rover (CHARTER section 3):
-nothing here actuates anything, and a model reply can at worst put a wrong paragraph
-in an advisory document that a human reads.
+of the package's Protocol members and pydantic validators. A model that reads the
+repository must never be handed a secret, so three layers stand in front of that:
+
+* A finding whose file name matches ``credit.batch_triage.refuse_globs`` (``*.env``,
+  ``docker.env*``, ...), is not ``.py``, or lies outside the repository is WITHHELD:
+  it is never sent and the document lists it as ``verify`` with the reason.
+* Some things STOP the submit before any call: a link that resolves outside the
+  repository, and an excerpt that matches the short built-in list of credential shapes
+  (Anthropic, OpenAI, Google, GitHub, Hugging Face, Slack and AWS keys, private-key
+  blocks, JWTs, bearer tokens, URLs with an embedded password, and a quoted value
+  assigned to a name that ENDS in password, secret, token or key, so ``db_password``
+  and ``API_TOKEN`` count but ``api_key_env`` does not).
+* The repository's own scanner (gitleaks with ``.gitleaks.toml``, through
+  ``tools.claude_hooks.secret_scan``) runs on every assembled prompt; a hit stops the
+  submit. This layer is REQUIRED for a real submit. When gitleaks is not on PATH, is
+  disabled (``secret_scan.enabled: false``) or times out on any prompt, ``submit``
+  refuses (exit 3) rather than send on the built-in list alone. The degraded mode is
+  ``--allow-unscanned-egress``: it is logged, and ``unscanned_egress: true`` with the
+  scanner's reason is written into the batch record. ``secret_scan.strict: true`` in
+  ``.claude/workforce.yaml`` forbids that override too. ``--dry-run`` sends nothing,
+  so it goes on with a warning.
+
+This is not ``RegexInjectionFilter``, which guards natural-language mission text on
+its way to the rover (CHARTER section 3): nothing here actuates anything, and a model
+reply can at worst put a wrong paragraph in an advisory document that a human reads.
 """
 
 from __future__ import annotations
@@ -133,14 +151,47 @@ _VALIDATOR_DECORATORS = frozenset(
     }
 )
 
-#: Belt and braces behind the repository scanner: shapes that must never be sent.
+#: Shapes that must never be sent. This is the floor under the repository scanner, not
+#: a replacement for it: a real submit refuses to go on without gitleaks unless told
+#: to, and when it is told to this short list is all that stands between the source
+#: and the API. Placeholders documented in the tree (``http://user:password@host``,
+#: ``token = "short"``, ``sk-ant-...``) deliberately do not match, and neither does a
+#: name that merely CONTAINS a keyword (``api_key_env``, ``api_key_source``): the
+#: keyword has to end the name.
 _CREDENTIAL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("Anthropic API key", re.compile(r"sk-ant-[A-Za-z0-9_-]{20,}")),
+    ("OpenAI-style API key", re.compile(r"\bsk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{32,}")),
     ("Hugging Face token", re.compile(r"\bhf_[A-Za-z0-9]{30,}")),
     ("GitHub token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}")),
+    ("GitHub fine-grained token", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}")),
+    ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
     ("AWS access key id", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
-    ("private key block", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
+    ("private key block", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----")),
     ("Slack token", re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}")),
+    (
+        "JSON Web Token",
+        re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),
+    ),
+    ("bearer token", re.compile(r"\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*", re.IGNORECASE)),
+    (
+        "URL with an embedded password",
+        re.compile(
+            r"\b[a-z][a-z0-9+.-]{1,20}://[^\s:@/'\"<>{}$*]*:"
+            r"(?!(?:password|passwd|pass|pwd|secret|changeme|example|redacted|xxx+"
+            r"|your[_-]?password)@)"
+            r"[^\s:@/'\"<>{}$*]{3,}@[^\s/'\"]+",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "quoted secret assignment",
+        re.compile(
+            r"(?:password|passwd|secret|api[_-]?key|access[_-]?key|private[_-]?key|token)"
+            r"[\"']?\s*(?::\s*[A-Za-z_][\w\[\]., |]*)?\s*[:=]\s*"
+            r"""(['"])[^'"\s]{6,}\1""",
+            re.IGNORECASE,
+        ),
+    ),
 )
 
 #: What the model must return. An object root with closed objects, because the
@@ -229,6 +280,10 @@ class FindingsError(TriageError):
 
 class RefusedFileError(TriageError):
     """The prompt builder will not send this file, or this text, to the API."""
+
+
+class EgressRefusedError(RefusedFileError):
+    """The repository's secret scanner could not run, and a real submit was not allowed to go on."""
 
 
 class BatchPendingError(TriageError):
@@ -793,6 +848,36 @@ def _default_scanner(workforce: WorkforceConfig, repo: Path) -> Scanner:
     return _scan
 
 
+@dataclass
+class ScanReport:
+    """What the prompt scan could do: how many prompts it cleared, and why it could not run.
+
+    ``unavailable`` is set as soon as ONE prompt went unscanned (no scanner, scanner not
+    installed, disabled, timed out): a scan that covered only some of what is sent is
+    not a scan, so a real submit treats it like no scan at all.
+    """
+
+    scanned: int = 0
+    unavailable: str | None = None
+
+
+def _scan_prompt(scanner: Scanner | None, text: str, custom_id: str, report: ScanReport) -> None:
+    """Scan one prompt: raise if the scanner flags it, note in ``report`` if it could not run."""
+    if scanner is None:
+        report.unavailable = report.unavailable or "no scanner was supplied"
+        return
+    outcome = scanner(text)
+    if not outcome.available:
+        report.unavailable = report.unavailable or outcome.detail or "the scanner did not run"
+        return
+    if not outcome.clean:
+        raise RefusedFileError(
+            f"{custom_id}: the repository secret scanner flagged the prompt "
+            f"({outcome.detail or 'no detail'}); nothing was sent"
+        )
+    report.scanned += 1
+
+
 def build_requests(
     plan: Plan,
     repo: Path,
@@ -800,15 +885,19 @@ def build_requests(
     *,
     model: str | None = None,
     scanner: Scanner | None = None,
+    report: ScanReport | None = None,
 ) -> list[dict[str, Any]]:
     """Build every request of ``plan``, scanning each prompt before it can be sent.
+
+    ``report`` (optional) is filled in with what the scan covered, so the caller can
+    decide what an unscanned prompt means; this function only warns about it, once.
 
     Raises:
         RefusedFileError: A prompt holds a credential, or the repository scanner flags it.
     """
+    scan = report if report is not None else ScanReport()
     hints_by_pkg: dict[str, PackageHints] = {}
     requests: list[dict[str, Any]] = []
-    warned = False
     for planned in plan.requests:
         if planned.pkg not in hints_by_pkg:
             hints_by_pkg[planned.pkg] = collect_hints(repo, planned.pkg)
@@ -821,21 +910,16 @@ def build_requests(
             hints=hints_by_pkg[planned.pkg],
             custom_id=planned.custom_id,
         )
-        if scanner is not None:
-            outcome = scanner(request["params"]["messages"][0]["content"])
-            if outcome.available and not outcome.clean:
-                raise RefusedFileError(
-                    f"{planned.custom_id}: the repository secret scanner flagged the prompt "
-                    f"({outcome.detail or 'no detail'}); nothing was sent"
-                )
-            if not outcome.available and not warned:
-                warned = True
-                print(
-                    f"warning: repository secret scanner unavailable ({outcome.detail}); "
-                    "only the built-in credential patterns ran",
-                    file=sys.stderr,
-                )
+        text = request["params"]["messages"][0]["content"]
+        _scan_prompt(scanner, text, planned.custom_id, scan)
         requests.append(request)
+    if scanner is not None and scan.unavailable is not None:
+        print(
+            f"warning: repository secret scanner unavailable ({scan.unavailable}); only the "
+            "built-in credential patterns ran. A real submit refuses to send unless "
+            "--allow-unscanned-egress is given",
+            file=sys.stderr,
+        )
     return requests
 
 
@@ -1324,6 +1408,7 @@ class _Prepared:
     requests: list[dict[str, Any]]
     estimate: Decimal
     findings_file: Path
+    scan: ScanReport
 
 
 def _prepare(
@@ -1339,12 +1424,14 @@ def _prepare(
     plan = make_plan(findings, settings)
     if not plan.requests:
         raise TriageError("nothing to send: there are no findings, or every one was withheld")
+    scan = ScanReport()
     requests = build_requests(
         plan,
         repo,
         settings,
         model=requested,
         scanner=scanner if scanner is not None else _default_scanner(workforce, repo),
+        report=scan,
     )
     stale = sum(stale_notes(r) for r in requests)
     if stale:
@@ -1355,7 +1442,41 @@ def _prepare(
             file=sys.stderr,
         )
     estimate = estimate_cost_usd(requests, workforce.credit, model=requested)
-    return _Prepared(findings, sha, plan, requests, estimate, Path(findings_path))
+    return _Prepared(findings, sha, plan, requests, estimate, Path(findings_path), scan)
+
+
+def _egress_gate(scan: ScanReport, *, allow: bool, strict: bool) -> str | None:
+    """Decide whether a real submit may send when the repository scanner did not cover it.
+
+    Returns the reason the scan did not run (to write into the batch record), or
+    ``None`` when every prompt was scanned.
+
+    Raises:
+        EgressRefusedError: The scan did not cover every prompt and ``allow`` is false,
+            or ``secret_scan.strict`` is true (a repo that requires the scanner does
+            not take an override flag).
+    """
+    reason = scan.unavailable
+    if reason is None:
+        return None
+    if strict:
+        raise EgressRefusedError(
+            "refusing to send source to the API: the repository secret scanner could not "
+            f"run ({reason}) and secret_scan.strict is true in .claude/workforce.yaml, so "
+            "--allow-unscanned-egress is not honoured. Install gitleaks and run again"
+        )
+    if not allow:
+        raise EgressRefusedError(
+            "refusing to send source to the API: the repository secret scanner could not "
+            f"run ({reason}). Install gitleaks and run again, or pass --allow-unscanned-egress "
+            "to send with only the built-in credential patterns (the batch record will say so)"
+        )
+    print(
+        f"warning: sending WITHOUT the repository secret scanner ({reason}) because "
+        "--allow-unscanned-egress was given; the batch record will say so",
+        file=sys.stderr,
+    )
+    return reason
 
 
 def _pending_estimate(repo: Path, settings: BatchTriageConfig) -> Decimal:
@@ -1428,6 +1549,7 @@ def _batch_record(
     credit: CreditConfig,
     cap: Decimal,
     models: tuple[str, str, str],
+    unscanned: str | None,
 ) -> dict[str, Any]:
     requested, resolved, via = models
     return {
@@ -1448,6 +1570,8 @@ def _batch_record(
         "cap_usd": float(cap),
         "plan_fingerprint": prepared.plan.fingerprint(),
         "custom_ids": [r["custom_id"] for r in prepared.requests],
+        "unscanned_egress": unscanned is not None,
+        "unscanned_reason": unscanned,
         "collected": None,
     }
 
@@ -1483,6 +1607,7 @@ def submit(
     dry_run: bool = False,
     model: str | None = None,
     scanner: Scanner | None = None,
+    allow_unscanned_egress: bool = False,
 ) -> SubmitOutcome:
     """Plan, price and (unless ``dry_run``) submit the triage batch.
 
@@ -1500,9 +1625,13 @@ def submit(
         dry_run: Plan and price, check the caps, then stop.
         model: Model id to ask for; ``credit.batch_triage.model`` when omitted.
         scanner: Callable scanning each prompt; the repository's gitleaks when omitted.
+        allow_unscanned_egress: Send even though the repository scanner could not cover
+            every prompt (the built-in credential patterns still apply). Without it a real
+            submit refuses; ``secret_scan.strict`` in the workforce config forbids it.
 
     Raises:
         CapExceeded: Over ``cap_usd`` or the workstream's cap.
+        EgressRefusedError: The repository scanner could not run and the flag was not given.
         RefusedFileError: A file or an excerpt that must not be sent.
         TriageError: Bad audit, unpriced or retired model, an unrecorded-batch risk.
     """
@@ -1512,6 +1641,13 @@ def submit(
     settings = credit.batch_triage
     requested = model or settings.model
     prepared = _prepare(Path(findings_path), repo, workforce, requested, scanner)
+    unscanned = (
+        None
+        if dry_run
+        else _egress_gate(
+            prepared.scan, allow=allow_unscanned_egress, strict=workforce.secret_scan.strict
+        )
+    )
     cap = _check_spend(prepared, cap_usd, credit, repo)
     day = _utc_now().strftime(_DATE_FORMAT)
     record_path = _record_path(repo, settings, day)
@@ -1548,6 +1684,7 @@ def submit(
         credit=credit,
         cap=cap,
         models=(requested, resolved, via),
+        unscanned=unscanned,
     )
     try:
         _atomic_write_text(record_path, json.dumps(record, indent=2) + "\n")
@@ -1948,6 +2085,13 @@ def _build_parser() -> argparse.ArgumentParser:
     submit_cmd.add_argument(
         "--model", default=None, help="Model id (default: credit.batch_triage.model)."
     )
+    submit_cmd.add_argument(
+        "--allow-unscanned-egress",
+        action="store_true",
+        help="Send even though the repository secret scanner (gitleaks) could not run; only "
+        "the built-in credential patterns apply, and the batch record says so. Without this "
+        "a real submit refuses. Not honoured when secret_scan.strict is true.",
+    )
     collect_cmd = commands.add_parser("collect", help="Wait for a batch and write the document.")
     collect_cmd.add_argument("batch_id", help="The id `submit` printed.")
     collect_cmd.add_argument(
@@ -1974,7 +2118,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "submit":
             outcome = submit(
-                args.findings, args.cap_usd, repo_root=repo, dry_run=args.dry_run, model=args.model
+                args.findings,
+                args.cap_usd,
+                repo_root=repo,
+                dry_run=args.dry_run,
+                model=args.model,
+                allow_unscanned_egress=args.allow_unscanned_egress,
             )
             _print_submit(outcome, repo)
         else:

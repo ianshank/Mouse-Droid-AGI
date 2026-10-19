@@ -17,10 +17,14 @@ Probes and dev utilities (not shipped in the runtime path):
   made when the workstream's recorded spend would pass its cap, `record(entry)` appends one JSON line per run;
   caps and the ledger path come from `credit:` in `.claude/workforce.yaml`
 - `dead_code_triage_batch.py` — F-059 WS-C: sorts the `scripts/dead_code_audit.py` findings into keep / delete /
-  verify with the Message Batches API, one request per package. `submit` prices the batch from `credit.prices`
-  and refuses over a cap before any call; `collect` joins results by `custom_id`, writes
-  `docs/analysis/dead-code-triage-<date>.md` and records the real cost in the ledger once. It deletes nothing;
-  the procedure is the module docstring (`python -m tools.dead_code_triage_batch submit --dry-run ...` first)
+  verify with the Message Batches API, one request per package (a big package is split: 44 requests for 33
+  packages on this tree). `submit` prices the batch from `credit.prices` and refuses over a cap before any call;
+  `collect` joins results by `custom_id`, writes `docs/analysis/dead-code-triage-<date>.md` and records the real
+  cost in the ledger once. It deletes nothing. Source excerpts go to the API, so a real `submit` needs the
+  repo's secret scanner (`gitleaks` + `.gitleaks.toml`, run on every prompt) and exits 3 without it, unless
+  `--allow-unscanned-egress` is given (printed, and written into the batch record as `unscanned_egress: true`;
+  `secret_scan.strict: true` forbids even that). `--dry-run` sends nothing, so it only warns. The procedure is
+  the module docstring (`python -m tools.dead_code_triage_batch submit --dry-run ...` first)
 - `spikes/` — throwaway investigation spikes
 
 `tools/` is inside the `ruff` lint + format scope — in `pyproject.toml`, in

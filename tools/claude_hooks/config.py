@@ -554,8 +554,9 @@ class BatchTriageConfig(BaseModel):
     refuse_globs: list[str] = Field(
         default_factory=lambda: ["*.env", "docker.env*", ".env*"],
         description=(
-            "File-name patterns (fnmatch, case-insensitive) the prompt builder refuses to "
-            "read, so an environment file can never become part of a request."
+            "File-name patterns (fnmatch, case-insensitive) the prompt builder will not read "
+            "or send: a finding in a matching file is withheld from the API and listed as "
+            "'verify', so an environment file can never become part of a request."
         ),
     )
 

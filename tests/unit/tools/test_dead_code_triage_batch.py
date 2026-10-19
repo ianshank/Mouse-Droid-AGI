@@ -18,6 +18,7 @@ import hashlib
 import json
 import math
 import re
+import socket
 import subprocess
 import sys
 import types
@@ -346,6 +347,40 @@ def _fixed_clock(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         triage, "_utc_now", lambda: datetime(2026, 10, 19, 14, 2, 11, tzinfo=timezone.utc)
     )
+
+
+_LOOPBACK = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def _connect_target(address: Any) -> str:
+    return str(address[0]) if isinstance(address, tuple) else str(address)
+
+
+@pytest.fixture(autouse=True)
+def _no_outbound_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail any test that opens a socket to anywhere but loopback.
+
+    Every test here is meant to run with no network at all: fakes, or a mock HTTP
+    transport on ``mock.invalid``. This turns "meant to" into a failure the day one
+    of them reaches for a real host (an SDK default, a forgotten ``base_url``).
+    """
+    real_connect = socket.socket.connect
+    real_connect_ex = socket.socket.connect_ex
+
+    def _guard(address: Any) -> None:
+        if _connect_target(address) not in _LOOPBACK:
+            raise RuntimeError(f"a test tried to connect to {address!r}")
+
+    def _connect(self: socket.socket, address: Any) -> None:
+        _guard(address)
+        real_connect(self, address)
+
+    def _connect_ex(self: socket.socket, address: Any) -> int:
+        _guard(address)
+        return real_connect_ex(self, address)
+
+    monkeypatch.setattr(socket.socket, "connect", _connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", _connect_ex)
 
 
 def _submit(repo: Path, client: Any | None = None, **kwargs: Any) -> triage.SubmitOutcome:
@@ -832,6 +867,32 @@ def test_prompt_builder_refuses_a_link_that_leaves_the_repository(
         "ghp_" + "aB3dE5fG7h" * 4,
         "-----BEGIN RSA " + "PRIVATE KEY-----",
         "xoxb-" + "1234567890-abcdefghij",
+        # what the second review found the floor missing: prefixed names, annotations, dict keys
+        "db_pass" + "word = " + '"hunter2hunter2"',
+        "API_TO" + "KEN = " + '"abcd1234efgh5678"',
+        "aws_secret_access_" + "key = " + '"wJalrXUtnFEMI/K7MDENG/bPx"',
+        "pass" + "word: str = " + '"hunter2hunter2"',
+        '{"pass' + 'word": "hunter2hunter2"}',
+        'headers = {"x-api-' + 'key": "abcd1234efgh5678ijkl"}',
+        "to" + "ken = " + '"abcdef"',  # six characters is the shortest value that counts
+        "pass" + "wd = " + '"hunter2hunter2"',
+        "private_" + "key = " + '"abcd1234efgh5678"',
+        "api" + "key = " + '"abcd1234efgh5678"',
+        "-----BEGIN PGP " + "PRIVATE KEY BLOCK-----",
+        "eyJ"
+        + "hbGciOiJIUzI1NiJ9."
+        + "eyJzdWIiOiIxMjM0NTY3ODkwIn0."
+        + "abcdefghijklmnopqrstuvwxyz",
+        "Bear" + "er " + "abcd1234efgh5678ijklmnop",
+        "Bear" + "er " + "abcdefghij0123456789",  # twenty characters is the shortest
+        "authorization: bear" + "er abcd1234efgh5678ijklmnop",  # the scheme is case-insensitive
+        "client_" + "secret = " + '"abcd1234efgh5678"',
+        # the shapes the first review found passing with no repository scanner installed
+        "AIza" + "a1B2c3D4e5" * 3 + "a1B2c",
+        "github_pat_" + "aB3dE5fG7h" * 3,
+        "sk-proj-" + "aB3dE5fG7h" * 4,
+        "postgres://app:" + "s3cretPw9" + "@db.internal:5432/app",
+        "PASS" + "WORD=" + '"' + "hunter2hunter2" + '"',
     ],
 )
 def test_prompt_builder_refuses_source_that_contains_a_credential(repo: Path, secret: str) -> None:
@@ -842,10 +903,62 @@ def test_prompt_builder_refuses_source_that_contains_a_credential(repo: Path, se
     assert secret not in str(excinfo.value)
 
 
+@pytest.mark.parametrize(
+    ("prefix", "least"),
+    [
+        ("sk-", 32),  # the bare OpenAI-style form; "sk-proj-" would backtrack into the body
+        ("github_pat_", 22),
+        ("AIza", 35),
+    ],
+)
+def test_a_credential_shape_is_refused_at_its_shortest_length_and_not_one_below(
+    repo: Path, prefix: str, least: int
+) -> None:
+    """Pin both edges: a floor that is too high leaks the key, one too low blocks real code."""
+    body = "aB3dE5fG7h" * 5
+    target = f"{_SRC}/alpha/edge.py"
+    finding = _finding(target, 1, "f")
+    _write(repo, target, f"def f():\n    return '{prefix}{body[:least]}'\n")
+    with pytest.raises(triage.RefusedFileError):
+        triage.build_request(f"{_SRC}/alpha", [finding], repo)
+
+    _write(repo, target, f"def f():\n    return '{prefix}{body[: least - 1]}'\n")
+    triage.build_request(f"{_SRC}/alpha", [finding], repo)
+
+
 def test_a_documented_placeholder_is_not_mistaken_for_a_credential(repo: Path) -> None:
     _write(repo, f"{_SRC}/alpha/doc.py", '"""Set the key (sk-ant-... or sk-ant-xyz)."""\nx = 1\n')
     finding = _finding(f"{_SRC}/alpha/doc.py", 2, "x", "variable")
     triage.build_request(f"{_SRC}/alpha", [finding], repo)
+
+
+def test_documented_url_and_assignment_placeholders_are_not_mistaken_for_credentials(
+    repo: Path,
+) -> None:
+    """The tree documents ``http://user:password@host:5000``; refusing it would block the run."""
+    _write(
+        repo,
+        f"{_SRC}/alpha/doc2.py",
+        "# remote store: ``http://user:password@host:5000`` (or ``rtsp://admin:pass@cam``);\n"
+        "# the redaction docs use short ones too: ``http://u:pw@host/db``\n"
+        'token = "short"\napi_key_env: str = "ANTHROPIC_API_KEY"\n'
+        'label = dict(api_key_source="config")\npassword: str = ""\n'
+        "# Authorization: Bearer <token>, or Bearer abcdefghij012345678 (nineteen)\nx = 1\n",
+    )
+    finding = _finding(f"{_SRC}/alpha/doc2.py", 8, "x", "variable")
+    triage.build_request(f"{_SRC}/alpha", [finding], repo)
+
+
+def test_the_socket_guard_blocks_a_connect_to_anything_but_loopback() -> None:
+    """The guard every test here runs under: prove it bites."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        with pytest.raises(RuntimeError, match=re.escape("203.0.113.7")):
+            sock.connect(("203.0.113.7", 443))  # TEST-NET-3: never routable
+        with pytest.raises(RuntimeError, match=re.escape("203.0.113.7")):
+            sock.connect_ex(("203.0.113.7", 443))
+    finally:
+        sock.close()
 
 
 def test_build_requests_stops_when_the_repository_scanner_flags_a_prompt(repo: Path) -> None:
@@ -862,6 +975,15 @@ def test_build_requests_goes_on_when_the_scanner_is_unavailable_and_says_so_once
     err = capsys.readouterr().err
     assert err.count("secret scanner unavailable") == 1
     assert "gitleaks" in err
+
+
+def test_build_requests_without_a_scanner_notes_that_nothing_was_scanned(repo: Path) -> None:
+    report = triage.ScanReport()
+
+    triage.build_requests(_plan(repo), repo, _settings(repo), scanner=None, report=report)
+
+    assert report.unavailable == "no scanner was supplied"
+    assert report.scanned == 0
 
 
 def test_build_requests_scans_what_will_be_sent(repo: Path) -> None:
@@ -1106,6 +1228,153 @@ def test_submit_refuses_a_credential_in_the_source_before_any_call(repo: Path) -
             _write_findings(repo), 15.0, repo_root=repo, client=client, scanner=_clean_scanner
         )
     assert client.mock_calls == []
+
+
+# --- the egress screen: no scanner, no send (unless told to, and then on the record) ---
+def test_submit_refuses_when_the_repository_scanner_cannot_run(repo: Path) -> None:
+    client = MagicMock()
+
+    with pytest.raises(triage.EgressRefusedError) as excinfo:
+        triage.submit(
+            _write_findings(repo), 15.0, repo_root=repo, client=client, scanner=_missing_scanner
+        )
+
+    message = str(excinfo.value)
+    assert "--allow-unscanned-egress" in message  # the way out is named
+    assert "gitleaks" in message  # and so is the scanner's own reason
+    assert client.mock_calls == []
+    assert not (repo / "reports" / "credit").exists()  # nothing recorded either
+
+
+def test_a_refused_egress_is_a_file_refusal_so_it_exits_with_the_refusal_code() -> None:
+    assert issubclass(triage.EgressRefusedError, triage.RefusedFileError)
+
+
+def test_submit_goes_on_without_the_scanner_only_when_told_to_and_says_so(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    client = _FakeClient()
+
+    outcome = _submit(repo, client, scanner=_missing_scanner, allow_unscanned_egress=True)
+
+    assert outcome.batch_id == "msgbatch_test01"
+    assert "WITHOUT the repository secret scanner" in capsys.readouterr().err
+    record = _record(repo)
+    assert record["unscanned_egress"] is True
+    assert "gitleaks" in record["unscanned_reason"]
+
+
+def test_a_scanned_submit_records_that_it_was_scanned(repo: Path) -> None:
+    _submit(repo)
+    record = _record(repo)
+    assert record["unscanned_egress"] is False
+    assert record["unscanned_reason"] is None
+
+
+def test_dry_run_goes_on_without_the_scanner_and_warns(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    client = MagicMock()
+
+    outcome = triage.submit(
+        _write_findings(repo),
+        15.0,
+        repo_root=repo,
+        client=client,
+        dry_run=True,
+        scanner=_missing_scanner,
+    )
+
+    assert outcome.dry_run is True
+    err = capsys.readouterr().err
+    assert "secret scanner unavailable" in err
+    assert "--allow-unscanned-egress" in err  # a real submit will need it, and the dry run says so
+    assert client.mock_calls == []
+
+
+def test_secret_scan_strict_does_not_let_the_flag_override_the_scanner(repo: Path) -> None:
+    _write(repo, DEFAULT_CONFIG_RELPATH, _WORKFORCE_YAML + "secret_scan:\n    strict: true\n")
+    client = MagicMock()
+
+    with pytest.raises(triage.EgressRefusedError, match="strict"):
+        triage.submit(
+            _write_findings(repo),
+            15.0,
+            repo_root=repo,
+            client=client,
+            scanner=_missing_scanner,
+            allow_unscanned_egress=True,
+        )
+
+    assert client.mock_calls == []
+
+
+@pytest.mark.parametrize("allow", [False, True])
+def test_a_scanner_hit_stops_submit_before_any_call_whatever_the_flag(
+    repo: Path, allow: bool
+) -> None:
+    client = MagicMock()
+
+    with pytest.raises(triage.RefusedFileError, match="scanner flagged"):
+        triage.submit(
+            _write_findings(repo),
+            15.0,
+            repo_root=repo,
+            client=client,
+            scanner=_flagging_scanner,
+            allow_unscanned_egress=allow,
+        )
+
+    assert client.mock_calls == []
+
+
+def test_a_scanner_that_timed_out_counts_as_unavailable(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _timed_out(
+        content: str, cfg: WorkforceConfig, *, repo_root: Path, target: str
+    ) -> ScanOutcome:
+        return ScanOutcome(clean=True, available=False, detail="scan timed out after 20.0s")
+
+    monkeypatch.setattr(triage.secret_scan, "scan_content", _timed_out)
+    client = MagicMock()
+
+    with pytest.raises(triage.EgressRefusedError, match="timed out"):
+        triage.submit(_write_findings(repo), 15.0, repo_root=repo, client=client)  # default scanner
+
+    assert client.mock_calls == []
+
+
+def test_a_scanner_that_runs_on_some_prompts_and_not_others_is_not_a_scan(repo: Path) -> None:
+    calls = {"n": 0}
+
+    def _flaky(_text: str) -> ScanOutcome:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            return ScanOutcome(clean=True, available=False, detail="scan timed out after 20.0s")
+        return ScanOutcome(clean=True, available=True)
+
+    client = MagicMock()
+    with pytest.raises(triage.EgressRefusedError, match="timed out"):
+        triage.submit(_write_findings(repo), 15.0, repo_root=repo, client=client, scanner=_flaky)
+    assert client.mock_calls == []
+
+
+def test_main_refuses_with_code_3_without_the_scanner_and_the_flag_overrides_it(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    audit = _write_findings(repo)
+    client = _FakeClient()
+    monkeypatch.setattr(triage, "_default_client", lambda: client)
+    monkeypatch.setattr(triage, "_default_scanner", lambda *_a, **_k: _missing_scanner)
+    argv = ["submit", "--findings", str(audit), "--cap-usd", "15", "--repo-root", str(repo)]
+
+    assert triage.main(argv) == 3
+    assert "--allow-unscanned-egress" in capsys.readouterr().err
+    assert client.batches.created == []
+
+    assert triage.main([*argv, "--allow-unscanned-egress"]) == 0
+    assert len(client.batches.created) == 1
 
 
 def test_submit_dry_run_prices_the_batch_and_touches_nothing(repo: Path) -> None:
@@ -1973,12 +2242,15 @@ def test_main_has_no_way_to_pass_an_api_key() -> None:
 
 
 def test_main_maps_a_refused_spend_to_a_distinct_exit_code(
-    repo: Path, capsys: pytest.CaptureFixture[str]
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    monkeypatch.setattr(triage, "_default_scanner", lambda *_a, **_k: _clean_scanner)
     audit = _write_findings(repo)
     argv = ["submit", "--findings", str(audit), "--cap-usd", "0.01", "--repo-root", str(repo)]
     assert triage.main(argv) == 3
-    assert "ERROR" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "ERROR" in err
+    assert "--cap-usd" in err  # it is the cap that refused, not the scanner
 
 
 def test_main_reports_a_missing_audit_json_cleanly(
