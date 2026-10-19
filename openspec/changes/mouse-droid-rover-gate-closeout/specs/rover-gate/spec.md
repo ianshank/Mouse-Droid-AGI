@@ -20,16 +20,18 @@ firmware echoes the commanded speed into `L`/`R`, so a velocity assertion there 
 ### Scenario: a silent board fails the motor stage
 - **GIVEN** the bench stack and an ESP32 that returns no T:1001 frame
 - **WHEN** `bash scripts/jetson_smoke_test.sh motor` runs with `MOUSEDROID_SMOKE_ALLOW_MOTION=1`
-- **THEN** `test_send_velocity_moves_encoders` FAILS — not skips — naming the port, baud and
-  command set
+- **THEN** after up to `esp32.max_consecutive_timeouts` polled reads without a T:1001 frame,
+  `test_send_velocity_moves_encoders` FAILS — not skips — naming the port, baud and command set
+  (Ruling 33)
+- **AND** `emergency_stop()` ran in `finally` before the failure was reported
 - **AND** the stage records FAIL with that reason
 
 ### Scenario: an encoder-less chassis passes on the frame, not on wheel velocity
 - **GIVEN** the bench stack, `chassis_has_wheel_encoders: false`, and a board that answers
   `{"T":130}` with a T:1001 frame
 - **WHEN** the velocity test runs
-- **THEN** it passes on `imu_valid is True` and never asserts `left_velocity_mps` or
-  `right_velocity_mps`
+- **THEN** it passes on `imu_valid is True` from any of the polled reads and never asserts
+  `left_velocity_mps` or `right_velocity_mps`
 
 ### Scenario: the mock is a configuration decision, not a measurement
 - **GIVEN** the production stack alone (`esp32.enabled: false`)
@@ -44,6 +46,13 @@ firmware echoes the commanded speed into `L`/`R`, so a velocity assertion there 
   Pydantic gate is closed)
 - **AND** command acceptance, the T:1001 frame and e-stop latency are still measured
 
+### Scenario: the open gate is bounded by the smoke setpoint (Ruling 32)
+- **GIVEN** a bench-only overlay that sets `esp32.smoke_test_allow_motion: true` on the command line
+- **WHEN** either motion test commands a velocity
+- **THEN** `_commanded_velocity` never exceeds `esp32.smoke_test_velocity_mps` (default 0.05 m/s),
+  whatever `max_velocity_mps` says
+- **AND** `smoke_test_velocity_mps: 0.0` locks all smoke motion even with both gates open
+
 ### Scenario: the stage ↔ test pairing cannot drift silently
 - **GIVEN** `tests/regression/test_f059_aqa.py`
 - **WHEN** `test_motor` stops running the loopback module, stops grepping
@@ -56,7 +65,9 @@ firmware echoes the commanded speed into `L`/`R`, so a velocity assertion there 
 `_check_esp32` connects through `factory.build_esp32_driver`, polls `{"T":130}` up to
 `esp32.max_consecutive_timeouts` times and requires one T:1001 frame (`collect_esp32_probe`, D-3). No
 new `PreflightStatus` member is added: `enabled=false` and a non-stock command set are WARN with the
-reason in `detail`; the aggregate DEGRADED is the documented meaning (R-4).
+reason in `detail`; the aggregate DEGRADED is the documented meaning (R-4). The probe is run cold:
+the serial driver takes no exclusive lock until task 4.1, so a live container that owned the port
+would contend for the frames rather than fail (Ruling 28).
 
 ### Scenario: a disabled board is WARN
 - **GIVEN** `mock_hardware=false` and `esp32.enabled: false`
@@ -83,11 +94,13 @@ reason in `detail`; the aggregate DEGRADED is the documented meaning (R-4).
 - **AND** the probe wrote frame types `[136, 130, 130]` (heartbeat arm, encoder poll, battery
   poll) and never T:13
 
-### Scenario: a port held elsewhere fails fast
-- **GIVEN** a port the running container holds exclusively
+### Scenario: a connect error fails fast
+- **GIVEN** a device node that is missing or unreadable
 - **WHEN** `run_preflight(..., check_names={"esp32"})` runs
-- **THEN** the `esp32` check is FAIL with the exception text in `detail`, within the serial
+- **THEN** the `esp32` check is FAIL with the exception message in `detail`, within the serial
   timeout — not a hang
+- **AND** no lock error is reported — none exists until 4.1; the docs say "FAIL on silence or a
+  connect error; run it cold" (PR-C `48820c4`, Ruling 28)
 
 ### Scenario: the trend timer never schedules the probe
 - **GIVEN** `scripts/mousedroid-trend.service`
@@ -129,8 +142,13 @@ reason in `detail`; the aggregate DEGRADED is the documented meaning (R-4).
 ### Scenario: operators can re-arm
 - **GIVEN** `docs/runbooks/jetson-rover-smoke.md` and `docs/runbooks/jetson-full-bringup.md`
 - **WHEN** a rover boots latched (`estop_latch_active_at_boot` in the log)
-- **THEN** both runbooks name `python -m mousedroid.cli.rearm --status` and
-  `--operator <you> --confirm-area-clear`
+- **THEN** both runbooks name
+  `python -m mousedroid.cli.rearm --config /etc/mousedroid/jetson_production.yaml --status` and
+  `python -m mousedroid.cli.rearm --config /etc/mousedroid/jetson_production.yaml --operator <you> --confirm-area-clear`
+- **AND** the documented command names the production config (Ruling 36): without `--config` the
+  CLI calls `load_settings()` with no path, loads `default.yaml`, sees no latch and exits 0 ("nothing
+  to clear") — a silent no-op on the production container — until task 4.7 adds the
+  `MOUSEDROID_CONFIG` fallback
 
 ## Requirement: battery thresholds MUST be armed on production, and the power gate MAY be stricter than the runtime
 
@@ -181,20 +199,85 @@ reason in `detail`; the aggregate DEGRADED is the documented meaning (R-4).
 - **THEN** `esp32.smoke_test_allow_motion is False`
 
 ### Scenario: the ESP32 stages stack it; the rest of the suite does not
-- **GIVEN** `MOUSEDROID_JETSON_CONFIGS` unset, set to a CSV, or already containing the overlay
+- **GIVEN** `MOUSEDROID_JETSON_CONFIGS` unset (the singular `MOUSEDROID_JETSON_CONFIG` is the base
+  when set), set to a CSV, or already containing the overlay
 - **WHEN** `test_motor` or `test_power` runs
 - **THEN** `esp32_stage_configs_csv()` yields production + overlay, the given CSV + overlay, or the
   given CSV unchanged (no double append)
 - **AND** `test_pytest` keeps `CONFIGS_CSV` — stacking there would open the port for every module
+- **AND** `tests/unit/scripts/test_jetson_smoke_orchestrator.py::test_esp32_stages_stack_the_bench_overlay`
+  pins both stages over eight CSV cases
 
 ### Scenario: the no-chassis checkpoint opts out
 - **GIVEN** `MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY=` (set but empty)
-- **WHEN** the power stage runs
-- **THEN** no overlay is stacked, the stage runs against `MockESP32Driver` (12.0 V)
-- **AND** the evidence record says it ran against the mock
+- **WHEN** the motor or power stage runs
+- **THEN** no overlay is stacked and the stage records SKIP **without running pytest** — a mock
+  PASS would be a green that measures nothing (Ruling 31)
+- **AND** the evidence record says the stage was skipped, not that the chassis was measured
+
+### Scenario: a stacked run whose test skips is a FAIL
+- **GIVEN** the bench overlay stacked and a board configured off by a later source or absent, so
+  the hardware test skips and pytest exits 0
+- **WHEN** the power or motor stage reads the output
+- **THEN** it records FAIL with the skip reason — `test_power` requires
+  `test_power_chain_within_budget PASSED` exactly as `test_motor` requires its own test (`57d6996`)
+- **AND** `tests/regression/test_f059_aqa.py::test_power_chain_test_skips_when_the_board_is_configured_off`
+  pins the skip message the stage greps
 
 ### Scenario: the orchestrator's own stack keeps the mock
 - **GIVEN** the rover's `/etc/mousedroid` overlay and the compose `command:`
 - **WHEN** the container starts during the bench
 - **THEN** it loads production only (`esp32.enabled: false`) until F-008 is `done`
 - **AND** the overlay is forwarded per command, never copied to `/etc/mousedroid`
+
+## Requirement: the port MUST be opened exclusively, the serial stage MUST fail on silence, and a warm smoke run MUST refuse when the container owns the port (R-5 — kept; lands in Phase 4, tasks 4.1/4.2, PR-I)
+
+Revision 1 put the exclusive open in Phase 1; R-5 moved it behind the warm/cold decision (D-13) and
+kept the requirement. Until 4.1 lands no lock exists anywhere (Ruling 28), which is why the preflight
+probe above is run cold and why the bench (Phase 3) opens the port from `docker exec` while the
+container holds the mock.
+
+### Scenario: the driver opens the port exclusively
+- **GIVEN** `src/mousedroid/comms/serial_driver.py::_open_serial`
+- **WHEN** it opens the port
+- **THEN** it passes `exclusive=True` (`_SERIAL_EXCLUSIVE`, a `Final[bool]` beside
+  `_SERIAL_IO_WORKERS` — not a config field: two openers must collide loudly)
+- **AND** `tests/unit/comms/test_serial_driver.py::test_open_serial_requests_exclusive_access` pins
+  the call
+
+### Scenario: the serial stage is a probe, not an open/write
+- **GIVEN** `scripts/jetson_smoke_test.sh::test_serial` after 4.1
+- **WHEN** the board returns nothing to the probe frame
+- **THEN** the stage records FAIL — `PASS: serial open/write (no response…)` no longer exists
+- **AND** a port held elsewhere is FAIL with the lock error in the reason, never a silent PASS
+- **AND** `tests/unit/scripts/test_smoke_harness.py` pins the FAIL on silence
+
+### Scenario: a warm smoke run refuses when the container owns the port
+- **GIVEN** `scripts/jetson_full_smoke_run.sh` with `MOUSEDROID_SMOKE_ESP32_MODE` unset (warm) and
+  a container whose own settings have `esp32.enabled` true and `mock_hardware` false
+- **WHEN** an ESP32 stage (`serial`, `motor`, `power`, `mcp_motor_smoke`) is reached
+- **THEN** the stage records FAIL "warm smoke refused: the orchestrator in `<container>` owns the
+  ESP32 port; re-run with `MOUSEDROID_SMOKE_ESP32_MODE=cold`"
+- **AND** no port is opened from the stage
+
+### Scenario: cold mode stops, runs, and always restarts
+- **GIVEN** `MOUSEDROID_SMOKE_ESP32_MODE=cold`
+- **WHEN** the ESP32 stages run
+- **THEN** the container is stopped under an EXIT trap that restarts it (the
+  `scripts/jetson_full_validation.sh` pattern) and the stages run through
+  `docker compose … run --rm --no-deps … --entrypoint python3`
+- **AND** the container is running again when the script exits, whatever the stages returned
+
+### Scenario: warm-with-mock is sanctioned
+- **GIVEN** a container whose own stack keeps `esp32.enabled: false` (the bench posture)
+- **WHEN** the ESP32 stages run warm with the bench overlay forwarded per command
+- **THEN** they run — the orchestrator holds the mock and no port — and the summary says so
+
+### Scenario: the documented motion lever reaches the container
+- **GIVEN** either mode
+- **WHEN** the wrapper builds its `docker exec` / `compose run` command
+- **THEN** `-e MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION` is forwarded (today it forwards no
+  `MOUSEDROID_ESP32__*` variable, so the runbook's "zero-velocity by default" sentence was true by
+  accident — corrected in 4.6)
+- **AND** `tests/unit/scripts/test_smoke_harness.py` pins `MOUSEDROID_SMOKE_ESP32_MODE`, the
+  forwarded `-e` and "warm smoke refused"

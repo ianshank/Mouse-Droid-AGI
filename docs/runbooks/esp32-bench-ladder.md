@@ -103,7 +103,7 @@ docker exec -w /opt/mousedroid -e MOUSEDROID_MOCK_HARDWARE=false -e MOUSEDROID_S
 docker exec -w /opt/mousedroid -e MOUSEDROID_MOCK_HARDWARE=false -e MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY= mousedroid bash scripts/jetson_smoke_test.sh camera
 ```
 
-`power` → PASS (mock, 12.0 V — recorded as such).
+`power` → `SKIP: power chain smoke …` — with the bench overlay explicitly opted out the stage records SKIP without running pytest (nothing here measures the chassis; a mock PASS would be a green that measures nothing). The checkpoint's substance is the health check and `camera`.
 
 - [ ] **3.3 Deploy trunk via git-fetch (20–30 min; CF-4 fallback is the primary path today).** From the PC:
 
@@ -118,7 +118,7 @@ ssh $ROVER_USER@$ROVER_HOST "git -C /opt/mousedroid fetch origin && git -C /opt/
 ssh $ROVER_USER@$ROVER_HOST 'docker exec -w /opt/mousedroid mousedroid python3 -c "import mousedroid.main, mousedroid.factory, mousedroid.validation.runtime; print(\"import ok\")"'
 ```
 
-On `ModuleNotFoundError: No module named 'X'`, install the package into the running container, re-run the import, and log every package (writable layer — gone on `--force-recreate`; today use `restart` only):
+On `ModuleNotFoundError: No module named 'X'`, install the package into the running container, re-run the import, and log every package (writable layer — gone on any recreate: `--force-recreate`, or a unit restart, whose `ExecStop` is `docker compose down`; restart in place with `docker restart mousedroid`, below):
 
 ```bash
 docker exec mousedroid python3 -m pip install --no-cache-dir "<spec from pyproject.toml>"
@@ -136,13 +136,13 @@ docker compose -f /opt/mousedroid/docker-compose.jetson.yml --env-file /dev/null
 sudo bash /opt/mousedroid/scripts/sync_jetson_overlay.sh
 ```
 
-Restart with `sudo systemctl restart mousedroid-docker` if `systemctl is-enabled mousedroid-docker` prints `enabled`, else with compose:
+Restart the container **in place** — bind-mounted code and the hand-synced overlay take effect on a plain restart, and the writable layer (any package hot-installed above) survives:
 
 ```bash
-systemctl is-enabled mousedroid-docker
-sudo systemctl restart mousedroid-docker                                                               # when it printed "enabled"
-docker compose -f /opt/mousedroid/docker-compose.jetson.yml --env-file /dev/null restart mousedroid    # otherwise
+docker restart mousedroid
 ```
+
+Do **not** use `sudo systemctl restart mousedroid-docker` here: the unit's `ExecStop` is `docker compose down` (`scripts/mousedroid-docker.service`), so a unit restart RECREATES the container — every hot-installed package is lost, and a recreate has wedged the camera before (2026-07-15). The unit restart is the right choice only when you want its `ExecStartPre` overlay sync + preflight **and** nothing is hot-installed (a rebuilt image, for instance). `scripts/deploy_remote.sh` exposes the same choice as `MOUSEDROID_REMOTE_RESTART_MODE=unit|container` (landing in PR-E).
 
 **Checkpoint A′:** `healthy` within 60 s; `--health-check` exit 0; the log shows `command_set=waveshare_stock` and the mock driver:
 
@@ -191,9 +191,9 @@ Alive: `rst:0x1 (POWERON_RESET)` banner and/or `{"T":1001,…}` frames. Silent: 
 docker exec -w /opt/mousedroid -e MOUSEDROID_MOCK_HARDWARE=false -e MOUSEDROID_JETSON_CONFIGS="$BENCH_CFG" mousedroid python3 -m mousedroid.cli.preflight --checks esp32 --json
 ```
 
-→ `"status": "ok"`, `FEEDBACK_BASE_INFO after 1 poll(s)`. Answer → **skip 3.7–3.9, go to 3.10**.
+→ `"status": "ok"`, `FEEDBACK_BASE_INFO after 1 poll(s)`. The probe runs cold by construction here: the container holds the mock, and the serial driver takes no exclusive lock until task 4.1, so nothing contends for the frames. Answer → **skip 3.7–3.9, go to 3.10**.
 
-- [ ] **3.7 ttyTHS1 jumper probe (15 min, only if 3.6 is silent).** Power everything off. Driver board 40-pin `U0TX` (pin 10) → Jetson pin 10 (UART1_RXD); `U0RX` (pin 8) → Jetson pin 8 (UART1_TXD); GND ↔ GND (pin 6); 3.3 V both sides. Power on, then on the rover:
+- [ ] **3.7 ttyTHS1 jumper probe (15 min, only if 3.6 is silent).** Power everything off. Driver board 40-pin `U0TX` (pin 10) → Jetson pin 10 (UART1_RXD); `U0RX` (pin 8) → Jetson pin 8 (UART1_TXD); GND ↔ GND (pin 6). Both UARTs are 3.3 V logic — connect TX/RX/GND only, never join the 3.3 V rails. Power on, then on the rover:
 
 ```bash
 systemctl is-active nvgetty && sudo systemctl stop nvgetty
@@ -264,7 +264,7 @@ docker exec -w /opt/mousedroid -e MOUSEDROID_MOCK_HARDWARE=false -e MOUSEDROID_J
 docker exec -w /opt/mousedroid -e MOUSEDROID_MOCK_HARDWARE=false -e MOUSEDROID_JETSON_CONFIGS="$BENCH_CFG" -e MOUSEDROID_SMOKE_ALLOW_MOTION=1 -e MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION=true mousedroid bash scripts/jetson_smoke_test.sh motor
 ```
 
-Wheels spin at 0.1 m/s then 0.15 m/s briefly → `PASS: motor loopback smoke`. Abort = power switch.
+Wheels turn briefly at no more than `esp32.smoke_test_velocity_mps` (default 0.05 m/s; `0.0` locks all smoke motion) → `PASS: motor loopback smoke`. Abort = power switch.
 
 - [ ] **3.10d** Wrapper, on the host (from the checkout):
 

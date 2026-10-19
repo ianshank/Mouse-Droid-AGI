@@ -60,8 +60,9 @@ ever touches the rover; no agent toolset carries an actuation tool (CHARTER §3)
 - **WHEN** `python tools/llm_latency_probe.py --report-json <path>` runs
 - **THEN** the report carries `model_requested`, `model_resolved`, `served`, `cold_start_ms`,
   `p50_ms`, `p95_ms`, `p99_ms`, `iterations`, `passed`
-- **AND** `served == "primary"`; a degraded primary (HTTP 400 on `temperature`) is reported as
-  `fallback`, never as a pass
+- **AND** `served == "primary"`; a degraded primary (HTTP 400 on `temperature` [Likely — per the
+  `claude-api` skill's model table, cached 2026-10-06; not re-verified against the live API]) is
+  reported as `fallback`, never as a pass
 
 ### Scenario: the overlays and the golden move together
 - **GIVEN** `config/jetson_production.yaml` and `config/jetson_claude_pilot.yaml` retargeted
@@ -138,3 +139,13 @@ ever touches the rover; no agent toolset carries an actuation tool (CHARTER §3)
 - **WHEN** the document is written
 - **THEN** it records the findings file's sha256 and the vulture version
 - **AND** names `python scripts/dead_code_audit.py` as the regeneration command
+
+## Requirement: the hot loop MUST stay free of the cloud SDKs (CHARTER §4 invariant 10; Ruling 22, D-14)
+
+### Scenario: the purity pin names both SDKs
+- **GIVEN** `tests/regression/test_hot_loop_import_purity.py::_FORBIDDEN_MODULES`
+- **WHEN** task 5.4 lands
+- **THEN** the tuple contains `"anthropic"` and `"claude_agent_sdk"` beside the #242 names
+  (`google.adk`, `honcho`, `composio`, `composio_core`)
+- **AND** importing `mousedroid.orchestrator.autonomous` and `mousedroid.factory.mission` loads
+  neither — the gateway imports the SDK lazily in `start()`, and the reviewer lives under `tools/`
