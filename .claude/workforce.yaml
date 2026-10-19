@@ -174,3 +174,15 @@ credit:
         B: 60
         C: 15
     ledger: reports/credit/ledger.jsonl
+
+# F-059 WS-B: the read-only Agent-SDK peer reviewer (tools/agent_reviewer/). The
+# spend caps are the credit: block above; this block holds what the reviewer may
+# be tuned on. model is an alias, resolved to a model id at run time
+# (client.models.retrieve) and recorded in the artifact and the ledger row. A
+# max_turns of 0 would mean "no limit" to the SDK, so the schema requires >= 1.
+# What is NOT tunable here -- the tool allowlist, the Bash guard, the forced
+# mock-hardware MCP environment, the secret-file refusals -- is policy in
+# tools/agent_reviewer/policy.py, pinned by tests/unit/tools/test_agent_reviewer.py.
+agent_reviewer:
+    model: opus
+    max_turns: 40

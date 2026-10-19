@@ -420,6 +420,112 @@ class CreditConfig(BaseModel):
         return value
 
 
+def _require_repo_relative(value: str) -> str:
+    """Return ``value`` if it is a non-empty path that stays inside the checkout.
+
+    Rejects blank, absolute (POSIX or Windows drive-letter), ``~`` and
+    ``..``-traversing values. Checks both flavours of "absolute" for the reason
+    :class:`FreezeConfig` documents: ``Path.is_absolute()`` depends on the host OS.
+    """
+    p = Path(value)
+    if (
+        not value.strip()
+        or p.is_absolute()
+        or PurePosixPath(value).is_absolute()
+        or PureWindowsPath(value).is_absolute()
+        or value.startswith("~")
+        or ".." in p.parts
+    ):
+        raise ValueError("must be a non-empty repo-relative path without '..' traversal")
+    return value
+
+
+class AgentReviewerConfig(BaseModel):
+    """Settings for the F-059 WS-B read-only Agent-SDK peer reviewer.
+
+    Consumed by ``tools/agent_reviewer/``. It holds what an operator may tune: the
+    credit workstream the spend is charged to, the model alias to request, the
+    turn cap, and where the reviewer's inputs and outputs live. It deliberately
+    does NOT hold what an operator must not be able to loosen -- the tool
+    allowlist, the Bash guard, the forced mock-hardware MCP environment and the
+    secret-file refusals are policy, pinned in ``tools/agent_reviewer/policy.py``
+    and by its tests rather than exposed as configuration.
+
+    Every field defaults, so a repository whose ``workforce.yaml`` predates the
+    block still loads (invariant I-1). The spend caps themselves live in
+    :class:`CreditConfig`, not here.
+    """
+
+    model_config = _STRICT
+
+    ws: str = Field(
+        default="B",
+        description=(
+            "Credit workstream the reviewer's spend is charged to: a key of "
+            "credit.caps_usd (B = the Agent-SDK reviewer in the F-059 plan)."
+        ),
+    )
+    model: str = Field(
+        default="opus",
+        description=(
+            "Model alias to request. Resolved to a model id at run time "
+            "(client.models.retrieve); an id is never a literal in the code."
+        ),
+    )
+    max_turns: int = Field(
+        default=40,
+        ge=1,
+        description=(
+            "Turn cap passed to the SDK as max_turns. At least 1: the SDK reads "
+            "0 as 'no turn limit', which would silently remove the cap."
+        ),
+    )
+    agent_file: str = Field(
+        default=".claude/agents/peer-reviewer.md",
+        description=(
+            "Repo-relative subagent definition whose body (front-matter stripped) "
+            "becomes the reviewer's system prompt."
+        ),
+    )
+    mcp_config: str = Field(
+        default=".mcp.json",
+        description=("Repo-relative MCP config the reviewer's mock-hardware server is built from."),
+    )
+    artifact_dir: str = Field(
+        default="reports/agent_reviewer",
+        description="Repo-relative directory the review artifacts are written under, per date.",
+    )
+    resolve_timeout_s: float = Field(
+        default=15.0,
+        gt=0.0,
+        allow_inf_nan=False,
+        description="Seconds to wait for the model-id lookup before using the configured alias.",
+    )
+    run_timeout_s: float = Field(
+        default=1800.0,
+        gt=0.0,
+        allow_inf_nan=False,
+        description=(
+            "Wall-clock limit on one review, in seconds. The turn and budget caps bound "
+            "work and spend; this bounds a stalled connection."
+        ),
+    )
+
+    @field_validator("ws", "model")
+    @classmethod
+    def _reject_blank(cls, value: str) -> str:
+        """Reject whitespace-only identifiers that would silently break the run."""
+        if not value.strip():
+            raise ValueError("must not be empty or whitespace-only")
+        return value
+
+    @field_validator("agent_file", "mcp_config", "artifact_dir")
+    @classmethod
+    def _reject_unsafe_path(cls, value: str) -> str:
+        """Keep every path inside the checkout (they are joined onto the repo root)."""
+        return _require_repo_relative(value)
+
+
 class WorkforceConfig(BaseModel):
     """Root workforce configuration."""
 
@@ -435,6 +541,7 @@ class WorkforceConfig(BaseModel):
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     ratchet_budgets: RatchetBudgetsConfig = Field(default_factory=RatchetBudgetsConfig)
     credit: CreditConfig = Field(default_factory=CreditConfig)
+    agent_reviewer: AgentReviewerConfig = Field(default_factory=AgentReviewerConfig)
 
 
 def load_config(
