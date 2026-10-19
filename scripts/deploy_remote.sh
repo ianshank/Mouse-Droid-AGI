@@ -9,7 +9,8 @@
 # Modes:
 #   --code-only    (default) Sync the repo to the rover's checkout root, refresh the package in
 #                  the bare-metal venv if there is one, then restart the Docker unit (and the
-#                  bare-metal one, if that is enabled). It never runs deploy_jetson.sh (that is
+#                  bare-metal one, if that is enabled). The unit restart RECREATES the container
+#                  (see MOUSEDROID_REMOTE_RESTART_MODE). It never runs deploy_jetson.sh (that is
 #                  --full) and does NOT rebuild the image: the Docker spine serves the package
 #                  from the bind mount, and a dependency change needs 'docker compose build'
 #                  on the rover.
@@ -34,9 +35,23 @@
 #   MOUSEDROID_REMOTE_SRC             Rsync destination on the rover: the repo root, the
 #                                     checkout the compose bind mount and both systemd units
 #                                     run from (default: /opt/mousedroid)
-#   MOUSEDROID_REMOTE_HEALTH_WAIT_S   Seconds to wait, polling once a second, for the container
-#                                     to be listed before its health check (default: 30; 0 probes
-#                                     once). A container that never appears is a WARNING.
+#   MOUSEDROID_REMOTE_RESTART_MODE    How the Docker spine is restarted: unit (default) or
+#                                     container. unit runs systemctl restart mousedroid-docker,
+#                                     which RECREATES the container (the unit's ExecStop is docker
+#                                     compose down): anything hot-installed into its writable layer
+#                                     is lost, and the camera has needed a host reboot after a
+#                                     recreate. Its ExecStartPre re-syncs the overlay and runs the
+#                                     preflight, fail-closed. container runs docker restart in
+#                                     place: the writable layer survives and ExecStartPre is
+#                                     skipped (this script has already run the safety-floor guard
+#                                     and goes on to run the health check). Pick it when the
+#                                     container must keep what was installed into it, but not
+#                                     after a docker compose build: it stays on the image the
+#                                     container was created from, which only a recreate replaces.
+#   MOUSEDROID_REMOTE_HEALTH_WAIT_S   Seconds of wall-clock time to wait, polling once a second,
+#                                     for the container to be listed after THIS run restarted the
+#                                     Docker unit (default: 30; 0 probes once). Never listed is a
+#                                     WARNING. A run that restarted no unit probes once, no wait.
 #   MOUSEDROID_CONFIG_DIR             Remote config dir (default: /etc/mousedroid)
 #   MOUSEDROID_DEPLOY_CONFIRM_DIRTY   1/true = same as --confirm-dirty
 #   MOUSEDROID_DEPLOY_ARCHIVE_DIR     Where rover WIP archives land on THIS
@@ -58,10 +73,15 @@ REMOTE_USER="${MOUSEDROID_REMOTE_USER:-jetson}"
 # copy inside the first, and --delete removed the live package directory beneath it.
 REMOTE_SRC="${MOUSEDROID_REMOTE_SRC:-/opt/mousedroid}"
 REMOTE_CONFIG="${MOUSEDROID_CONFIG_DIR:-/etc/mousedroid}"
-# How long run_health_check waits, polling once a second, for the container to be listed. A
-# restart returns before compose has it up, so a probe made at once would find nothing and the
-# check would be skipped in silence. Validated below, because shell arithmetic reads it.
+# How long run_health_check waits, in wall-clock seconds and polling once a second, for the
+# container to be listed. Only when THIS run restarted the Docker unit: that restart returns
+# before compose has the container up, so a probe made at once finds nothing. When it did not,
+# nothing is bringing a container up and the check looks once. Validated below, because shell
+# arithmetic reads it.
 REMOTE_HEALTH_WAIT_S="${MOUSEDROID_REMOTE_HEALTH_WAIT_S:-30}"
+# How restart_service restarts the Docker spine: unit or container (validated below). unit
+# restarts mousedroid-docker, which RECREATES the container; container restarts it in place.
+REMOTE_RESTART_MODE="${MOUSEDROID_REMOTE_RESTART_MODE:-unit}"
 # The rover's install root, and the venv deploy_jetson.sh creates under it. One
 # constant instead of the literal repeated at each use. It is deliberately NOT a
 # knob: the install that actually runs is fixed by scripts/mousedroid.service
@@ -107,6 +127,10 @@ RSYNC_PROTECT_ARGS=(
 
 DEPLOY_MODE="code-only"
 HOST=""
+# Set to 1 by restart_service when it restarts the Docker UNIT, the restart that recreates the
+# container and returns before compose has it up. run_health_check waits for the container only
+# then.
+DOCKER_UNIT_RESTARTED=0
 WIP_GUARD="${SCRIPT_DIR}/rover_wip_guard.sh"
 ARCHIVE_DIR="${MOUSEDROID_DEPLOY_ARCHIVE_DIR:-${HOME}/.mousedroid/rover-wip}"
 
@@ -192,6 +216,11 @@ require_safe_remote_path "MOUSEDROID_CONFIG_DIR" "${REMOTE_CONFIG}"
     || die "MOUSEDROID_REMOTE_HEALTH_WAIT_S must be a whole number of seconds (0-9999), got: ${REMOTE_HEALTH_WAIT_S}"
 REMOTE_HEALTH_WAIT_S=$((10#${REMOTE_HEALTH_WAIT_S}))
 
+case "${REMOTE_RESTART_MODE}" in
+    unit|container) ;;
+    *) die "MOUSEDROID_REMOTE_RESTART_MODE must be 'unit' or 'container', got: ${REMOTE_RESTART_MODE}" ;;
+esac
+
 # Pre-quoted forms for interpolation into remote command strings. Use these,
 # not the raw variables, anywhere the value crosses into a shell on the rover.
 REMOTE_SRC_Q="$(printf '%q' "${REMOTE_SRC}")"
@@ -272,11 +301,22 @@ parse_args() {
                 echo "                 system + hardware + rsync + deploy + restart."
                 echo "                 Do not run it against the Docker-spine rover."
                 echo "  --code-only    (default) Rsync code to the checkout root, pip reinstall into the"
-                echo "                 venv if there is one, restart the Docker unit. Never runs"
-                echo "                 deploy_jetson.sh (that is --full). Does NOT rebuild the image: a"
-                echo "                 dependency change needs 'docker compose build' on the rover."
+                echo "                 venv if there is one, restart the Docker unit (which recreates the"
+                echo "                 container, see below). Never runs deploy_jetson.sh (that is --full)."
+                echo "                 Does NOT rebuild the image: a dependency change needs"
+                echo "                 'docker compose build' on the rover."
                 echo "  --config-only  Update config files + restart service. Refuses a remote tree"
                 echo "                 that predates the battery plausibility floor: deploy code first."
+                echo ""
+                echo "Restart (MOUSEDROID_REMOTE_RESTART_MODE):"
+                echo "  unit (default)  systemctl restart mousedroid-docker. This RECREATES the container"
+                echo "                  (the unit's ExecStop is docker compose down): packages hot-installed"
+                echo "                  into it are lost. Its ExecStartPre syncs the overlay and runs the"
+                echo "                  preflight, fail-closed."
+                echo "  container       docker restart in place: keeps the container's writable layer and"
+                echo "                  skips ExecStartPre. Pick it when the container must keep what was"
+                echo "                  installed into it, but not after a docker compose build: it stays"
+                echo "                  on the image the container was created from."
                 echo ""
                 echo "Rover-local work:"
                 echo "  A dirty sync target is REFUSED (rsync --delete would destroy it)."
@@ -439,9 +479,16 @@ rsync_code() {
 # that arms the battery thresholds would latch an e-stop on it. Refuse to install YAML onto
 # such a tree. After the sync (--code-only, --full) the probe passes by construction; for
 # --config-only it is the only protection, and the remedy it names is: deploy code first.
+# ssh's own exit status 255 (cannot connect) is not a stale tree and gets its own message. The
+# probe's path is pinned to this tree by tests/unit/scripts/test_deploy_remote_guard.py.
 require_remote_safety_floor() {
-    remote_cmd "grep -q battery_implausible_below_v ${REMOTE_SRC_Q}/src/mousedroid/config/schema/reward_safety.py" \
-        || die "remote source at ${REMOTE_SRC} predates safety.battery_implausible_below_v — deploy code first (--code-only or git fetch), then config"
+    local rc=0
+    remote_cmd "grep -q battery_implausible_below_v ${REMOTE_SRC_Q}/src/mousedroid/config/schema/reward_safety.py" || rc=$?
+    case "${rc}" in
+        0) ;;
+        255) die "cannot reach the rover at ${HOST}; nothing installed" ;;
+        *) die "remote source at ${REMOTE_SRC} predates safety.battery_implausible_below_v — deploy code first (--code-only or git fetch), then config" ;;
+    esac
 }
 
 deploy_config() {
@@ -533,10 +580,21 @@ restart_service() {
     log_section "Restarting mousedroid service(s)"
     remote_sudo systemctl daemon-reload
     local restarted=false
-    # Docker spine: the unit's ExecStartPre re-syncs the overlay and runs
-    # preflight_check.sh, so the synced tree goes live through the fail-closed path.
+    # Docker spine. Restarting the UNIT recreates the container (its ExecStop is docker compose
+    # down), and its ExecStartPre re-syncs the overlay and runs preflight_check.sh, so the synced
+    # tree goes live through the fail-closed path. MOUSEDROID_REMOTE_RESTART_MODE=container
+    # restarts the container in place instead: its writable layer survives, so packages
+    # hot-installed into it are kept, and so does the image it was created from (only a recreate
+    # picks up a rebuilt one). ExecStartPre is skipped: the deploy has run the floor guard and
+    # goes on to run the health check. Either way the unit being enabled is what marks this
+    # rover as the Docker spine.
     if remote_sudo systemctl is-enabled mousedroid-docker &>/dev/null; then
-        remote_sudo systemctl restart mousedroid-docker
+        if [[ "${REMOTE_RESTART_MODE}" == container ]]; then
+            remote_sudo docker restart "${REMOTE_CONTAINER}"
+        else
+            remote_sudo systemctl restart mousedroid-docker
+            DOCKER_UNIT_RESTARTED=1
+        fi
         restarted=true
         log_step "mousedroid-docker: $(remote_sudo systemctl is-active mousedroid-docker 2>/dev/null || true)"
     fi
@@ -551,26 +609,54 @@ restart_service() {
 # Health check
 # ---------------------------------------------------------------------------
 
-# Poll once a second, for at most REMOTE_HEALTH_WAIT_S seconds, until REMOTE_CONTAINER is listed.
-# A restart returns before compose has the container up. One probe, then up to N more a second
-# apart; 0 probes once and never sleeps. Succeeds as soon as the container is listed.
+# One probe: is REMOTE_CONTAINER listed? 0 yes, 1 no, 255 the rover cannot be reached (ssh's own).
+probe_container() {
+    remote_cmd "docker ps --filter name=^/${REMOTE_CONTAINER}\$ --format '{{.Names}}' | grep -qx ${REMOTE_CONTAINER}"
+}
+
+# Probe until the container is listed or REMOTE_HEALTH_WAIT_S seconds of wall-clock time have
+# passed (SECONDS), once a second. The bound is time, not a poll count, so slow probes cannot
+# stretch it; 0 probes once and never sleeps. It gives up at once on 255: an unreachable rover
+# does not become reachable by waiting here. Returns the last probe's status (0 listed, 1 not).
 wait_for_container() {
-    local waited=0
-    until remote_cmd "docker ps --filter name=^/${REMOTE_CONTAINER}\$ --format '{{.Names}}' | grep -qx ${REMOTE_CONTAINER}"; do
-        (( waited < REMOTE_HEALTH_WAIT_S )) || return 1
+    local deadline=$((SECONDS + REMOTE_HEALTH_WAIT_S)) rc=0
+    while true; do
+        probe_container && return 0
+        rc=$?
+        (( rc != 255 )) || return 255
+        (( SECONDS < deadline )) || return "${rc}"
         sleep 1
-        waited=$((waited + 1))
     done
 }
 
+# The wait applies only when this run restarted the Docker unit (DOCKER_UNIT_RESTARTED): that
+# restart returns before compose has the container up. Otherwise nothing is bringing one up, so
+# the container is probed once and an unlisted one is an info line, not a warning. A container
+# that is listed gets its health check either way.
 run_health_check() {
     log_section "Running remote health check"
-    if wait_for_container; then
-        remote_cmd "docker exec -w ${REMOTE_INSTALL_DIR_Q} ${REMOTE_CONTAINER} python3 -m mousedroid.main --health-check" \
-            || echo "WARNING: container health check returned non-zero exit code"
+    local probe_rc=0
+    if [[ "${DOCKER_UNIT_RESTARTED}" == 1 ]]; then
+        wait_for_container || probe_rc=$?
     else
-        echo "WARNING: container ${REMOTE_CONTAINER} not running after ${REMOTE_HEALTH_WAIT_S}s — container health check skipped"
+        probe_container || probe_rc=$?
     fi
+    case "${probe_rc}" in
+        0)
+            remote_cmd "docker exec -w ${REMOTE_INSTALL_DIR_Q} ${REMOTE_CONTAINER} python3 -m mousedroid.main --health-check" \
+                || echo "WARNING: container health check returned non-zero exit code"
+            ;;
+        255)
+            echo "WARNING: cannot reach the rover at ${HOST} — container health check skipped"
+            ;;
+        *)
+            if [[ "${DOCKER_UNIT_RESTARTED}" == 1 ]]; then
+                echo "WARNING: container ${REMOTE_CONTAINER} not running after ${REMOTE_HEALTH_WAIT_S}s — container health check skipped"
+            else
+                log_step "Container ${REMOTE_CONTAINER} is not running and this run did not restart the Docker unit — container health check skipped"
+            fi
+            ;;
+    esac
     if remote_cmd "test -d ${REMOTE_VENV_Q}"; then
         remote_cmd "MOUSEDROID_MOCK_HARDWARE=false ${REMOTE_VENV_Q}/bin/python -m mousedroid.main --health-check" \
             || echo "WARNING: Health check returned non-zero exit code"

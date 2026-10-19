@@ -58,6 +58,20 @@ bare-metal venv path and is not for this rover. An rsync leaves the rover's tree
 `HEAD` (`.git` is never synced), so the next run's WIP guard reports the checkout dirty and
 needs `--confirm-dirty`; prefer the git-fetch path below when the rover can reach `origin`.
 
+**The unit restart recreates the container.** `--code-only` restarts `mousedroid-docker`, whose
+`ExecStop` is `docker compose down`, so the container is removed and created again from the image:
+packages hot-installed into its writable layer are lost (reinstall them), and a recreate has wedged
+the camera before, needing a host reboot (2026-07-15). In return the unit's `ExecStartPre` re-syncs
+the overlay and runs the preflight, fail-closed, before the new tree runs. Set
+`MOUSEDROID_REMOTE_RESTART_MODE=container` for an in-place `docker restart` instead: the writable
+layer survives and `ExecStartPre` is skipped (the script has already run its safety-floor guard and
+goes on to run the health check). Pick it when the container must keep what was installed into it,
+or a recreate is a risk you cannot take; keep the default when you want the unit's preflight to gate
+the new tree. It stays on the image the container was created from, so after a `docker compose build`
+keep the default, which recreates the container from the new image. The unit supervises the
+container with `compose up --abort-on-container-exit`, so read
+the `mousedroid-docker:` state line the script prints after a `container` restart.
+
 With `--confirm-dirty` the guard (`scripts/rover_wip_guard.sh`, piped over
 `ssh` so it does not have to already be on the rover) does two things, in this
 order:
@@ -86,20 +100,26 @@ transferred.
 ### Fallback — move the checkout with git instead of rsync
 
 Use this when the sync cannot run: the PC has no route to the rover, or the guard cannot
-read the checkout. The checkout must be clean first (`git -C /opt/mousedroid status --porcelain`
-prints nothing); preserve rover-local work as above if it does not. **Code first, overlay
-second**: the overlay is written against the newest schema, and a tree that predates
-`safety.battery_implausible_below_v` reads a missing battery voltage as 0.0 V and e-stops.
-(`deploy_remote.sh --config-only` refuses such a tree for the same reason.)
+read the checkout. **Code first, overlay second**: the overlay is written against the newest
+schema, and a tree that predates `safety.battery_implausible_below_v` reads a missing battery
+voltage as 0.0 V and e-stops. (`deploy_remote.sh --config-only` refuses such a tree for the same
+reason.)
 
 ```bash
 # On the rover.
 sudo chown -R ian:ian /opt/mousedroid    # the known root-ownership drift breaks git as ian
 git config --global --add safe.directory /opt/mousedroid
+git -C /opt/mousedroid status --porcelain    # must print nothing; preserve what it lists first (above)
 git -C /opt/mousedroid fetch origin && git -C /opt/mousedroid checkout --detach <sha>
+
+# Before the restart: can the running image import the new source? This is the only
+# image/source-skew signal you get ahead of the restart.
+docker exec -w /opt/mousedroid mousedroid python3 -c "import mousedroid.main, mousedroid.factory, mousedroid.validation.runtime"
+
 sudo bash /opt/mousedroid/scripts/sync_jetson_overlay.sh    # the overlay, after the code
 
-# Then restart: the unit when it is enabled, otherwise the container.
+# Then restart: the unit when it is enabled (that recreates the container; docker restart
+# mousedroid keeps its writable layer, see above), otherwise the container.
 if systemctl is-enabled mousedroid-docker >/dev/null 2>&1; then
     sudo systemctl restart mousedroid-docker
 else
@@ -124,9 +144,11 @@ reverts behaviour.
 
 ## 3. Promote
 
-Sync (step 1), then recreate the container per
-`docs/runbooks/jetson-claude-pilot-deploy.md`. Nothing in the promotion path
-introduces a release directory or a `current`/`previous` symlink: the editable
+Sync (step 1): `deploy_remote.sh` restarts the Docker unit for you, which recreates the
+container from the current image (`MOUSEDROID_REMOTE_RESTART_MODE=container` restarts it in place,
+on the image it was created from, so not after a `docker compose build`). Without the unit, recreate
+it per `docs/runbooks/jetson-claude-pilot-deploy.md`. Nothing in the promotion path introduces a
+release directory or a `current`/`previous` symlink: the editable
 install resolves through an absolute path, so replacing the mount root with a
 symlink farm breaks it, and would also change what `MOUSEDROID_INSTALL_DIR`
 means for `scripts/sync_jetson_overlay.sh`, `scripts/preflight_check.sh` and
