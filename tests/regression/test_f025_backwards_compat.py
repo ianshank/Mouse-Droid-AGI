@@ -190,10 +190,12 @@ def test_env_lever_derives_stock_baud_through_the_real_loader(
         ("jetson_production.yaml", "waveshare_stock", WAVESHARE_STOCK_BAUD),
     ],
 )
-def test_shipped_overlays_keep_legacy_baud_without_the_env_lever(
+def test_shipped_overlays_baud_tracks_their_declared_command_set(
     overlay: str, command_set: str, baud: int
 ) -> None:
-    """The derivation is opt-in: an untouched ``default.yaml`` load still gets 1 Mbaud.
+    """Without the env lever, each shipped overlay's baud follows the command set it declares.
+
+    The derivation is opt-in, so an untouched ``default.yaml`` load still gets 1 Mbaud.
 
     REVERSAL (F-059 2.1): ``jetson_production.yaml`` now declares ``waveshare_stock``
     and its own 115200 baud, so it loads at the stock speed without the env lever.

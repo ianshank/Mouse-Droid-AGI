@@ -294,8 +294,10 @@ def test_production_overlay_arms_battery_thresholds_and_the_power_gate_has_no_fl
     power = (_REPO_ROOT / "tests" / "hardware" / "test_power_chain_smoke.py").read_text(
         encoding="utf-8"
     )
-    # R-6: the gate is stricter than the runtime
+    # R-6: the gate compares straight against the critical threshold and has no
+    # plausibility floor of its own, so it is stricter than the runtime.
     assert "battery_voltage_v >= jetson_settings.safety.battery_critical_v" in power
+    assert "battery_implausible_below_v" not in power
 
 
 def test_latch_is_armed_on_production_and_explicitly_off_on_the_lidar_only_stack() -> None:
@@ -310,8 +312,27 @@ def test_latch_is_armed_on_production_and_explicitly_off_on_the_lidar_only_stack
     assert raw["safety"]["emergency_latch"]["enabled"] is False  # explicit, not inherited (R-7)
 
 
+_REARM_CONFIG = "--config /etc/mousedroid/jetson_production.yaml"
+
+
 def test_runbooks_point_operators_at_the_rearm_cli() -> None:
-    """CF-2: an armed latch needs the re-arm command in the runbooks operators already use."""
-    for name in ("jetson-rover-smoke.md", "jetson-full-bringup.md"):
+    """CF-2 / Ruling 36: every documented re-arm names the production overlay.
+
+    The CLI reads no environment to find its overlay. Without ``--config`` it loads
+    ``default.yaml``, where the latch is off, prints "nothing to clear" and exits 0: a silent
+    no-op on the production container that looks exactly like a clear rover. So the flag must
+    sit on the command line of every invocation, not merely somewhere in the runbook.
+    """
+    for name in ("jetson-rover-smoke.md", "jetson-full-bringup.md", "emergency-stop-rearm.md"):
         text = (_REPO_ROOT / "docs" / "runbooks" / name).read_text(encoding="utf-8")
-        assert "mousedroid.cli.rearm" in text, name
+        assert re.search(
+            r"mousedroid\.cli\.rearm --config /etc/mousedroid/jetson_production\.yaml", text
+        ), name
+        # Not one good command among bad ones: join the shell continuations, then check each
+        # invocation. The boot log's quoted ``rearm_cmd`` hint is source output, not a command.
+        joined = text.replace("\\\n", " ")
+        for match in re.finditer(r"mousedroid\.cli\.rearm([^`\n]*)", joined):
+            line_start = joined.rfind("\n", 0, match.start()) + 1
+            args = " ".join(match.group(1).split())
+            if args and "rearm_cmd=" not in joined[line_start : match.start()]:
+                assert args.startswith(_REARM_CONFIG), (name, match.group(0))

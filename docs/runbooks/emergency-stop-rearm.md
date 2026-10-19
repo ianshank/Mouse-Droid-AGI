@@ -1,10 +1,10 @@
 # Runbook — clearing a latched emergency stop
 
 > Applies when `safety.emergency_latch.enabled` is `true`. It ships **true** on
-> `config/jetson_production.yaml` (F-059 CF-2) and so on any stack built on it,
-> **false** on the lidar-only stack (an explicit override) and on every config
-> that does not start from production; where it is false there is nothing to
-> clear and this runbook is inert.
+> `config/jetson_production.yaml` (F-059 CF-2) and every stack built on it,
+> except the lidar-only stack, which overrides it to **false**; configs that do
+> not start from production leave it at the schema default, false. Where it is
+> false there is nothing to clear and this runbook is inert.
 
 ## What a latch is, and why it exists
 
@@ -31,6 +31,9 @@ estop_latch_active_at_boot  reason=... causes=[...] tripped_at_iso=...
     rearm_cmd="python -m mousedroid.cli.rearm --operator <you> --confirm-area-clear"
 ```
 
+The logged `rearm_cmd` is only a reminder of the flags it needs: it carries no
+`--config`. Use the commands in the procedure below, which do.
+
 A latched rover **starts on purpose**. Refusing to start would meet
 `Restart=on-failure` on a unit with no `StartLimitBurst` and crash-loop; a
 crash-looping process never reaches `_halt_actuators`, so nothing would be
@@ -44,7 +47,13 @@ holding the motors stopped, and telemetry would be dead too.
 `insufficient_valid_sensors`, `loop_overrun`, `lidar_emergency`,
 `human_proximity`). Confirm the hazard is gone and the path is clear.
 
-**2. Check the state without changing it.**
+**2. Check the state without changing it.** Always pass `--config`. The CLI
+reads no environment to find the overlay (`MOUSEDROID_CONFIG` is read by some
+scripts, not by it), so a bare invocation loads `default.yaml`, where the latch is
+off, prints "no latch is in use, so there is nothing to clear" and exits `0` — the
+answer a clear rover gives, and a silent no-op on a latched one.
+`docker-compose.jetson.yml` hands the overlay to the service process itself, as
+its `command:` arguments; an `exec` starts a new process and does not inherit them.
 
 Bare metal:
 
@@ -58,16 +67,32 @@ Container — must run *inside* the service, because the latch lives in the
 
 ```bash
 docker compose -f docker-compose.jetson.yml exec mousedroid \
-    python -m mousedroid.cli.rearm --status
+    python -m mousedroid.cli.rearm --config /etc/mousedroid/jetson_production.yaml --status
 ```
 
-Exit `1` means latched, `0` means clear.
+Exit `1` means latched, `0` means clear — but only with `--config`; without it
+the CLI does not see the overlay's latch and answers `0` whether or not the
+rover is latched.
 
-**3. Clear it.** Both flags are required; neither has a default or an env
-fallback, because an unattributed re-arm is not a re-arm.
+**3. Clear it.** `--operator` and `--confirm-area-clear` are both required;
+neither has a default or an env fallback, because an unattributed re-arm is not a
+re-arm. Keep the `--config` from step 2: without it this command is a silent
+no-op and the latch stays set.
+
+Bare metal:
 
 ```bash
-... -m mousedroid.cli.rearm --operator "<your name>" --confirm-area-clear
+/opt/mousedroid/venv/bin/python -m mousedroid.cli.rearm \
+    --config /etc/mousedroid/jetson_production.yaml \
+    --operator "<your name>" --confirm-area-clear
+```
+
+Container:
+
+```bash
+docker compose -f docker-compose.jetson.yml exec mousedroid \
+    python -m mousedroid.cli.rearm --config /etc/mousedroid/jetson_production.yaml \
+    --operator "<your name>" --confirm-area-clear
 ```
 
 **4. Restart the service.** Clearing the record does not command motion — the

@@ -137,6 +137,11 @@ exactly that value. Keying the rule on "is it pinned at all" instead
 would leave the rover at the legacy 1 Mbaud, where stock firmware reads as
 line noise — which is how a live board gets diagnosed dead (audit R2).
 
+The derivation runs one way only. A per-host `MOUSEDROID_ESP32__COMMAND_SET=legacy`
+on `jetson_production.yaml` (a legacy-firmware board) must also set
+`MOUSEDROID_ESP32__SERIAL_BAUD=1000000`: the overlay pins 115200 explicitly and
+`legacy` derives nothing, so the port would otherwise open at 115200.
+
 The serial probe follows the selector (stock probes with `{"T":130}`, a
 read that elicits a reply); `SMOKE_SERIAL_PROBE_JSON` overrides it for
 bench experiments.
@@ -154,7 +159,7 @@ bench experiments.
 | `lidar` FAIL | `udevadm info /dev/serial/by-id/usb-Silicon_Labs_CP2102_*` to confirm the LD19 sits on the lidar bridge, not the rover bridge. |
 | `e2e` FAIL with camera reason | See `verify_sensors.py`'s `_diagnose_camera_host` output — surfaced in `e2e.log`. |
 | `voice` FAIL | `SUMMARY.md` emits a "Rocky voice prerequisites" remediation section listing the specific Piper / model-path / device issue. |
-| Rover boots but will not move; `estop_latch_active_at_boot` in the container log (a log line, not a `SUMMARY.md` stage result) | A latched emergency stop, not a dead board: `config/jetson_production.yaml` arms `safety.emergency_latch` (F-059 CF-2). Look first with `python -m mousedroid.cli.rearm --status` (exit `1` = latched). Once the hazard is gone and the path is clear, `python -m mousedroid.cli.rearm --operator <you> --confirm-area-clear`, then restart the service. On a container deployment run both inside the service; the bare-metal form and the reasoning are in [`emergency-stop-rearm.md`](emergency-stop-rearm.md). |
+| Rover boots but will not move; `estop_latch_active_at_boot` in the container log (a log line, not a `SUMMARY.md` stage result) | A latched emergency stop, not a dead board: `config/jetson_production.yaml` arms `safety.emergency_latch` (F-059 CF-2). Look first with `python -m mousedroid.cli.rearm --config /etc/mousedroid/jetson_production.yaml --status` (exit `1` = latched). Once the hazard is gone and the path is clear, `python -m mousedroid.cli.rearm --config /etc/mousedroid/jetson_production.yaml --operator <you> --confirm-area-clear`, then restart the service. **Never drop `--config`**: the CLI reads no environment to find the overlay, so without it it loads `default.yaml`, where the latch is off, says there is nothing to clear and exits `0` whether or not the rover is latched. `exit 1` = latched therefore holds only with `--config`, and a clear without it is a silent no-op. On a container deployment run both inside the service (`docker compose -f docker-compose.jetson.yml exec mousedroid ...`); the bare-metal form and the reasoning are in [`emergency-stop-rearm.md`](emergency-stop-rearm.md). |
 
 ## Reading the logs
 

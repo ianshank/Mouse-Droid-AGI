@@ -73,12 +73,16 @@ MOUSEDROID_SMOKE_ALLOW_MOTION=1 \
 > comes up but will not move, with `estop_latch_active_at_boot` in `docker logs mousedroid`, is
 > latched rather than dead. Once the container is up (step 4), look first, then clear it from
 > inside the service and restart it ([`emergency-stop-rearm.md`](emergency-stop-rearm.md) has the
-> bare-metal form):
+> bare-metal form). Keep `--config`: the CLI reads no environment to find the overlay, so without
+> it it loads `default.yaml`, where the latch is off, says there is nothing to clear and exits `0`
+> whether or not the rover is latched.
 >
 > ```bash
-> docker compose -f docker-compose.jetson.yml exec mousedroid python -m mousedroid.cli.rearm --status
 > docker compose -f docker-compose.jetson.yml exec mousedroid \
->     python -m mousedroid.cli.rearm --operator <you> --confirm-area-clear
+>     python -m mousedroid.cli.rearm --config /etc/mousedroid/jetson_production.yaml --status
+> docker compose -f docker-compose.jetson.yml exec mousedroid \
+>     python -m mousedroid.cli.rearm --config /etc/mousedroid/jetson_production.yaml \
+>     --operator <you> --confirm-area-clear
 > ```
 
 ## Step 4 — Build + up
