@@ -42,6 +42,9 @@ time (e.g. PyPI unreachable).
    git -C /opt/mousedroid checkout feat/jetson-claude-pilot-deploy
    ls /opt/mousedroid/src/mousedroid/llm_gateway/anthropic_gateway.py   # verify present
    ```
+   From the PC, `scripts/deploy_remote.sh` syncs to this same checkout root; its git-fetch
+   fallback, and why code goes before the overlay, are in
+   `docs/runbooks/pc-to-jetson-promotion.md` section 1.
 3. **Write config**: `sudo cp /opt/mousedroid/config/jetson_production.yaml /etc/mousedroid/jetson_production.yaml`; validate parse.
 4. **Provision key** (editor, NOT `echo >>` — avoids shell history):
    ```bash

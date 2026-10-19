@@ -14,7 +14,7 @@
 
 ```bash
 ssh jetson@192.168.55.1
-cd /opt/mousedroid/src   # or wherever the repo is cloned
+cd /opt/mousedroid   # the repo root, or wherever the repo is cloned
 git fetch origin
 git checkout <branch-under-review>
 ```
