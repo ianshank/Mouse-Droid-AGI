@@ -12,6 +12,11 @@
    ``arm``, ``training``, ``harness_mcp``, ``misc``, ``root``, ``_primitives``).
 3. **Migration Helpers**: ``migration.py`` supports settings upgrades without breaking
    existing YAML on ``git pull``.
+4. **Load Provenance, Not Config**: ``load_settings`` records the overlay files it merged on the
+   returned instance (``Settings.overlay_paths``) — a private attribute behind a read-only property,
+   deliberately *not* a schema field, so it is absent from ``model_dump()``, cannot be set from YAML
+   or env, and existing YAML loads unchanged. Operator-facing hints read it to name the stack a
+   process was started with (the e-stop latch's ``rearm_cmd``); empty for a ``Settings`` built directly.
 
 ## Key Files
 
