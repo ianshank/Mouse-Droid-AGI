@@ -29,13 +29,18 @@ Container deployments run it inside the service so it sees the same volume::
 sets, so the CLI must load the same overlay stack as the rover or it looks in the wrong
 place -- and a latch that is not found reads as "clear". Pass ``--config`` (once per
 overlay, or several after one flag): it is the documented form and it always wins. When
-it is omitted the stack comes from the same environment variables the rest of the
-operator tooling reads (:func:`mousedroid.validation.runtime.resolve_runtime_config`),
-which is a safety net: the shipped container sets ``MOUSEDROID_CONFIG``, so a bare
-invocation there still finds the production latch. With neither, the CLI loads
-``default.yaml`` alone, where the latch is off; it says so on stderr and still exits ``0``
-with the same stdout message as before, because it cannot know the deployed config. The
-resolution is logged as ``rearm_config_resolved``.
+it is omitted the stack comes from the same environment variables ``validation.runtime``
+reads (:func:`mousedroid.validation.runtime.resolve_runtime_config`; ``cli.preflight`` and
+``cli.validate_pillars`` take ``--config`` only), which is a safety net: the shipped
+container sets ``MOUSEDROID_CONFIG``, so a bare invocation there still finds the
+production latch. With neither, the CLI loads ``default.yaml`` alone, where the latch is
+off; it says so on stderr and still exits ``0`` with the same stdout message as before,
+because it cannot know the deployed config. The resolution is logged as
+``rearm_config_resolved``.
+
+The boot log's ``rearm_cmd`` is this CLI's ``--status`` form and nothing more: clearing is
+never logged as a command, because ``--confirm-area-clear`` is the operator's own
+attestation that the area is physically clear.
 
 Exit codes: ``0`` cleared or already clear, ``1`` still latched -- whether
 because ``--status`` was used or because the required flags were missing.
@@ -98,7 +103,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "Settings YAML overlay(s) to load, in order: list several after one flag or "
             "repeat it. Always wins. When omitted, the overlay stack is the first of "
             + ", ".join(RUNTIME_CONFIG_ENV_VARS)
-            + " that is set (the resolution the rest of the runtime uses), else none: "
+            + " that is set (the resolution validation.runtime uses), else none: "
             "default.yaml alone, where the latch is off."
         ),
     )
@@ -124,7 +129,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _resolve_overlays(cli_paths: Sequence[Path] | None) -> tuple[Path, ...]:
-    """Pick the overlay stack: ``--config``, else what the rest of the runtime resolves.
+    """Pick the overlay stack: ``--config``, else what ``validation.runtime`` resolves.
 
     This is the only place the CLI decides which config to load, and it does not read the
     environment itself -- the shared resolver does, so the CLI cannot form its own opinion

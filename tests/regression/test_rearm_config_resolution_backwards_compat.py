@@ -7,8 +7,16 @@ the stdout message and exit code are unchanged -- the new behaviour is one extra
 stderr and a log event.
 
 Equally pinned: ``Settings`` gains no schema field (existing YAML loads unchanged, invariant
-6), the shared resolver's precedence table is the one that shipped, and a latched boot
-without any recorded overlay still logs the exact hint it always did.
+6) and the shared resolver's precedence table is the one that shipped.
+
+**REVERSAL (Ruling 44, fix round 1).** This file originally pinned that a latched boot with no
+recorded overlay logged *the exact hint it always did*,
+``python -m mousedroid.cli.rearm --operator <you> --confirm-area-clear``. That pin is inverted
+on purpose: the hint carried the operator's attestation (``--confirm-area-clear``), so pasting
+it was one placeholder substitution away from a clear. The logged ``rearm_cmd`` is now the
+``--status`` form for every boot, with or without a recorded overlay, and what clearing takes is
+logged as prose under ``clear_requires``. The old string survives here only as the value the hint
+must no longer be.
 """
 
 from __future__ import annotations
@@ -51,7 +59,9 @@ _CLEARED = (
     "\nCleared by tester. Restart the service to arm the rover; "
     "clearing the latch does not by itself command motion.\n"
 )
-_LEGACY_HINT = "python -m mousedroid.cli.rearm --operator <you> --confirm-area-clear"
+# The pre-Ruling-44 hint, kept ONLY to assert it is gone.
+_PRE_RULING_44_HINT = "python -m mousedroid.cli.rearm --operator <you> --confirm-area-clear"
+_BARE_STATUS_HINT = "python -m mousedroid.cli.rearm --status"
 
 
 class _Streams:
@@ -212,9 +222,14 @@ def test_the_gate_flags_still_have_no_short_form_and_no_default() -> None:
 # --- the boot hint without a recorded overlay -------------------------------------------
 
 
-async def test_a_latched_boot_with_no_recorded_overlay_logs_the_exact_legacy_hint(
+async def test_a_latched_boot_with_no_recorded_overlay_logs_the_bare_status_command_reversed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """REVERSAL of the original pin, which held the paste-to-clear string (Ruling 44).
+
+    Same scenario, opposite expectation: the hint is the bare ``--status`` command, and the
+    old attestation-carrying string is exactly what it must not be.
+    """
     from unittest.mock import AsyncMock, MagicMock
 
     import mousedroid.orchestrator._lifecycle_mixin as lifecycle_mod
@@ -252,7 +267,9 @@ async def test_a_latched_boot_with_no_recorded_overlay_logs_the_exact_legacy_hin
 
     await orch._load_emergency_latch()
 
-    assert hints == [_LEGACY_HINT]
+    assert hints == [_BARE_STATUS_HINT]
+    assert hints[0] != _PRE_RULING_44_HINT
+    assert "--confirm-area-clear" not in str(hints[0])
 
 
 # --- Settings gains provenance, not a schema field -----------------------------------------

@@ -14,16 +14,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 production container that loads `default.yaml`, where the emergency-stop latch is off, so it printed
 "no latch is in use, so there is nothing to clear" and exited `0` — indistinguishable from a rover with
 nothing latched — although compose sets `MOUSEDROID_CONFIG` and nothing in the CLI read it. It now
-resolves the overlay stack through `validation.runtime.resolve_runtime_config`, the resolver the other
-operator tools already use (`--config`, else the `MOUSEDROID_CONFIGS` / `MOUSEDROID_JETSON_CONFIGS` lists,
-else `MOUSEDROID_CONFIG` / `MOUSEDROID_JETSON_CONFIG`), logs the choice as `rearm_config_resolved`, and,
-when nothing at all names an overlay, keeps its stdout message and exit code and adds one line on stderr.
-`--config` now takes several files (list them after one flag or repeat it; a plain `nargs` would have
-kept only the last). The documented form is still an explicit `--config`; the fallback is a safety net.
-The boot hint had the same hole: `estop_latch_active_at_boot`'s `rearm_cmd` was the bare command.
+resolves the overlay stack through `validation.runtime.resolve_runtime_config`, the resolver the smoke and
+probe scripts use (`--config`, else the `MOUSEDROID_CONFIGS` / `MOUSEDROID_JETSON_CONFIGS` lists, else
+`MOUSEDROID_CONFIG` / `MOUSEDROID_JETSON_CONFIG`; `cli.preflight` and `cli.validate_pillars` still take
+`--config` only), logs the choice as `rearm_config_resolved`, and, when nothing at all names an overlay,
+keeps its stdout message and exit code and adds one line on stderr. `--config` now takes several files
+(list them after one flag or repeat it; a plain `nargs` would have kept only the last). The documented
+form is still an explicit `--config`; the fallback is a safety net.
+
+The boot hint had the same hole, and a second one. `estop_latch_active_at_boot`'s `rearm_cmd` was the bare
+`... --operator <you> --confirm-area-clear`: it loaded `default.yaml` and read "nothing to clear", and it
+pre-attested, because `--confirm-area-clear` is the operator's own statement that the area is physically
+clear, so a logged command that already carries it is one placeholder substitution from a clear. It is now
+the `--status` form with one shell-quoted `--config` per overlay the process was started with, and it never
+carries the attestation; what clearing takes is logged as prose under a separate `clear_requires` key.
 `Settings.overlay_paths` — a private attribute behind a read-only property, not a schema field, set by
-`load_settings` — now records which overlay files a process was started with, and the hint carries one
-shell-quoted `--config` per overlay; settings built directly still log the exact old string.
+`load_settings` — records which overlay files a process was started with. **Behaviour change for anyone
+parsing the old hint:** with no recorded overlay the string was
+`python -m mousedroid.cli.rearm --operator <you> --confirm-area-clear` and is now
+`python -m mousedroid.cli.rearm --status`.
 
 ### Fixed — the nightly Spec Harness, red every night since 2026-09-08
 

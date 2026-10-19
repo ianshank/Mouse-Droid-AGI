@@ -9,8 +9,8 @@ a silent no-op indistinguishable from a rover with nothing latched. Nothing in t
 The fix is deliberately *not* a new ``os.getenv`` in the CLI. ``AGENTS.md`` names that as a
 hidden configuration source, and it would be a third, divergent opinion about which env
 vars name the overlay stack. The CLI routes through
-``validation.runtime.resolve_runtime_config`` -- the resolver every other operator tool
-already uses -- and these pins hold that line:
+``validation.runtime.resolve_runtime_config`` -- the resolver ``validation.runtime`` already
+provides to the smoke and probe scripts -- and these pins hold that line:
 
 * the CLI reads no environment of its own, and its resolver *is* the shared one;
 * every env var the runtime honours reaches the CLI, including any added later (the
@@ -18,6 +18,11 @@ already uses -- and these pins hold that line:
 * the CLI loads exactly the overlays the runtime resolver returns, for a precedence matrix;
 * the boot hint is built from ``Settings.overlay_paths`` (what was loaded), never the
   environment, so it still names the right overlay when the two differ;
+* the boot hint is the ``--status`` form and **never carries the attestation** (Ruling 44):
+  ``--confirm-area-clear`` is the operator's statement that the area is physically clear,
+  so a logged command that already spells it out turns "paste" into "clear". The flag may
+  appear in ``_lifecycle_mixin.py`` only inside the prose constant logged under a separate
+  key;
 * every documented re-arm command carries ``--config``. The env fallback is a safety net,
   not the documented form.
 """
@@ -185,14 +190,11 @@ def test_the_cli_loads_exactly_the_overlays_the_runtime_resolver_returns(
 # --- the hint comes from what was loaded, not from the environment ----------------------
 
 
-async def test_the_boot_hint_names_the_loaded_overlay_even_when_the_environment_disagrees(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Dockerfile.jetson bakes ``MOUSEDROID_CONFIG=.../default.yaml``; compose overrides it.
+async def _boot_event(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Boot a latched orchestrator over a freshly loaded overlay; return the hint event.
 
-    A container run with only ``command: --config <overlay>`` would carry the *image's*
-    env, so a hint built from the environment would name ``default.yaml`` -- the exact
-    wrong file this task exists to stop pointing operators at.
+    The overlay is ``tmp_path / "jetson_production.yaml"``; the returned dict is the
+    ``estop_latch_active_at_boot`` event's fields (``rearm_cmd``, ``clear_requires``, ...).
     """
     from unittest.mock import AsyncMock, MagicMock
 
@@ -211,7 +213,6 @@ async def test_the_boot_hint_names_the_loaded_overlay_even_when_the_environment_
         encoding="utf-8",
     )
     cfg = load_settings(overlay)
-    monkeypatch.setenv("MOUSEDROID_CONFIG", "/etc/mousedroid/default.yaml")
     previous = build_emergency_latch(cfg)
     assert previous is not None
     previous.trip("loop_overrun", causes=("loop_overrun",))
@@ -240,9 +241,95 @@ async def test_the_boot_hint_names_the_loaded_overlay_even_when_the_environment_
     await orch._load_emergency_latch()
 
     (event,) = events
+    return event
+
+
+async def test_the_boot_hint_names_the_loaded_overlay_even_when_the_environment_disagrees(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Dockerfile.jetson bakes ``MOUSEDROID_CONFIG=.../default.yaml``; compose overrides it.
+
+    A container run with only ``command: --config <overlay>`` would carry the *image's*
+    env, so a hint built from the environment would name ``default.yaml`` -- the exact
+    wrong file this task exists to stop pointing operators at.
+    """
+    monkeypatch.setenv("MOUSEDROID_CONFIG", "/etc/mousedroid/default.yaml")
+
+    event = await _boot_event(tmp_path, monkeypatch)
+
     tokens = shlex.split(event["rearm_cmd"])
-    assert tokens[tokens.index("--config") + 1] == str(overlay.absolute())
+    assert tokens[tokens.index("--config") + 1] == str(
+        (tmp_path / "jetson_production.yaml").absolute()
+    )
     assert "/etc/mousedroid/default.yaml" not in event["rearm_cmd"]
+
+
+async def test_the_boot_hint_inspects_and_never_pre_attests_the_area_is_clear(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ruling 44: the logged command is ``--status``; it must not carry the attestation.
+
+    ``--confirm-area-clear`` is the operator's own statement that the area is physically
+    clear. A hint that already spells it out (plus ``--operator``) is one placeholder
+    substitution away from a clear, so pasting from the log would attest on the operator's
+    behalf. Clearing stays a typed act; the hint only tells the operator where to look.
+    """
+    event = await _boot_event(tmp_path, monkeypatch)
+
+    hint = event["rearm_cmd"]
+    assert "--status" in shlex.split(hint)
+    assert "--confirm-area-clear" not in hint
+    assert "--operator" not in hint
+    # ...and the operator is still told what clearing takes, as prose under its own key.
+    assert "--operator <you> --confirm-area-clear" in event["clear_requires"]
+
+
+def _string_constants_naming_the_attestation(tree: ast.Module) -> dict[str, int]:
+    """Top-level statement -> how many runtime string literals under it spell the flag.
+
+    Docstrings are documentation, not strings the program can log, so they are excluded;
+    comments are not in the AST at all.
+    """
+    docstrings = {
+        id(node.body[0].value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
+        and node.body
+        and isinstance(node.body[0], ast.Expr)
+        and isinstance(node.body[0].value, ast.Constant)
+        and isinstance(node.body[0].value.value, str)
+    }
+    found: dict[str, int] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names = [node.target.id]
+        else:
+            names = [f"<{type(node).__name__}:{getattr(node, 'name', '?')}>"]
+        hits = sum(
+            1
+            for sub in ast.walk(node)
+            if isinstance(sub, ast.Constant)
+            and isinstance(sub.value, str)
+            and id(sub) not in docstrings
+            and "--confirm-area-clear" in sub.value
+        )
+        if hits:
+            found[",".join(names)] = hits
+    return found
+
+
+def test_the_attestation_flag_appears_in_the_hint_module_only_as_the_prose_constant() -> None:
+    """A second code path that re-adds the flag to a command would not trip a behavioural
+    test that only boots one orchestrator; this pins where the literal may live at all."""
+    path = _SRC / "orchestrator" / "_lifecycle_mixin.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+    assert _string_constants_naming_the_attestation(tree) == {"_REARM_CLEAR_REQUIRES": 1}, (
+        "--confirm-area-clear may be spelled in _lifecycle_mixin.py only inside the prose "
+        "constant logged as `clear_requires`; anywhere else it risks a paste-to-clear hint"
+    )
 
 
 # --- the documented form is explicit; the fallback is a safety net -----------------------
@@ -281,13 +368,21 @@ def test_every_documented_rearm_command_carries_an_explicit_config() -> None:
     )
 
 
-def test_the_runbooks_boot_log_excerpt_shows_the_hint_with_its_config() -> None:
+def test_the_runbooks_boot_log_excerpt_shows_the_status_hint_with_its_config() -> None:
+    """Ruling 44: the documented hint inspects; the clear form is typed by the operator."""
     text = _RUNBOOK.read_text(encoding="utf-8")
+    lines = text.splitlines()
 
-    excerpt = next(line for line in text.splitlines() if line.strip().startswith("rearm_cmd="))
+    excerpt = next(line for line in lines if line.strip().startswith("rearm_cmd="))
 
     assert "--config " in excerpt
-    assert "--operator <you> --confirm-area-clear" in excerpt
+    assert "--status" in excerpt
+    assert "--confirm-area-clear" not in excerpt
+    assert "--operator" not in excerpt
+    # What clearing takes is the next logged field, as prose rather than a command.
+    clause = next(line for line in lines if line.strip().startswith("clear_requires="))
+    assert "--operator <you> --confirm-area-clear" in clause
+    assert "mousedroid.cli.rearm" not in clause
 
 
 def test_the_runbook_explains_the_fallback_without_promoting_it() -> None:

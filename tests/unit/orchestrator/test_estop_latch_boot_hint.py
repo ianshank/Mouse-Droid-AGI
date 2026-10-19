@@ -1,12 +1,20 @@
-"""The boot hint a latched rover logs is a command that works (F-059 task 4.7).
+"""The boot hint a latched rover logs inspects the latch; it never clears it (F-059 4.7, Ruling 44).
 
-``estop_latch_active_at_boot`` carries a ``rearm_cmd`` for the operator to copy. It used to
-be the bare ``python -m mousedroid.cli.rearm --operator <you> --confirm-area-clear``, which
-on the production container loaded ``default.yaml``, saw no latch and exited 0 -- the hint
-that was supposed to fix the problem reproduced it. It now carries ``--config`` for every
-overlay the process was *started with*, taken from ``Settings.overlay_paths`` (what
-``load_settings`` actually merged), not from the environment: the two can differ, and the
-hint's whole value is that it names the stack that located this latch.
+``estop_latch_active_at_boot`` carries a ``rearm_cmd`` for the operator to copy. It used to be
+the bare ``python -m mousedroid.cli.rearm --operator <you> --confirm-area-clear``, which was
+wrong twice:
+
+* on the production container it loaded ``default.yaml``, saw no latch and exited 0 -- the hint
+  that was supposed to fix the problem reproduced it; and
+* it pre-attested. ``--confirm-area-clear`` is the operator's own statement that the area is
+  physically clear (the human-in-the-loop gate CHARTER section 3 requires), so a logged command
+  that already carries it turns "paste" into "clear".
+
+It is now the ``--status`` form, with ``--config`` for every overlay the process was *started
+with*, taken from ``Settings.overlay_paths`` (what ``load_settings`` actually merged) rather than
+the environment: the two can differ, and the hint's whole value is that it names the stack that
+located this latch. What clearing needs is logged as prose under a separate key,
+``clear_requires``, so the pasteable ``rearm_cmd`` can never carry the attestation.
 """
 
 from __future__ import annotations
@@ -26,8 +34,11 @@ from mousedroid.config.schema import Settings
 from mousedroid.factory.safety import build_emergency_latch
 from mousedroid.orchestrator.orchestrator import MouseDroidOrchestrator
 
-_LEGACY_HINT = "python -m mousedroid.cli.rearm --operator <you> --confirm-area-clear"
+_BARE_STATUS_HINT = "python -m mousedroid.cli.rearm --status"
+# The string this hint was before Ruling 44. Kept only to assert it is gone.
+_PRE_RULING_44_HINT = "python -m mousedroid.cli.rearm --operator <you> --confirm-area-clear"
 _EVENT = "estop_latch_active_at_boot"
+_ATTESTATION = "--confirm-area-clear"
 
 
 class _Recorder:
@@ -70,13 +81,19 @@ async def _latched_orchestrator(cfg: Settings) -> MouseDroidOrchestrator:
     )
 
 
-async def _boot_hint(orch: MouseDroidOrchestrator, monkeypatch: pytest.MonkeyPatch) -> str:
+async def _boot_event(
+    orch: MouseDroidOrchestrator, monkeypatch: pytest.MonkeyPatch
+) -> dict[str, Any]:
     log = _Recorder()
     monkeypatch.setattr(lifecycle_mod, "_log", log)
     await orch._load_emergency_latch()
     events = [kw for _, name, kw in log.events if name == _EVENT]
     assert len(events) == 1, f"expected exactly one {_EVENT} event, got {log.events}"
-    hint = events[0]["rearm_cmd"]
+    return events[0]
+
+
+async def _boot_hint(orch: MouseDroidOrchestrator, monkeypatch: pytest.MonkeyPatch) -> str:
+    hint = (await _boot_event(orch, monkeypatch))["rearm_cmd"]
     assert isinstance(hint, str)
     return hint
 
@@ -86,7 +103,15 @@ def _config_values(hint: str) -> list[str]:
     return [argv[i + 1] for i, arg in enumerate(argv) if arg == "--config"]
 
 
-async def test_the_hint_names_the_overlay_the_process_was_started_with(
+def _directly_built_settings(tmp_path: Path) -> Settings:
+    cfg = Settings(mock_hardware=True)
+    cfg.experience.path = str(tmp_path)
+    cfg.safety.emergency_latch.enabled = True
+    cfg.safety.emergency_latch.fsync = False
+    return cfg
+
+
+async def test_the_hint_is_the_status_form_naming_the_overlay_the_process_was_started_with(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     overlay = _overlay(tmp_path / "prod.yaml", experience=tmp_path / "exp")
@@ -96,7 +121,7 @@ async def test_the_hint_names_the_overlay_the_process_was_started_with(
 
     assert _config_values(hint) == [str(overlay.absolute())]
     assert hint.startswith("python -m mousedroid.cli.rearm --config ")
-    assert hint.endswith(" --operator <you> --confirm-area-clear")
+    assert hint.endswith(" --status")
 
 
 async def test_the_hint_names_every_overlay_in_the_order_they_were_applied(
@@ -125,21 +150,25 @@ async def test_a_path_with_spaces_survives_a_shell_round_trip(
     assert _config_values(hint) == [str(overlay.absolute())]
 
 
-async def test_without_any_overlay_the_hint_is_the_legacy_string(
+async def test_without_any_overlay_the_hint_is_the_bare_status_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Settings built directly (tests, embedders) have no provenance to name."""
-    cfg = Settings(mock_hardware=True)
-    cfg.experience.path = str(tmp_path)
-    cfg.safety.emergency_latch.enabled = True
-    cfg.safety.emergency_latch.fsync = False
+    """REVERSAL of the pre-Ruling-44 pin that held the old paste-to-clear string.
+
+    Settings built directly (tests, embedders) have no provenance to name, so there is no
+    ``--config``; but the command is still only ever ``--status``.
+    """
+    cfg = _directly_built_settings(tmp_path)
     assert cfg.overlay_paths == ()
     orch = await _latched_orchestrator(cfg)
 
-    assert await _boot_hint(orch, monkeypatch) == _LEGACY_HINT
+    hint = await _boot_hint(orch, monkeypatch)
+
+    assert hint == _BARE_STATUS_HINT
+    assert hint != _PRE_RULING_44_HINT
 
 
-async def test_the_hint_is_a_command_the_rearm_cli_accepts(
+async def test_the_hint_is_a_command_the_rearm_cli_accepts_and_it_only_inspects(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The hint and the CLI are written in two modules; this is the contract between them."""
@@ -151,9 +180,53 @@ async def test_the_hint_is_a_command_the_rearm_cli_accepts(
     assert argv[:3] == ["python", "-m", "mousedroid.cli.rearm"]
     args = _build_parser().parse_args(argv[3:])
     assert args.config == [overlay.absolute()]
-    assert args.operator == "<you>"
-    assert args.confirm_area_clear is True
-    assert args.status is False
+    assert args.status is True
+    assert args.operator is None
+    assert args.confirm_area_clear is False
+
+
+@pytest.mark.parametrize("stack", ["none", "one", "two"])
+async def test_the_hint_never_carries_the_attestation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stack: str
+) -> None:
+    """Ruling 44: a logged command must not already say the area is clear.
+
+    ``--confirm-area-clear`` is the operator's attestation. If the hint carried it, pasting
+    the hint (after swapping ``<you>``) would be a clear, not a look.
+    """
+    if stack == "none":
+        cfg = _directly_built_settings(tmp_path)
+    elif stack == "one":
+        cfg = load_settings(_overlay(tmp_path / "prod.yaml", experience=tmp_path / "exp"))
+    else:
+        locate = _overlay(tmp_path / "locate.yaml", experience=tmp_path / "exp", arm=False)
+        cfg = load_settings(locate, _overlay(tmp_path / "arm.yaml"))
+    orch = await _latched_orchestrator(cfg)
+
+    hint = await _boot_hint(orch, monkeypatch)
+
+    assert "--status" in shlex.split(hint)
+    assert _ATTESTATION not in hint
+    assert "--operator" not in hint
+    assert "<you>" not in hint, "a placeholder in a pasteable command invites a copy-and-edit clear"
+
+
+async def test_what_clearing_needs_is_prose_under_its_own_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The operator is still told how to clear -- just never in the pasteable field."""
+    overlay = _overlay(tmp_path / "prod.yaml", experience=tmp_path / "exp")
+    orch = await _latched_orchestrator(load_settings(overlay))
+
+    event = await _boot_event(orch, monkeypatch)
+
+    clause = event["clear_requires"]
+    assert isinstance(clause, str)
+    assert "--operator <you> --confirm-area-clear" in clause
+    assert "steps 1-2" in clause
+    assert "docs/runbooks/emergency-stop-rearm.md" in clause
+    assert clause not in event["rearm_cmd"]
+    assert "mousedroid.cli.rearm" not in clause, "the clause must not itself be a runnable command"
 
 
 async def test_the_hint_survives_the_mock_hardware_override(

@@ -1,4 +1,4 @@
-"""The re-arm CLI finds its overlay the way the rest of the runtime does (F-059 task 4.7).
+"""The re-arm CLI finds its overlay the way ``validation.runtime`` does (F-059 task 4.7).
 
 Before this, ``python -m mousedroid.cli.rearm`` with no ``--config`` called
 ``load_settings()`` with no overlay. On the production container that loads
@@ -183,6 +183,7 @@ def test_an_env_csv_stack_is_what_the_latch_is_built_from(
     assert rc == EXIT_STILL_LATCHED
     assert "EMERGENCY STOP LATCHED" in streams.out
     assert "battery_critical" in streams.out
+    assert streams.err == "", "an overlay was supplied, so a 'no overlay' note would be false"
     (event,) = log.named("rearm_config_resolved")
     assert event["source"] == "env_csv"
     assert event["env_var"] == var
@@ -217,6 +218,7 @@ def test_an_env_single_overlay_is_honoured(
 
     assert rc == EXIT_STILL_LATCHED
     assert "EMERGENCY STOP LATCHED" in streams.out
+    assert streams.err == "", "an overlay was supplied, so a 'no overlay' note would be false"
     (event,) = log.named("rearm_config_resolved")
     assert (event["source"], event["env_var"], event["paths"]) == (
         "env_single",
@@ -240,6 +242,7 @@ def test_the_env_fallback_can_clear_the_latch(
     assert cleared == EXIT_OK
     assert not world.latch_file.exists()
     assert "Cleared by tester" in streams.out
+    assert streams.err == "", "an overlay was supplied, so a 'no overlay' note would be false"
 
 
 # --- precedence ------------------------------------------------------------------------
@@ -257,6 +260,7 @@ def test_the_cli_flag_beats_the_environment(
 
     assert rc == EXIT_STILL_LATCHED, "the environment overrode an explicit --config"
     assert "EMERGENCY STOP LATCHED" in streams.out
+    assert streams.err == "", "an overlay was supplied, so a 'no overlay' note would be false"
     (event,) = log.named("rearm_config_resolved")
     assert event["source"] == "cli"
     assert event["env_var"] is None
@@ -272,6 +276,7 @@ def test_the_cli_flag_beats_the_environment_in_the_other_direction(
 
     assert rc == EXIT_OK, "the environment overrode an explicit --config"
     assert _CLEAR_MESSAGE in streams.out
+    assert streams.err == "", "an overlay was supplied, so a 'no overlay' note would be false"
 
 
 def test_an_env_csv_list_outranks_an_env_single_path(
@@ -285,6 +290,7 @@ def test_an_env_csv_list_outranks_an_env_single_path(
 
     assert rc == EXIT_STILL_LATCHED
     assert "EMERGENCY STOP LATCHED" in streams.out
+    assert streams.err == "", "an overlay was supplied, so a 'no overlay' note would be false"
     assert log.named("rearm_config_resolved")[0]["source"] == "env_csv"
 
 
