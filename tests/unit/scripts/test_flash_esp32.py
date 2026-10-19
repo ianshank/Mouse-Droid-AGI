@@ -109,11 +109,20 @@ case " $* " in *" ${ESPTOOL_SHIM_FAIL} "*) exit 1 ;; esac
 exit 0
 """
 
-# Stands in for python3 via MOUSEDROID_PYTHON: the validator call exits 0 but prints one part.
+# Stands in for python3 via MOUSEDROID_PYTHON. The connect_baud call (-c, with or without -I)
+# answers 115200; the validator call exits 0 but prints one part.
 _FAKE_PYTHON = r"""#!/usr/bin/env bash
-if [ "$1" = "-c" ]; then echo 115200; exit 0; fi
+for arg in "$@"; do
+    if [ "$arg" = "-c" ]; then echo 115200; exit 0; fi
+done
 echo "0x1000 bootloader.bin 0000000000000000000000000000000000000000000000000000000000000000 32"
 """
+
+# A module named json, planted where the interpreter looks first. If the validator ever imports
+# it, it writes the marker to stderr and exits 7 (the script then dies); a green run proves it
+# never ran.
+_PLANT_MARKER = "PLANTED json imported"
+_PLANTED_JSON = f'import sys\nsys.stderr.write("{_PLANT_MARKER}\\n")\nsys.exit(7)\n'
 
 
 @pytest.fixture
@@ -155,14 +164,14 @@ def staged(tmp_path: Path) -> _Staged:
     return bin_dir, record, marker, env
 
 
-def _run(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
+def _run(env: dict[str, str], *args: str, cwd: Path = _REPO) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["bash", str(_SCRIPT), *args],
         capture_output=True,
         text=True,
         timeout=60,
         env=env,
-        cwd=_REPO,
+        cwd=cwd,
     )
 
 
@@ -491,3 +500,95 @@ def test_the_script_reads_the_tracked_record_and_stops_at_the_first_missing_part
     assert r.returncode != 0
     assert f"part missing: {empty}/General_Driver.ino.bootloader.bin" in r.stderr
     assert not marker.exists()
+
+
+# ---------------------------------------------------------------------------
+# Hostile surroundings. The record validator decides what gets flashed, so it
+# must not be steerable from the working directory, and an operand that merely
+# looks like an option must never be taken for one.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("vector", ["cwd", "pythonpath"])
+def test_a_json_module_planted_where_python_looks_first_is_never_imported(
+    staged: _Staged, tmp_path: Path, vector: str
+) -> None:
+    """``python -I`` keeps the cwd and ``PYTHONPATH`` off ``sys.path`` for both interpreter calls.
+
+    A shadowing ``json`` could hand the script any parts list it liked, file names that leave
+    ``--bin-dir`` included, and the script would then hash and flash exactly those.
+    """
+    _bin_dir, _record, marker, env = staged
+    (tmp_path / "json.py").write_text(_PLANTED_JSON, encoding="utf-8")
+    if vector == "pythonpath":
+        r = _run({**env, "PYTHONPATH": str(tmp_path)}, *_args(staged, port="/dev/ttyUSB0"))
+    else:
+        r = _run(env, *_args(staged, port="/dev/ttyUSB0"), cwd=tmp_path)
+    assert _PLANT_MARKER not in r.stderr
+    assert r.returncode == 0, r.stderr
+    assert "4/4 parts verified" in r.stdout
+    assert not marker.exists()
+
+
+def test_a_bin_dir_that_looks_like_an_option_is_still_a_directory(
+    staged: _Staged, tmp_path: Path
+) -> None:
+    """``--bin-dir -fw`` is canonicalised, so no tool sees ``-fw/...`` as the options ``-f -w``."""
+    bin_dir, record, marker, env = staged
+    bin_dir.rename(tmp_path / "-fw")
+    r = _run(
+        env, "--port", "/dev/ttyUSB0", "--bin-dir", "-fw", "--record", str(record), cwd=tmp_path
+    )
+    assert r.returncode == 0, r.stderr
+    assert "4/4 parts verified" in r.stdout
+    # esptool gets absolute operands too: a relative "-fw/..." would be parsed as its options.
+    assert f"0x10000 {tmp_path.resolve()}/-fw/app.bin" in r.stdout
+    assert not marker.exists()
+
+
+def test_a_cdpath_entry_does_not_leak_into_the_canonical_bin_dir(
+    staged: _Staged, tmp_path: Path
+) -> None:
+    """``cd`` echoes the directory it reaches through ``CDPATH``; that must not land in BIN_DIR."""
+    bin_dir, record, marker, env = staged
+    r = _run(
+        {**env, "CDPATH": "."},
+        "--port",
+        "/dev/ttyUSB0",
+        "--bin-dir",
+        bin_dir.name,
+        "--record",
+        str(record),
+        cwd=tmp_path,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "4/4 parts verified" in r.stdout
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("baud", ["abc", "115200x", "-9600"])
+def test_a_baud_that_is_not_an_integer_is_refused_before_any_esptool_call(
+    staged: _Staged, baud: str
+) -> None:
+    _bin_dir, _record, marker, env = staged
+    r = _run(env, *_args(staged, "--baud", baud, "--write"))
+    assert r.returncode != 0
+    assert "--baud must be an integer" in r.stderr
+    assert not marker.exists(), f"esptool ran with --baud {baud}"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["-x.bin", "a b.bin", "a\\b.bin", "sub/app.bin", ".."],
+    ids=["leading-dash", "space", "backslash", "slash", "dotdot"],
+)
+def test_a_record_file_name_that_is_not_a_plain_name_is_refused(staged: _Staged, bad: str) -> None:
+    """A part file is a bare name: no option look-alike, no separator, no traversal."""
+    _bin_dir, record, marker, env = staged
+    rec = json.loads(record.read_text(encoding="utf-8"))
+    rec["parts"][3]["file"] = bad
+    record.write_text(json.dumps(rec), encoding="utf-8")
+    r = _run(env, *_args(staged, "--write"))
+    assert r.returncode != 0
+    assert "bad file name" in r.stderr
+    assert not marker.exists(), f"esptool ran with the record file name {bad!r}"

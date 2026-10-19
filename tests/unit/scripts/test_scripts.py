@@ -197,8 +197,14 @@ class TestFlashEsp32Sh:
     def test_baud_rate_present(self, content: str) -> None:
         assert "115200" in content
 
-    def test_installs_esptool_if_missing(self, content: str) -> None:
-        assert "pip install esptool" in content
+    def test_never_installs_esptool(self, content: str) -> None:
+        # The install command is only ever printed for the operator, inside the die() hint.
+        assert re.search(r"^\s*pip install", content, re.M) is None
+        assert re.search(r'die "[^"]*run: pip install esptool', content) is not None
+
+    def test_hashes_operands_after_the_end_of_options(self, content: str) -> None:
+        assert 'sha256sum -- "$1"' in content
+        assert 'shasum -a 256 -- "$1"' in content
 
     def test_dry_run_is_the_default(self, content: str) -> None:
         assert "WRITE=0" in content

@@ -31,13 +31,19 @@ if [[ "${DRY_RUN_SEEN}" -eq 1 ]]; then WRITE=0; fi
 [[ -n "${PORT}" ]] || die "--port is required (e.g. /dev/ttyUSB0)"
 [[ -f "${RECORD}" ]] || die "firmware record not found: ${RECORD}"
 [[ -d "${BIN_DIR}" ]] || die "firmware directory not found: ${BIN_DIR}"
+# Absolute and physical, so no later tool can take a leading "-" for an option. CDPATH= because cd
+# echoes a directory it reached through CDPATH to stdout, which would end up inside BIN_DIR.
+BIN_DIR="$(CDPATH= cd -- "${BIN_DIR}" && pwd -P)" || die "cannot enter the firmware directory"
 PY_BIN="${MOUSEDROID_PYTHON:-}"
 [[ -n "${PY_BIN}" ]] || PY_BIN="$(command -v python3 || command -v python || true)"
 [[ -n "${PY_BIN}" ]] || die "python3 is required to read ${RECORD}"
-sha256_of() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi; }
-RECORD_BAUD="$("${PY_BIN}" -c 'import json,sys;print(int(json.load(open(sys.argv[1],encoding="utf-8"))["connect_baud"]))' "${RECORD}")" || die "could not read connect_baud"
+sha256_of() { if command -v sha256sum >/dev/null 2>&1; then sha256sum -- "$1" | awk '{print $1}'; else shasum -a 256 -- "$1" | awk '{print $1}'; fi; }
+# Both interpreter calls run with -I (isolated: no cwd, PYTHONPATH or user site on sys.path). The
+# validator decides what gets flashed, so nothing next to the operator may shadow json or re.
+RECORD_BAUD="$("${PY_BIN}" -I -c 'import json,sys;print(int(json.load(open(sys.argv[1],encoding="utf-8"))["connect_baud"]))' "${RECORD}")" || die "could not read connect_baud"
 BAUD="${BAUD:-${RECORD_BAUD}}"
-PARTS_TXT="$("${PY_BIN}" - "${RECORD}" <<'PY'
+[[ "${BAUD}" =~ ^[0-9]+$ ]] || die "--baud must be an integer (got ${BAUD})"
+PARTS_TXT="$("${PY_BIN}" -I - "${RECORD}" <<'PY'
 import json, re, sys
 parts = json.load(open(sys.argv[1], encoding="utf-8"))["parts"]
 if len(parts) != 4:
@@ -45,7 +51,7 @@ if len(parts) != 4:
 for p in parts:
     if not re.fullmatch(r"0x[0-9A-Fa-f]+", p["offset"]): sys.exit(f"bad offset {p['offset']!r}")
     if not re.fullmatch(r"[0-9a-f]{64}", p["sha256"]): sys.exit(f"bad sha256 for {p['name']}")
-    if "/" in p["file"] or p["file"] in ("", ".", ".."): sys.exit(f"bad file name {p['file']!r}")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", p["file"]): sys.exit(f"bad file name {p['file']!r}")
     print(p["offset"], p["file"], p["sha256"], int(p["size"]))
 PY
 )" || die "could not read parts from ${RECORD}"

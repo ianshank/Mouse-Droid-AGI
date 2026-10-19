@@ -2,7 +2,7 @@
   "platform": "esp32",
   "board": "Waveshare General Driver for Robots (WAVE ROVER), ESP32, 4 MB flash (flash id 0x164020)",
   "image": "General_Driver.ino (ugv_base_general factory build, flashed by the factory 2024-07..2025-06)",
-  "source": "E:\\WAVE_ROVER_FACTORY-25*\\flash_download_tool_3.9.5\\bin — factory flashing-station snapshot, 1283 PASS logs 2023-07..2025-06",
+  "source": "Waveshare factory flashing-station snapshot (flash_download_tool_3.9.5/bin; 1283 PASS logs 2023-07..2025-06), held offline by the maintainer — never committed",
   "recorded_at": "2026-10-16T00:00:00Z",
   "connect_baud": 115200,
   "esptool": {"before": "default_reset", "after": "no_reset", "compress": true, "flash_size": "keep", "flash_mode": "keep", "flash_freq": "keep", "verify": true},

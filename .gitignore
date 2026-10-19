@@ -89,6 +89,9 @@ weights/
 *.gguf
 *.bin
 
+# Staged ESP32 firmware images and the vendor's per-board PASS logs: never committed (flash_esp32.sh)
+/firmware/
+
 # CAD / 3D-printing assets (large binaries — hosted as a GitHub Release asset; see docs/3D_printing_files/README.md)
 *.stl
 *.FCStd
