@@ -356,9 +356,13 @@ _REPORT_KEYS = {
     "p95_ms",
     "p99_ms",
     "iterations",
+    "neutral_replies",
     "passed",
 }
 _GOOD_REPLY = '{"vx": 0.0, "vy": 0.0, "omega": 0.5}'
+# What a thinking-starved Haiku 5.5 hands back: the whole token budget went on
+# thinking, so there is no text block at all (or prose with no JSON object).
+_UNPARSEABLE_REPLY = "I would turn left, slowly."
 
 
 class _FakeModels:
@@ -379,17 +383,24 @@ class _FakeModels:
 class _FakeMessages:
     """``client.messages`` - fails on the call indices in ``fail_on`` (0-based)."""
 
-    def __init__(self, *, fail_on: frozenset[int] = frozenset(), always_fail: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        fail_on: frozenset[int] = frozenset(),
+        always_fail: bool = False,
+        reply: str = _GOOD_REPLY,
+    ) -> None:
         self.calls = 0
         self._fail_on = fail_on
         self._always_fail = always_fail
+        self._reply = reply
 
     async def create(self, **_kwargs: Any) -> Any:
         index = self.calls
         self.calls += 1
         if self._always_fail or index in self._fail_on:
             raise RuntimeError("503 overloaded")
-        return types.SimpleNamespace(content=[types.SimpleNamespace(text=_GOOD_REPLY)])
+        return types.SimpleNamespace(content=[types.SimpleNamespace(text=self._reply)])
 
 
 class _LocalSecondary:
@@ -532,6 +543,105 @@ async def test_probe_report_remembers_an_early_fallback_even_if_the_primary_reco
     assert report["served"] == "fallback"
     assert report["passed"] is False
     assert rc == probe._EXIT_PRIMARY_NOT_SERVED
+
+
+class _RecordingProbeLog:
+    """Stands in for the probe's module logger (structlog capture is order-dependent)."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str, dict[str, Any]]] = []
+
+    def _record(self, level: str, event: str, **kw: Any) -> None:
+        self.events.append((level, event, kw))
+
+    def debug(self, event: str, **kw: Any) -> None:
+        self._record("debug", event, **kw)
+
+    def info(self, event: str, **kw: Any) -> None:
+        self._record("info", event, **kw)
+
+    def warning(self, event: str, **kw: Any) -> None:
+        self._record("warning", event, **kw)
+
+    def error(self, event: str, **kw: Any) -> None:
+        self._record("error", event, **kw)
+
+    def named(self, event: str) -> list[dict[str, Any]]:
+        return [kw for _level, name, kw in self.events if name == event]
+
+
+@pytest.mark.asyncio
+async def test_probe_report_counts_zero_neutral_replies_for_a_real_answer(
+    probe: Any, monkeypatch: pytest.MonkeyPatch, stub_cfg: Any, tmp_path: Path
+) -> None:
+    gateway, _ = _composite(_FakeMessages())
+    _wire_probe(probe, monkeypatch, stub_cfg, gateway)
+    report_path = tmp_path / "report.json"
+
+    await probe._main(_report_args(probe, report_path, iterations=3))
+
+    assert json.loads(report_path.read_text(encoding="utf-8"))["neutral_replies"] == 0
+
+
+@pytest.mark.asyncio
+async def test_probe_report_surfaces_replies_the_primary_gave_that_parsed_to_nothing(
+    probe: Any, monkeypatch: pytest.MonkeyPatch, stub_cfg: Any, tmp_path: Path
+) -> None:
+    """Unparseable output does NOT degrade the gateway, so ``served`` alone cannot see it.
+
+    A thinking-starved Haiku 5.5 round-trips fine and the gateway deliberately
+    returns a neutral goal without flipping ``is_degraded``; the run therefore reads
+    ``served: primary``. ``neutral_replies`` is the signal that it was useless. It
+    is surfaced, not gated: a neutral goal is the right answer to a "stop" mission.
+    """
+    log = _RecordingProbeLog()
+    monkeypatch.setattr(probe, "_log", log)
+    gateway, secondary = _composite(_FakeMessages(reply=_UNPARSEABLE_REPLY))
+    _wire_probe(probe, monkeypatch, stub_cfg, gateway)
+    report_path = tmp_path / "report.json"
+
+    rc = await probe._main(_report_args(probe, report_path, iterations=3))
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["served"] == "primary"
+    assert gateway._primary.is_degraded is False
+    assert secondary.calls == 0
+    assert report["neutral_replies"] == 3
+    assert report["passed"] is True  # surfaced, not gated (see docstring)
+    assert rc == 0
+    warned = log.named("llm_probe_every_reply_neutral")
+    assert len(warned) == 1
+    assert warned[0]["neutral_replies"] == 3
+    assert warned[0]["iterations"] == 3
+
+
+@pytest.mark.asyncio
+async def test_probe_does_not_warn_when_only_some_replies_are_neutral(
+    probe: Any, monkeypatch: pytest.MonkeyPatch, stub_cfg: Any, tmp_path: Path
+) -> None:
+    """Counting is per reply; the every-reply warning is for the all-neutral run only."""
+    log = _RecordingProbeLog()
+    monkeypatch.setattr(probe, "_log", log)
+    messages = _FakeMessages(reply=_GOOD_REPLY)
+    gateway, _ = _composite(messages)
+    _wire_probe(probe, monkeypatch, stub_cfg, gateway)
+    original = messages.create
+    state = {"n": 0}
+
+    async def _first_reply_garbled(**kwargs: Any) -> Any:
+        state["n"] += 1
+        response = await original(**kwargs)
+        if state["n"] == 1:
+            response.content[0].text = _UNPARSEABLE_REPLY
+        return response
+
+    monkeypatch.setattr(messages, "create", _first_reply_garbled)
+    report_path = tmp_path / "report.json"
+
+    await probe._main(_report_args(probe, report_path, iterations=3))
+
+    assert json.loads(report_path.read_text(encoding="utf-8"))["neutral_replies"] == 1
+    assert log.named("llm_probe_every_reply_neutral") == []
 
 
 @pytest.mark.asyncio

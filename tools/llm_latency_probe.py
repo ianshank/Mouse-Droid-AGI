@@ -40,7 +40,7 @@ report — the evidence artifact for retargeting the cloud model::
     {"model_requested": ..., "model_resolved": ..., "resolved_via": ...,
      "backend": ..., "served": "primary"|"fallback", "cold_start_ms": ...,
      "p50_ms": ..., "p95_ms": ..., "p99_ms": ..., "iterations": ...,
-     "passed": ...}
+     "neutral_replies": ..., "passed": ...}
 
 ``served`` answers the question a latency number cannot: with a cloud primary
 and a local fallback, a request the cloud tier rejects (HTTP 400 for a
@@ -49,6 +49,13 @@ fallback in a few hundred milliseconds and would otherwise read as a pass. It is
 ``"primary"`` only when the primary backend was ready and healthy after EVERY
 iteration, so a run that failed over once and recovered still reads
 ``"fallback"``. ``passed`` is the latency gate AND ``served == "primary"``.
+``neutral_replies`` counts the iterations whose goal came back all-zero. The
+gateways answer an empty / unparseable reply with a neutral vector WITHOUT
+degrading (the round trip worked), so ``served`` stays ``"primary"`` for a model
+that answered with nothing usable - e.g. a Haiku 5.5 whose ``max_tokens`` went on
+thinking. It is surfaced, not gated, because a neutral goal is the correct answer
+to a "stop" mission; for the default mission anything above 0 needs a look, and a
+run in which every reply was neutral logs ``llm_probe_every_reply_neutral``.
 ``model_resolved`` is what ``client.models.retrieve`` returns for the requested
 id (``resolved_via: "models.retrieve"``); with no client to ask, or a failed
 lookup, it is the configured id (``resolved_via: "config"``). Without the flag
@@ -116,6 +123,9 @@ _RESOLVED_VIA_CONFIG = "config"
 # Exit code: a fallback answered (reported only under ``--report-json``).
 _EXIT_PRIMARY_NOT_SERVED = 4
 
+# The ``GoalVector`` axes a "usable reply" must move at least one of.
+_GOAL_AXES = ("vx_target", "vy_target", "omega_target")
+
 
 def _health_flag(obj: Any, name: str) -> bool:
     """Read a boolean health flag that is a property (shipped gateways) or a method."""
@@ -146,21 +156,36 @@ def _primary_served(primary: Any) -> bool:
     return _health_flag(primary, "is_ready") and not _health_flag(primary, "is_degraded")
 
 
-class _ServedTracker:
-    """Remembers, across iterations, whether the primary answered every one of them.
+def _is_neutral(goal: Any) -> bool:
+    """True iff every velocity axis of ``goal`` is zero (the gateways' "no usable reply").
 
-    Judging by the final state alone would call a run that failed over on
-    iteration 1 and recovered after the cooldown "primary"; it was not.
+    The shipped gateways answer an empty / non-JSON / non-object reply with a
+    neutral ``GoalVector`` and DO NOT flip ``is_degraded`` - the round trip
+    itself worked - so the degrade flags that drive ``served`` cannot see it.
+    """
+    return all(getattr(goal, axis, 0.0) == 0.0 for axis in _GOAL_AXES)
+
+
+class _RunTracker:
+    """Accumulates, across iterations, what the report needs beyond the latencies.
+
+    * whether the primary answered every iteration - judging by the final state
+      alone would call a run that failed over on iteration 1 and recovered after
+      the cooldown "primary"; it was not;
+    * how many replies were neutral (see :func:`_is_neutral`).
     """
 
     def __init__(self, primary: Any) -> None:
         self._primary = primary
         self._always_primary = True
+        self.neutral_replies = 0
 
-    def observe(self) -> None:
-        """Record the outcome of the translate call that just returned."""
+    def observe(self, goal: Any) -> None:
+        """Record the outcome of the translate call that just returned ``goal``."""
         if not _primary_served(self._primary):
             self._always_primary = False
+        if _is_neutral(goal):
+            self.neutral_replies += 1
 
     @property
     def label(self) -> str:
@@ -218,13 +243,16 @@ async def _finish_report(
     cold_start_ms: float,
     summary: Any,
     iterations: int,
+    neutral_replies: int,
     latency_ok: bool,
 ) -> int:
     """Resolve the model id, write the JSON report, and return the probe's exit code.
 
     ``passed`` is the latency gate AND ``served == "primary"``: a fallback-served
-    run never reads as a pass (plan risk R10). Must run BEFORE ``gateway.stop()``,
-    which drops the client ``models.retrieve`` needs.
+    run never reads as a pass (plan risk R10). ``neutral_replies`` is surfaced,
+    not gated - a neutral goal is the right answer to a "stop" mission - but a run
+    in which EVERY reply was neutral is logged loudly. Must run BEFORE
+    ``gateway.stop()``, which drops the client ``models.retrieve`` needs.
     """
     requested = cfg.llm.model_name
     resolved, resolved_via = await _resolve_model(primary, requested, cfg.llm.request_timeout_s)
@@ -241,6 +269,7 @@ async def _finish_report(
         "p95_ms": summary.p95_ms,
         "p99_ms": summary.p99_ms,
         "iterations": iterations,
+        "neutral_replies": neutral_replies,
         "passed": passed,
     }
     await asyncio.to_thread(_write_report, report_path, report)
@@ -249,10 +278,24 @@ async def _finish_report(
         path=str(report_path),
         served=served,
         passed=passed,
+        neutral_replies=neutral_replies,
         model_requested=requested,
         model_resolved=resolved,
         resolved_via=resolved_via,
     )
+    if iterations > 0 and neutral_replies == iterations:
+        _log.warning(
+            "llm_probe_every_reply_neutral",
+            neutral_replies=neutral_replies,
+            iterations=iterations,
+            hint=(
+                "every reply parsed to an all-zero goal: the backend answered but nothing "
+                "usable came back (expected only for a 'stop' mission). Look for "
+                "anthropic_gateway_translation_unparseable / anthropic_gateway_empty_content; "
+                "Haiku 5.5 thinks by default and thinking tokens count toward max_tokens, "
+                "so set llm.anthropic.thinking: disabled or raise max_tokens"
+            ),
+        )
     if not primary_served:
         _log.error(
             "llm_primary_not_served",
@@ -384,14 +427,14 @@ async def _main(args: argparse.Namespace) -> int:
     # ``--report-json`` is optional and absent from hand-built Namespaces; only
     # when it is given do we track which tier answered (legacy runs are unchanged).
     report_path: Path | None = getattr(args, "report_json", None)
-    tracker = _ServedTracker(_primary_of(gateway)) if report_path is not None else None
+    tracker = _RunTracker(_primary_of(gateway)) if report_path is not None else None
     for i in range(iterations):
         t_translate = time.monotonic()
         goal = await gateway.translate_mission(args.mission)
         elapsed_ms = (time.monotonic() - t_translate) * 1000.0
         samples_ms.append(elapsed_ms)
         if tracker is not None:
-            tracker.observe()
+            tracker.observe(goal)
         _log.info(
             "llm_latency_result",
             iteration=i,
@@ -434,6 +477,7 @@ async def _main(args: argparse.Namespace) -> int:
             cold_start_ms=cold_start_ms,
             summary=summary,
             iterations=iterations,
+            neutral_replies=tracker.neutral_replies,
             latency_ok=passed,
         )
     await gateway.stop()

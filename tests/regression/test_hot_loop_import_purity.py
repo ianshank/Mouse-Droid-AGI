@@ -73,23 +73,68 @@ def test_factory_mission_does_not_import_external_agents() -> None:
 # the pin goes red when this file runs alone and stays green when
 # ``test_orchestrator_mixin_surface.py`` is collected first. A new interpreter has
 # no import history, so the tests below see the import graph itself.
+#
+# Reading ``sys.modules`` alone is still blind in CI, which installs none of the
+# SDKs: ``try: import anthropic / except ImportError`` at module scope would
+# leave nothing behind there. So the probe also installs a ``sys.meta_path``
+# recorder that notes every import the machinery is ASKED to resolve for a
+# forbidden name, whether or not the package exists.
 _FRESH_IMPORT_PROBE = textwrap.dedent(
     """
     import importlib, json, sys
-    targets, forbidden = json.loads(sys.argv[1]), json.loads(sys.argv[2])
+
+    targets, forbidden, attempt = (json.loads(arg) for arg in sys.argv[1:4])
+    requested = set()
+
+
+    class _Recorder:
+        def find_spec(self, name, path=None, target=None):
+            for banned in forbidden:
+                if name == banned or name.startswith(banned + "."):
+                    requested.add(banned)
+            return None
+
+
+    sys.meta_path.insert(0, _Recorder())
+    for name in attempt:
+        try:
+            importlib.import_module(name)
+        except ImportError:
+            pass
     for target in targets:
         importlib.import_module(target)
-    print(json.dumps(sorted(name for name in forbidden if name in sys.modules)))
+    loaded = {name for name in forbidden if name in sys.modules}
+    print(json.dumps(sorted(loaded | requested)))
     """
 )
 
 
-def _loaded_in_fresh_interpreter(targets: tuple[str, ...], forbidden: tuple[str, ...]) -> list[str]:
-    """Import ``targets`` in a new interpreter; return the ``forbidden`` names it loaded."""
-    src = str(_REPO_ROOT / "src")
-    pythonpath = os.pathsep.join(p for p in (src, os.environ.get("PYTHONPATH", "")) if p)
+def _loaded_in_fresh_interpreter(
+    targets: tuple[str, ...],
+    forbidden: tuple[str, ...],
+    *,
+    attempt: tuple[str, ...] = (),
+    extra_path: Path | None = None,
+) -> list[str]:
+    """Import ``targets`` in a new interpreter; return the ``forbidden`` names it loaded.
+
+    ``attempt`` names are imported first with any ImportError swallowed (used only
+    by the probe's own positive control); ``extra_path`` is put on ``PYTHONPATH`` so a
+    test can supply a throwaway module as a target.
+    """
+    paths = [str(_REPO_ROOT / "src")]
+    if extra_path is not None:
+        paths.append(str(extra_path))
+    pythonpath = os.pathsep.join(p for p in (*paths, os.environ.get("PYTHONPATH", "")) if p)
     proc = subprocess.run(
-        [sys.executable, "-c", _FRESH_IMPORT_PROBE, json.dumps(targets), json.dumps(forbidden)],
+        [
+            sys.executable,
+            "-c",
+            _FRESH_IMPORT_PROBE,
+            json.dumps(targets),
+            json.dumps(forbidden),
+            json.dumps(attempt),
+        ],
         capture_output=True,
         text=True,
         env={**os.environ, "PYTHONPATH": pythonpath},
@@ -109,6 +154,34 @@ def test_fresh_interpreter_probe_sees_an_imported_module() -> None:
     nothing" - and the second reading is the failure this file exists to prevent.
     """
     assert _loaded_in_fresh_interpreter(("sqlite3",), ("sqlite3", "honcho")) == ["sqlite3"]
+
+
+def test_fresh_interpreter_probe_reports_an_import_that_was_attempted_but_failed() -> None:
+    """Positive control for the ``sys.meta_path`` recorder.
+
+    CI installs none of the SDKs, so an import of one fails there. If the probe only
+    read ``sys.modules`` it would be blind in exactly the environment that enforces
+    this pin; the recorder notes the REQUEST. ``honcho`` is reported whether or not
+    it happens to be installed, so this holds on every machine.
+    """
+    assert _loaded_in_fresh_interpreter((), ("honcho",), attempt=("honcho",)) == ["honcho"]
+
+
+def test_a_guarded_import_is_caught_even_when_the_sdk_is_absent(tmp_path: Path) -> None:
+    """``try: import <sdk> / except ImportError`` at module scope is still a hot-loop import.
+
+    The orchestrator would then run with or without the SDK depending on the host,
+    which is exactly the coupling invariant 10 forbids. ``claude_agent_sdk`` is the
+    stand-in because it is not installed in the development or CI environment.
+    """
+    (tmp_path / "f059_guarded_import_probe.py").write_text(
+        "try:\n    import claude_agent_sdk\nexcept ImportError:\n    claude_agent_sdk = None\n",
+        encoding="utf-8",
+    )
+    loaded = _loaded_in_fresh_interpreter(
+        ("f059_guarded_import_probe",), ("claude_agent_sdk",), extra_path=tmp_path
+    )
+    assert loaded == ["claude_agent_sdk"]
 
 
 def test_orchestrator_import_graph_loads_no_external_sdk_in_a_fresh_interpreter() -> None:

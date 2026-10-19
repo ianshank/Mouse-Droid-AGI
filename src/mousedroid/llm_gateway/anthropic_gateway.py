@@ -24,8 +24,9 @@ Architecture invariants (per CLAUDE.md):
 * **Request profile (F-059 WS-A)** — ``cfg.llm.anthropic`` is an optional
   :class:`~mousedroid.config.schema.AnthropicRequestConfig`. Absent, the
   request is the one this gateway has always sent (``temperature`` included,
-  nothing else added). Present, sampling parameters are omitted (Claude
-  Haiku 5.5 / Sonnet 5.5 answer HTTP 400 to non-default values) and
+  nothing else added). Present, sampling parameters are omitted (per the
+  model table, cache 2026-10-06, Claude Haiku 5.5 / Sonnet 5.5 answer HTTP
+  400 to non-default values; the on-Jetson probe run is what confirms it) and
   ``thinking`` / ``output_config.effort`` are added only when configured.
   ``temperature`` and ``output_config`` are checked against the INSTALLED
   SDK's ``messages.create`` signature first: ``anthropic>=1.0`` has no
@@ -159,9 +160,10 @@ class AnthropicLLMGateway:
         self._ready = False
         self._degraded = False
         self._metrics = metrics
-        # Latch for the one-shot "effort configured but the SDK cannot send it"
-        # warning (``_add_effort``); per gateway so it fires once, not per request.
+        # Latches for the one-shot SDK-fork events (``_add_effort`` /
+        # ``_add_temperature``); per gateway so each fires once, not per request.
         self._effort_unsupported_logged = False
+        self._temperature_fork_logged = False
         if injection_filter is None:
             injection_filter = RegexInjectionFilter(
                 cfg.injection_patterns,
@@ -450,12 +452,23 @@ class AnthropicLLMGateway:
         rover, which would silently degrade the cloud tier to the local
         fallback on every call — but the API still honours it for the models
         that accept it, so it rides ``extra_body`` (the SDK's documented
-        migration path), which is merged into the request JSON as-is.
+        migration path), which is merged into the request JSON as-is. The fork
+        depends on the installed SDK, not on config, so it is announced once
+        (``anthropic_legacy_temperature_via_extra_body``) rather than left silent.
         """
         if self._accepts("temperature"):
             kwargs["temperature"] = self._cfg.temperature
-        else:
-            kwargs["extra_body"] = {"temperature": self._cfg.temperature}
+            return
+        kwargs["extra_body"] = {"temperature": self._cfg.temperature}
+        if not self._temperature_fork_logged:
+            self._temperature_fork_logged = True
+            _log.info(
+                "anthropic_legacy_temperature_via_extra_body",
+                temperature=self._cfg.temperature,
+                model=self._cfg.model_name,
+                sdk_version=getattr(self._sdk, "__version__", None),
+                reason="sdk_has_no_temperature_keyword",
+            )
 
     def _add_effort(self, kwargs: dict[str, Any], effort: str) -> None:
         """Send ``output_config.effort`` iff the installed SDK has ``output_config``.

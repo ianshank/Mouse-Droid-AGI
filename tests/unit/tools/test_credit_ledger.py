@@ -131,6 +131,28 @@ def test_charge_uses_exact_decimal_arithmetic(repo: Path) -> None:
         credit_ledger.charge("A", 0.01, repo_root=repo)
 
 
+def test_headroom_remaining_is_exact_not_float_residue(repo: Path) -> None:
+    """``0.3 - 0.1 - 0.2`` is ``-2.78e-17`` in floats; the headroom must be exactly zero.
+
+    A cap spent to the cent must not report a negative remainder, and the
+    ``remaining_usd`` a caller logs must agree with the Decimal comparison that
+    allowed the charge.
+    """
+    assert 0.3 - 0.1 - 0.2 != 0.0, "the float residue this test guards against"
+    _write_config(repo, "credit:\n    caps_usd:\n        A: 0.3\n")
+    _seed(repo, {"ws": "A", "cost_usd": 0.1})
+    headroom = credit_ledger.charge("A", 0.2, repo_root=repo)
+    assert headroom.remaining_usd == 0.0
+    assert headroom.cap_usd == 0.3
+    assert headroom.spent_usd == 0.1
+    assert headroom.estimate_usd == 0.2
+
+
+def test_headroom_remaining_is_positive_when_there_is_room(repo: Path) -> None:
+    _seed(repo, {"ws": "A", "cost_usd": 2.5})
+    assert credit_ledger.charge("A", 1.25, repo_root=repo).remaining_usd == 6.25
+
+
 def test_charge_refuses_a_workstream_with_no_configured_cap(repo: Path) -> None:
     """Fail closed: an unknown workstream must not be able to spend."""
     with pytest.raises(CapExceeded, match="no spend cap"):

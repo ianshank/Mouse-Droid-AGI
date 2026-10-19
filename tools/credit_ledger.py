@@ -104,17 +104,20 @@ class LedgerError(RuntimeError):
 
 @dataclass(frozen=True)
 class Headroom:
-    """What :func:`charge` found: the cap, the spend so far, and the estimate."""
+    """What :func:`charge` found: the cap, the spend so far, and the estimate.
+
+    ``remaining_usd`` is the cap left after the recorded spend AND this estimate
+    (``>= 0`` whenever the charge was allowed). It is computed by :func:`charge`
+    in :class:`~decimal.Decimal`, like the comparison that allowed the charge, and
+    only then converted: ``0.3 - 0.1 - 0.2`` is ``-2.8e-17`` in floats, and a cap
+    spent to the cent must not report a negative remainder.
+    """
 
     ws: str
     cap_usd: float
     spent_usd: float
     estimate_usd: float
-
-    @property
-    def remaining_usd(self) -> float:
-        """Cap left after the recorded spend AND this estimate (``>= 0`` when allowed)."""
-        return self.cap_usd - self.spent_usd - self.estimate_usd
+    remaining_usd: float
 
 
 def _resolve(config: CreditConfig | None, repo_root: Path | None) -> tuple[CreditConfig, Path]:
@@ -227,7 +230,13 @@ def charge(
             f"workstream {ws!r} would exceed its ${cap} cap: ${spent} already recorded "
             f"+ ${estimate} estimated (ledger: {path})"
         )
-    return Headroom(ws=ws, cap_usd=float(cap), spent_usd=float(spent), estimate_usd=float(estimate))
+    return Headroom(
+        ws=ws,
+        cap_usd=float(cap),
+        spent_usd=float(spent),
+        estimate_usd=float(estimate),
+        remaining_usd=float(cap - spent - estimate),
+    )
 
 
 def _validated_fields(entry: Mapping[str, Any]) -> dict[str, Any]:
