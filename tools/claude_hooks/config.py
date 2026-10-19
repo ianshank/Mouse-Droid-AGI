@@ -27,6 +27,10 @@ DEFAULT_CONFIG_RELPATH = ".claude/workforce.yaml"
 
 _STRICT = ConfigDict(extra="forbid")
 
+#: A model alias or id as the Claude CLI takes it (`--model <value>`): it must not
+#: start with `-`, or it would read as another option.
+MODEL_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+
 
 class ConfigError(RuntimeError):
     """Raised when the workforce configuration cannot be loaded or validated."""
@@ -460,16 +464,20 @@ class AgentReviewerConfig(BaseModel):
 
     ws: str = Field(
         default="B",
+        pattern=r"^[A-Za-z0-9_-]{1,16}$",
         description=(
             "Credit workstream the reviewer's spend is charged to: a key of "
-            "credit.caps_usd (B = the Agent-SDK reviewer in the F-059 plan)."
+            "credit.caps_usd (B = the Agent-SDK reviewer in the F-059 plan). Letters, "
+            "digits, `_` and `-` only: it is used to build run ids and file names."
         ),
     )
     model: str = Field(
         default="opus",
+        pattern=MODEL_ID_PATTERN,
         description=(
             "Model alias to request. Resolved to a model id at run time "
-            "(client.models.retrieve); an id is never a literal in the code."
+            "(client.models.retrieve); an id is never a literal in the code. It is passed "
+            "to the CLI as `--model <value>`, so it may not start with `-`."
         ),
     )
     max_turns: int = Field(
@@ -510,14 +518,6 @@ class AgentReviewerConfig(BaseModel):
             "work and spend; this bounds a stalled connection."
         ),
     )
-
-    @field_validator("ws", "model")
-    @classmethod
-    def _reject_blank(cls, value: str) -> str:
-        """Reject whitespace-only identifiers that would silently break the run."""
-        if not value.strip():
-            raise ValueError("must not be empty or whitespace-only")
-        return value
 
     @field_validator("agent_file", "mcp_config", "artifact_dir")
     @classmethod

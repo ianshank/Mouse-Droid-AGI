@@ -566,6 +566,28 @@ def test_agent_reviewer_blank_identifiers_are_rejected(tmp_path: Path, field: st
         load_config(repo_root=tmp_path)
 
 
+@pytest.mark.parametrize("ws", ["../x", "a b", "B/C", "B.md", "x" * 17])
+def test_agent_reviewer_ws_is_a_plain_name(tmp_path: Path, ws: str) -> None:
+    """The workstream builds run ids and file names, so it may not carry a path."""
+    _write_config(tmp_path, f"agent_reviewer:\n    ws: '{ws}'\n")
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+@pytest.mark.parametrize("model", ["-x", "--dangerously-skip-permissions", "a b", "opus;x"])
+def test_agent_reviewer_model_cannot_look_like_a_cli_option(tmp_path: Path, model: str) -> None:
+    """The alias is passed as ``--model <value>``; a leading dash would read as an option."""
+    _write_config(tmp_path, f"agent_reviewer:\n    model: '{model}'\n")
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+@pytest.mark.parametrize("model", ["opus", "claude-opus-5-5", "anthropic.claude-x:0"])
+def test_agent_reviewer_model_accepts_aliases_and_ids(tmp_path: Path, model: str) -> None:
+    _write_config(tmp_path, f"agent_reviewer:\n    model: '{model}'\n")
+    assert load_config(repo_root=tmp_path).agent_reviewer.model == model
+
+
 @pytest.mark.parametrize("field", ["agent_file", "mcp_config", "artifact_dir"])
 @pytest.mark.parametrize("path", ["/etc/x", "C:/x", "../x", " "])
 def test_agent_reviewer_paths_must_stay_inside_the_repo(
