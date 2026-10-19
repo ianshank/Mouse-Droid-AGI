@@ -69,4 +69,4 @@ if [ ! -c "${PORT}" ]; then die "serial port not found: ${PORT}"; fi
 command -v esptool.py >/dev/null 2>&1 || die "esptool.py not on PATH — run: pip install esptool (never done automatically)"
 "${WRITE_CMD[@]}"
 "${VERIFY_CMD[@]}"
-echo "=== Flash complete. Power-cycle the chassis, then send the post_flash_config frame once (bench ladder step 9) ==="
+echo "=== Flash complete. Power-cycle the chassis, then send the post_flash_config frame from deployments/esp32-firmware.json once ==="
