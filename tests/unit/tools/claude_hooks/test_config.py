@@ -635,6 +635,8 @@ def test_batch_triage_unknown_key_is_rejected(tmp_path: Path) -> None:
         ("poll_interval_s", "0"),
         ("poll_interval_s", ".inf"),
         ("poll_timeout_s", "-5"),
+        ("poll_timeout_s", ".inf"),
+        ("poll_timeout_s", ".nan"),
         ("workstream", "' '"),
         ("model", "' '"),
         ("effort", "xhigh"),
@@ -648,7 +650,7 @@ def test_batch_triage_rejects_values_that_cannot_work(tmp_path: Path, field: str
 
 
 @pytest.mark.parametrize("field", ["source_root", "batches_dir", "analysis_dir"])
-@pytest.mark.parametrize("path", ["/etc/x", "C:/x", "../outside", " "])
+@pytest.mark.parametrize("path", ["/etc/x", "C:/x", "../outside", "a\\..\\b", " "])
 def test_batch_triage_paths_must_stay_inside_the_repo(
     tmp_path: Path, field: str, path: str
 ) -> None:
