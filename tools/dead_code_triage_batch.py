@@ -5,7 +5,8 @@
 most of them are alive: a method called through a ``@runtime_checkable`` Protocol, a
 pydantic validator, a factory hook. This tool sorts them into ``keep`` /
 ``delete`` / ``verify`` with the Message Batches API (half price, asynchronous),
-one request per package, and writes the result as a ranked Markdown document. It
+a package at a time (at most ``max_findings_per_request`` findings to a request, so a
+big package is split), and writes the result as a ranked Markdown document. It
 **deletes nothing and edits nothing under ``src/``**: every ``delete`` row is a
 candidate for a human and for a later PR that proves its regression pin fails
 without the symbol (``prove-pin-fails``).
@@ -30,7 +31,40 @@ the estimate passes ``--cap-usd`` or the workstream's cap. ``collect`` waits for
 ``processing_status == "ended"``, joins results to requests by ``custom_id``
 (never by position), validates every answer against the schema, turns anything it
 cannot trust into ``verify`` with a reason, writes the document and appends ONE
-ledger row with the real token usage.
+ledger row with the real token usage. A ``delete`` the model gives for a name the prompt
+forbids deleting (a Protocol member or pydantic validator found by the AST scan) is
+overruled in code: ``collect`` turns it into ``verify``, keeps the model's reason beside
+the downgrade, and counts it in the document header.
+
+The batch record is a write-ahead log. ``submit`` writes it BEFORE it calls the API, in
+state ``creating`` (estimate, plan fingerprint, audit sha256, timestamp, no batch id), and
+rewrites it as ``submitted`` with the id once the call returns. If the record cannot be
+written, nothing is sent. If the call fails, what happens depends on what is known:
+
+* The API said no (HTTP 400, 401, 403, 404, 413, 422 or 429) or the connection never
+  opened (a TLS failure behind an intercepting proxy, say): no batch exists, the record
+  is removed, and nothing blocks the next attempt.
+* Anything else (a timeout waiting for the answer, a dropped connection, a 408, a 409, a
+  5xx or a crash): a batch may exist. The record stays ``creating``, its estimate keeps
+  counting against the workstream cap, and every later ``submit`` refuses (exit 3) until
+  you have looked at the Console's Batches page and either run
+  ``submit --adopt <batch_id>`` (the batch is there: it must hold as many requests as the
+  record, have been created within an hour of it, and be owned by no other record; the
+  record then becomes ``submitted``) or deleted the record file (no batch was made).
+  ``--dry-run`` only warns. A record file that cannot be read as JSON blocks the same
+  way, because it may hide a batch.
+
+Two real ``submit`` runs cannot overlap: the checks and the write-ahead record sit inside
+an exclusive lock file (``.submit.lock`` beside the records) and the checks are made again
+once it is held. A run killed outright leaves the lock behind; the refusal names the file
+to delete.
+
+A second batch on the same day is refused while the first is uncollected; once it is
+collected the new record is ``<date>-2.json`` (an existing record is never overwritten,
+because ``collect`` finds a batch's results through it) and its document is
+``dead-code-triage-<date>-2.md``. The records and the ledger belong to one checkout: run
+``submit`` and ``collect`` from the same one, since another worktree does not see this
+one's ``creating`` record.
 
 What leaves the machine: for each finding, its symbol name, location and about
 ``credit.batch_triage.context_lines`` lines of source either side, plus the names
@@ -75,9 +109,9 @@ import os
 import re
 import sys
 import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import ROUND_UP, Decimal, InvalidOperation
 from importlib import metadata
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -124,6 +158,28 @@ _RESOLVED_VIA_RETRIEVE = "models.retrieve"
 _RESOLVED_VIA_CONFIG = "config"
 
 _RECORD_VERSION = 1
+#: A batch record is ``creating`` from the moment it is written (just before the create
+#: call) until the call returns a batch id, then ``submitted``. ``collected`` is a separate
+#: marker. A record with no ``status`` at all names its batch, so it counts as submitted.
+_RECORD_CREATING = "creating"
+_RECORD_SUBMITTED = "submitted"
+#: HTTP statuses that mean the API looked at the create call and said no, so no batch
+#: exists: 400 (invalid request, a low credit balance included), 401, 403, 404, 413, 422
+#: and 429. Any other status (a 408, a 409, a proxy's 407 or 499, a 5xx) does not say
+#: whether the work was done.
+_REFUSED_STATUSES = frozenset({400, 401, 403, 404, 413, 422, 429})
+#: httpx's names for failing to open the connection (a TLS handshake included): raised
+#: before a byte of the request is sent, so nothing was created. Matched by name, because
+#: the SDK's ``APIConnectionError`` carries the transport's error as its ``__cause__``.
+_CONNECT_FAILURES = frozenset({"ConnectError", "ConnectTimeout"})
+_MAX_CAUSE_DEPTH = 6
+#: How far apart in time a batch and the ``creating`` record it is adopted into may be:
+#: wide enough for clock skew and a slow create call, far short of "an earlier batch".
+_ADOPT_WINDOW = timedelta(hours=1)
+#: Exclusively created in ``batches_dir`` while a real submit (or an adopt) runs.
+_LOCK_NAME = ".submit.lock"
+#: The per-state counts of a ``MessageBatch``; their sum is how many requests it holds.
+_REQUEST_COUNT_FIELDS = ("processing", "succeeded", "errored", "canceled", "expired")
 _TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 _DATE_FORMAT = "%Y-%m-%d"
 _USD_QUANTUM = Decimal("0.000001")
@@ -284,6 +340,18 @@ class RefusedFileError(TriageError):
 
 class EgressRefusedError(RefusedFileError):
     """The repository's secret scanner could not run, and a real submit was not allowed to go on."""
+
+
+class SubmissionBlockedError(TriageError):
+    """An earlier submit may have created a batch that no record names yet."""
+
+
+class BatchCreateError(TriageError):
+    """``batches.create`` failed. ``definite`` is true only when the API refused it outright."""
+
+    def __init__(self, message: str, *, definite: bool) -> None:
+        super().__init__(message)
+        self.definite = definite
 
 
 class BatchPendingError(TriageError):
@@ -561,6 +629,19 @@ def collect_hints(repo: Path, pkg: str) -> PackageHints:
         tuple((name, tuple(sorted(members))) for name, members in sorted(protocols.items())),
         tuple(sorted(validators)),
     )
+
+
+def hinted_names(hints: PackageHints) -> frozenset[str]:
+    """Every Protocol member and validator method name the scan found in a package.
+
+    The prompt tells the model never to answer ``delete`` for these, and
+    ``apply_hint_guard`` holds it to that. This is the full set, not only the names that
+    fit in the prompt under ``max_hint_names``.
+    """
+    names = {member for _protocol, members in hints.protocols for member in members}
+    for entry in hints.validators:  # "Class.method (decorator)"
+        names.add(entry.split(" (", 1)[0].rsplit(".", 1)[-1])
+    return frozenset(names)
 
 
 def _format_hints(hints: PackageHints, max_names: int) -> list[str]:
@@ -1136,6 +1217,39 @@ def _decide(finding: Finding, given: list[tuple[str, str] | str]) -> Verdict:
     return Verdict(finding, verdict, reason, ORIGIN_MODEL)
 
 
+def apply_hint_guard(verdicts: Sequence[Verdict], hints: PackageHints) -> tuple[list[Verdict], int]:
+    """Overrule a model ``delete`` for a name the prompt says must never be deleted.
+
+    The system prompt forbids ``delete`` for Protocol members and validators, but a prompt
+    is a request, not a check. Such a ``delete`` becomes ``verify`` (a human decides), with
+    the model's own reason kept beside the downgrade; every other verdict is returned as
+    it came. Returns the verdicts and how many were downgraded.
+    """
+    names = hinted_names(hints)
+    guarded: list[Verdict] = []
+    downgraded = 0
+    for verdict in verdicts:
+        if (
+            verdict.origin == ORIGIN_MODEL
+            and verdict.verdict == "delete"
+            and verdict.finding.name in names
+        ):
+            downgraded += 1
+            guarded.append(_downgraded(verdict))
+        else:
+            guarded.append(verdict)
+    return guarded, downgraded
+
+
+def _downgraded(verdict: Verdict) -> Verdict:
+    reason = (
+        f"downgraded from delete: {verdict.finding.name} is a Protocol member or pydantic "
+        "validator in this package, called through machinery vulture cannot see. "
+        f"The model said: {verdict.reason}"
+    )
+    return Verdict(verdict.finding, "verify", reason, ORIGIN_MODEL)
+
+
 # --------------------------------------------------------------------------- #
 # The document
 # --------------------------------------------------------------------------- #
@@ -1157,6 +1271,7 @@ class ReportMeta:
     cost_usd: Decimal
     workstream: str
     run_id: str
+    downgraded: int = 0
 
 
 def _cell(text: object) -> str:
@@ -1236,6 +1351,12 @@ def render_markdown(
             "`verify`, and say why in their reason).",
             "",
         ]
+    if meta.downgraded:
+        lines += [
+            f"Delete answers downgraded to `verify` by the tool: {meta.downgraded} (the name is a "
+            "Protocol member or a pydantic validator, which vulture cannot see being called).",
+            "",
+        ]
     per_package: dict[str, dict[str, int]] = {}
     for verdict in verdicts:
         package = chunk_key(verdict.finding.filename, source_root)
@@ -1311,25 +1432,61 @@ def _record_path(repo: Path, settings: BatchTriageConfig, day: str) -> Path:
 
 
 def _read_record(path: Path) -> dict[str, Any] | None:
-    try:
-        loaded = json.loads(path.read_text(encoding="utf-8"))
+    try:  # utf-8-sig: a Windows editor may have put a byte order mark in front
+        loaded = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return None
     return loaded if isinstance(loaded, dict) else None
 
 
+def _write_record(path: Path, record: Mapping[str, Any]) -> None:
+    _atomic_write_text(path, json.dumps(record, indent=2) + "\n")
+
+
+def _iter_records(repo: Path, settings: BatchTriageConfig) -> Iterator[tuple[Path, dict[str, Any]]]:
+    """Every readable batch record, in file-name order (unreadable files are skipped)."""
+    directory = repo / settings.batches_dir
+    if not directory.is_dir():
+        return
+    for path in sorted(directory.glob("*.json")):
+        record = _read_record(path)
+        if record is not None:
+            yield path, record
+
+
+def _creating_records(repo: Path, settings: BatchTriageConfig) -> list[tuple[Path, dict[str, Any]]]:
+    """The records still in state ``creating``: a create whose outcome nobody recorded."""
+    return [
+        (path, record)
+        for path, record in _iter_records(repo, settings)
+        if record.get("status") == _RECORD_CREATING
+    ]
+
+
+def _unreadable_records(repo: Path, settings: BatchTriageConfig) -> list[Path]:
+    """Files in ``batches_dir`` that are not a readable batch record: one may hide a batch."""
+    directory = repo / settings.batches_dir
+    if not directory.is_dir():
+        return []
+    return [path for path in sorted(directory.glob("*.json")) if _read_record(path) is None]
+
+
 def _find_record(
     repo: Path, settings: BatchTriageConfig, batch_id: str
 ) -> tuple[Path, dict[str, Any]]:
-    directory = repo / settings.batches_dir
-    if directory.is_dir():
-        for path in sorted(directory.glob("*.json")):
-            record = _read_record(path)
-            if record is not None and record.get("batch_id") == batch_id:
-                return path, record
+    for path, record in _iter_records(repo, settings):
+        if record.get("batch_id") == batch_id:
+            return path, record
+    unresolved = _creating_records(repo, settings)
+    hint = ""
+    if unresolved:
+        hint = (
+            f"; {_display_path(unresolved[0][0], repo)} is still `creating`: if {batch_id} is "
+            f"the batch it was making, run `submit --adopt {batch_id}` first"
+        )
     raise TriageError(
         f"no batch record for {batch_id!r} in {settings.batches_dir}; the record written by "
-        "`submit` is what ties results back to findings"
+        f"`submit` is what ties results back to findings{hint}"
     )
 
 
@@ -1531,30 +1688,151 @@ def _check_spend(prepared: _Prepared, cap_usd: float, credit: CreditConfig, repo
     return cap
 
 
-def _refuse_to_orphan(record_path: Path) -> None:
-    if not record_path.exists():
-        return
-    existing = _read_record(record_path) or {}
-    raise TriageError(
-        f"{record_path.name} already records batch {existing.get('batch_id', '(unreadable)')}; "
-        "collect it first. Overwriting the record would orphan that batch's results"
+def _resolve_hint(shown: str) -> str:
+    """What to do about a record left in state ``creating``."""
+    return (
+        "Check the Console's Batches page: if a batch from that submit is listed, run "
+        "`python -m tools.dead_code_triage_batch submit --adopt <batch_id>`; if none is, "
+        f"delete {shown} and submit again"
     )
+
+
+def _unresolved_report(repo: Path, settings: BatchTriageConfig) -> str | None:
+    """Why a real submit may not go on, or ``None`` when no record is in doubt."""
+    creating = ", ".join(
+        _display_path(path, repo) for path, _record in _creating_records(repo, settings)
+    )
+    unreadable = ", ".join(
+        _display_path(path, repo) for path in _unreadable_records(repo, settings)
+    )
+    parts: list[str] = []
+    if creating:
+        parts.append(
+            f"{creating} is still in state `creating`: an earlier submit was cut off after it "
+            "began creating a batch, so a batch may exist that no record names, and creating "
+            f"another now could pay for the same work twice. {_resolve_hint(creating)}."
+        )
+    if unreadable:
+        parts.append(
+            f"{unreadable} cannot be read as a batch record, so it may hide a batch that was "
+            "never collected. Repair or delete it, then submit again."
+        )
+    return " ".join(parts) or None
+
+
+def _guard_unresolved(repo: Path, settings: BatchTriageConfig, *, dry_run: bool) -> None:
+    """A real submit refuses while any record is in doubt; a dry run only says so.
+
+    Raises:
+        SubmissionBlockedError: A record is still ``creating`` (an earlier submit was cut
+            off, so a batch may exist that no record names) or cannot be read.
+    """
+    report = _unresolved_report(repo, settings)
+    if report is None:
+        return
+    if dry_run:
+        print(
+            f"warning: {report} A real submit will refuse until that is resolved.",
+            file=sys.stderr,
+        )
+        return
+    raise SubmissionBlockedError(report)
+
+
+@contextlib.contextmanager
+def _submit_lock(repo: Path, settings: BatchTriageConfig) -> Iterator[None]:
+    """Hold the submit lock: one real ``submit`` (or ``adopt``) at a time in a checkout.
+
+    Everything between "is anything unresolved?" and "the ``creating`` record is on disk"
+    is a check followed by an act, so two overlapping submits (the second started while
+    the first is still scanning its prompts) could both pass the checks and both create a
+    batch. The lock is a file created exclusively in ``batches_dir`` and removed when the
+    holder ends, however it ends. A holder killed outright (power loss, ``kill -9``)
+    leaves it behind; the refusal says so and names the file.
+
+    Raises:
+        SubmissionBlockedError: The lock is held.
+        TriageError: The lock (or the directory it lives in) cannot be created.
+    """
+    directory = repo / settings.batches_dir
+    lock = directory / _LOCK_NAME
+    shown = _display_path(lock, repo)
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise TriageError(
+            f"cannot create the directory for {shown} ({exc}); nothing was sent"
+        ) from exc
+    try:
+        handle = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError as exc:
+        raise SubmissionBlockedError(
+            f"{shown} exists: another submit is running here, or one was killed while it held "
+            "the lock. If none is running, delete the file and try again"
+        ) from exc
+    except OSError as exc:
+        raise TriageError(f"cannot take the submit lock {shown} ({exc}); nothing was sent") from exc
+    try:
+        try:
+            note = f"pid {os.getpid()} since {_utc_now().strftime(_TIMESTAMP_FORMAT)}\n"
+            os.write(handle, note.encode("ascii"))
+        finally:
+            os.close(handle)
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            lock.unlink()
+
+
+def _same_day_paths(directory: Path, day: str) -> list[Path]:
+    """``<day>.json`` and ``<day>-N.json``: the records of the batches submitted on ``day``."""
+    if not directory.is_dir():
+        return []
+    own = re.compile(rf"{re.escape(day)}(?:-[0-9]+)?")
+    return [p for p in sorted(directory.glob(f"{day}*.json")) if own.fullmatch(p.stem)]
+
+
+def _refuse_to_orphan(directory: Path, day: str) -> None:
+    """Refuse a second batch on ``day`` while an earlier one is not yet collected."""
+    for path in _same_day_paths(directory, day):
+        record = _read_record(path) or {}
+        if not record.get("collected"):
+            raise TriageError(
+                f"{path.name} already records batch {record.get('batch_id', '(unreadable)')}; "
+                "collect it first. A second batch the same day would pay for the same work twice"
+            )
+
+
+def _next_record_path(repo: Path, settings: BatchTriageConfig, day: str) -> Path:
+    """The file for a new batch's record: ``<day>.json``, else the first free ``<day>-N.json``.
+
+    An existing record is never overwritten: ``collect`` finds a batch's results through
+    it, and a collected batch's record is how a second ``collect`` stays idempotent.
+    """
+    first = _record_path(repo, settings, day)
+    candidate = first
+    number = 1
+    while candidate.exists():
+        number += 1
+        candidate = first.with_name(f"{day}-{number}.json")
+    return candidate
 
 
 def _batch_record(
     prepared: _Prepared,
     *,
-    batch_id: str,
     repo: Path,
     credit: CreditConfig,
     cap: Decimal,
     models: tuple[str, str, str],
     unscanned: str | None,
 ) -> dict[str, Any]:
+    """The record written BEFORE the create call: everything known, and no batch id yet."""
     requested, resolved, via = models
     return {
         "version": _RECORD_VERSION,
-        "batch_id": batch_id,
+        "status": _RECORD_CREATING,
+        "batch_id": None,
         "created_at": _utc_now().strftime(_TIMESTAMP_FORMAT),
         "workstream": credit.batch_triage.workstream,
         "findings_path": _display_path(prepared.findings_file, repo),
@@ -1576,6 +1854,28 @@ def _batch_record(
     }
 
 
+def _nothing_was_created(exc: BaseException) -> bool:
+    """True when ``exc`` proves the create call made no batch.
+
+    Two things prove it: the API answered with one of the refusal statuses, or the failure
+    happened while opening the connection, before the request was sent (a TLS handshake
+    that fails behind an intercepting proxy is the usual case). A timeout waiting for the
+    answer, a dropped connection, a 5xx or a crash prove nothing: the server may have got
+    as far as creating the batch.
+    """
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int) and status in _REFUSED_STATUSES:
+        return True
+    cause: BaseException | None = exc
+    for _depth in range(_MAX_CAUSE_DEPTH):
+        if cause is None:
+            return False
+        if type(cause).__name__ in _CONNECT_FAILURES:
+            return True
+        cause = cause.__cause__
+    return False
+
+
 def _create_batch(client: Any, requests: list[dict[str, Any]]) -> str:
     """Create the batch ONCE and return its id.
 
@@ -1584,17 +1884,96 @@ def _create_batch(client: Any, requests: list[dict[str, Any]]) -> str:
     sent again as a second batch.
 
     Raises:
-        TriageError: The call failed. A timeout may still have created the batch.
+        BatchCreateError: The call failed. ``definite`` is true when the API refused it
+            (no batch exists); otherwise a timeout or a 5xx may still have made one.
     """
     with_options = getattr(client, "with_options", None)
     caller = with_options(max_retries=0) if callable(with_options) else client
     try:
         return str(caller.messages.batches.create(requests=requests).id)
     except Exception as exc:
-        raise TriageError(
-            f"creating the batch failed ({type(exc).__name__}: {exc}). If it timed out the "
-            "batch may exist: check the Console's Batches page before submitting again"
+        detail = f"{type(exc).__name__}: {exc}"
+        if _nothing_was_created(exc):
+            raise BatchCreateError(
+                f"the API rejected the batch ({detail}); no batch was created", definite=True
+            ) from exc
+        raise BatchCreateError(
+            f"creating the batch failed ({detail}); the call may have reached the API, "
+            "so a batch may exist",
+            definite=False,
         ) from exc
+
+
+def _create_with_write_ahead(
+    api: Any,
+    requests: list[dict[str, Any]],
+    record: dict[str, Any],
+    record_path: Path,
+    repo: Path,
+) -> str:
+    """Write the ``creating`` record, create the batch, then name the batch in the record.
+
+    The record is on disk before the call, so a crash, a timeout or a lost connection
+    cannot leave a batch that nothing counts or names. If the record cannot be written,
+    nothing is sent. If the call fails, the record is removed only when it is certain that
+    no batch exists (``_nothing_was_created``); otherwise it stays ``creating`` for
+    ``_guard_unresolved`` and ``adopt``.
+    """
+    shown = _display_path(record_path, repo)
+    try:
+        _write_record(record_path, record)
+    except OSError as exc:
+        raise TriageError(
+            f"could not write {shown} ahead of creating the batch ({exc}); nothing was sent"
+        ) from exc
+    try:
+        batch_id = _create_batch(api, requests)
+    except BatchCreateError as exc:
+        if not exc.definite:
+            raise BatchCreateError(
+                f"{exc}. {shown} stays in state `creating`, so the next submit refuses until "
+                f"you have checked. {_resolve_hint(shown)}",
+                definite=False,
+            ) from exc
+        try:
+            record_path.unlink()
+        except OSError as gone:
+            raise BatchCreateError(
+                f"{exc}, but {shown} could not be removed ({gone}): delete it by hand "
+                "before submitting again",
+                definite=True,
+            ) from exc
+        raise
+    with contextlib.suppress(OSError, ValueError):  # a closed stderr must not skip the record
+        print(f"created batch {batch_id}", file=sys.stderr, flush=True)
+    named = {
+        **record,
+        "status": _RECORD_SUBMITTED,
+        "batch_id": batch_id,
+        "submitted_at": _utc_now().strftime(_TIMESTAMP_FORMAT),
+    }
+    try:
+        _write_record(record_path, named)
+    except OSError as exc:
+        raise TriageError(
+            f"batch {batch_id} WAS created but its record could not be updated ({exc}). "
+            f"{shown} still says `creating`: once that is fixed run "
+            f"`python -m tools.dead_code_triage_batch submit --adopt {batch_id}`. Without a "
+            "record, collect cannot match its results"
+        ) from exc
+    return batch_id
+
+
+def _outcome_fields(prepared: _Prepared, cap: Decimal, requested: str) -> dict[str, Any]:
+    return {
+        "request_count": len(prepared.requests),
+        "finding_count": len(prepared.findings),
+        "withheld_count": len(prepared.plan.withheld),
+        "estimate_usd": prepared.estimate,
+        "cap_usd": cap,
+        "model_requested": requested,
+        "packages": len({r.pkg for r in prepared.plan.requests}),
+    }
 
 
 def submit(
@@ -1611,10 +1990,13 @@ def submit(
 ) -> SubmitOutcome:
     """Plan, price and (unless ``dry_run``) submit the triage batch.
 
-    Every refusal happens before the first API call: unreadable or malformed audit,
-    a file the builder refuses, a model with no price, an estimate over ``cap_usd``,
-    a workstream over its cap, a batch already recorded for today. Only then is the
-    client built, the model resolved, and the batch created.
+    Every refusal happens before the first API call: an earlier submit that left a
+    ``creating`` (or unreadable) record, another submit holding the lock, an unreadable
+    or malformed audit, a file the builder refuses, a scanner that could not run, a model
+    with no price, an estimate over ``cap_usd``, a workstream over its cap, an uncollected
+    batch from today. Only then is the client built and the model resolved. The record is
+    written in state ``creating`` BEFORE the batch is created and names the batch
+    afterwards (see the module docstring).
 
     Args:
         findings_path: The audit JSON from ``scripts/dead_code_audit.py``.
@@ -1633,74 +2015,214 @@ def submit(
         CapExceeded: Over ``cap_usd`` or the workstream's cap.
         EgressRefusedError: The repository scanner could not run and the flag was not given.
         RefusedFileError: A file or an excerpt that must not be sent.
-        TriageError: Bad audit, unpriced or retired model, an unrecorded-batch risk.
+        SubmissionBlockedError: A record from an earlier submit is still ``creating`` or
+            cannot be read, or another submit holds the lock.
+        BatchCreateError: The create call failed (``definite`` tells whether a batch exists).
+        TriageError: Bad audit, unpriced or retired model, an uncollected batch from today.
     """
     repo = _repo_root(repo_root)
     workforce = config if config is not None else load_config(repo_root=repo)
     credit = workforce.credit
     settings = credit.batch_triage
     requested = model or settings.model
+    _guard_unresolved(repo, settings, dry_run=dry_run)  # early and cheap; checked again below
     prepared = _prepare(Path(findings_path), repo, workforce, requested, scanner)
-    unscanned = (
-        None
-        if dry_run
-        else _egress_gate(
-            prepared.scan, allow=allow_unscanned_egress, strict=workforce.secret_scan.strict
-        )
-    )
-    cap = _check_spend(prepared, cap_usd, credit, repo)
-    day = _utc_now().strftime(_DATE_FORMAT)
-    record_path = _record_path(repo, settings, day)
-    packages = len({r.pkg for r in prepared.plan.requests})
-    common: dict[str, Any] = {
-        "request_count": len(prepared.requests),
-        "finding_count": len(prepared.findings),
-        "withheld_count": len(prepared.plan.withheld),
-        "estimate_usd": prepared.estimate,
-        "cap_usd": cap,
-        "model_requested": requested,
-        "packages": packages,
-    }
     if dry_run:
+        cap = _check_spend(prepared, cap_usd, credit, repo)
         return SubmitOutcome(
             batch_id=None,
             record_path=None,
             dry_run=True,
             model_resolved=requested,
             resolved_via=_RESOLVED_VIA_CONFIG,
-            **common,
+            **_outcome_fields(prepared, cap, requested),
         )
-    _refuse_to_orphan(record_path)
-    api = client if client is not None else _default_client()
-    resolved, via = _resolve_model(api, requested)
-    for request in prepared.requests:
-        request["params"]["model"] = resolved
-    batch_id = _create_batch(api, prepared.requests)
-    print(f"created batch {batch_id}", file=sys.stderr, flush=True)  # before anything can fail
-    record = _batch_record(
-        prepared,
-        batch_id=batch_id,
-        repo=repo,
-        credit=credit,
-        cap=cap,
-        models=(requested, resolved, via),
-        unscanned=unscanned,
+    unscanned = _egress_gate(
+        prepared.scan, allow=allow_unscanned_egress, strict=workforce.secret_scan.strict
     )
-    try:
-        _atomic_write_text(record_path, json.dumps(record, indent=2) + "\n")
-    except OSError as exc:
-        raise TriageError(
-            f"batch {batch_id} WAS created but its record could not be written ({exc}). "
-            "Write the id down: without the record, collect cannot match its results"
-        ) from exc
+    with _submit_lock(repo, settings):
+        # Everything above was checked while another submit could still be running (a
+        # scan takes a while); under the lock nothing can change the answers any more.
+        _guard_unresolved(repo, settings, dry_run=False)
+        cap = _check_spend(prepared, cap_usd, credit, repo)
+        day = _utc_now().strftime(_DATE_FORMAT)
+        _refuse_to_orphan(repo / settings.batches_dir, day)
+        record_path = _next_record_path(repo, settings, day)
+        api = client if client is not None else _default_client()
+        resolved, via = _resolve_model(api, requested)
+        for request in prepared.requests:
+            request["params"]["model"] = resolved
+        record = _batch_record(
+            prepared,
+            repo=repo,
+            credit=credit,
+            cap=cap,
+            models=(requested, resolved, via),
+            unscanned=unscanned,
+        )
+        batch_id = _create_with_write_ahead(api, prepared.requests, record, record_path, repo)
     return SubmitOutcome(
         batch_id=batch_id,
         record_path=record_path,
         dry_run=False,
         model_resolved=resolved,
         resolved_via=via,
-        **common,
+        **_outcome_fields(prepared, cap, requested),
     )
+
+
+# --------------------------------------------------------------------------- #
+# adopt: name the batch an interrupted submit left behind
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class AdoptOutcome:
+    """What ``adopt`` did: which record now names which batch."""
+
+    batch_id: str
+    record_path: Path
+    request_count: int
+
+
+def _creating_record(repo: Path, settings: BatchTriageConfig) -> tuple[Path, dict[str, Any]]:
+    """The one record in state ``creating`` (a refusing ``submit`` can leave only one)."""
+    found = _creating_records(repo, settings)
+    if not found:
+        raise TriageError(
+            f"no record in {settings.batches_dir} is in state `creating`: there is nothing to adopt"
+        )
+    if len(found) > 1:
+        names = ", ".join(path.name for path, _record in found)
+        raise TriageError(
+            f"more than one record is in state `creating` ({names}); adopt settles one at a "
+            "time, so check the Console for each and delete the ones with no batch first"
+        )
+    return found[0]
+
+
+def _refuse_a_recorded_batch(repo: Path, settings: BatchTriageConfig, batch_id: str) -> None:
+    for path, record in _iter_records(repo, settings):
+        if record.get("batch_id") == batch_id:
+            raise TriageError(
+                f"batch {batch_id} is already recorded in {path.name}; adopt takes the id of "
+                "the batch the `creating` record was making, not an earlier one"
+            )
+
+
+def _retrieve_batch(api: Any, batch_id: str) -> Any:
+    try:
+        return api.messages.batches.retrieve(batch_id)
+    except Exception as exc:
+        raise TriageError(
+            f"could not retrieve batch {batch_id} ({type(exc).__name__}: {exc}); "
+            "the record was not changed"
+        ) from exc
+
+
+def _parse_stamp(text: object) -> datetime | None:
+    """A ``_TIMESTAMP_FORMAT`` string as an aware UTC time, or ``None`` if it is not one."""
+    if not isinstance(text, str):
+        return None
+    try:
+        return datetime.strptime(text, _TIMESTAMP_FORMAT).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _check_batch_age(batch: Any, batch_id: str, record: Mapping[str, Any], name: str) -> None:
+    """Refuse a batch made long before or after the record was written.
+
+    The size check cannot tell this plan's batch from an earlier batch of the same plan;
+    the clock can. Both times are UTC; a naive time from the API is read as UTC too.
+    """
+    made = getattr(batch, "created_at", None)
+    written = _parse_stamp(record.get("created_at"))
+    if not isinstance(made, datetime) or written is None:
+        raise TriageError(
+            f"cannot compare when batch {batch_id} was created with when {name} was written; "
+            "the record was not changed"
+        )
+    if made.tzinfo is None:
+        made = made.replace(tzinfo=timezone.utc)
+    gap = abs(made - written)
+    if gap > _ADOPT_WINDOW:
+        raise TriageError(
+            f"batch {batch_id} was created {made.strftime(_TIMESTAMP_FORMAT)}, {gap} from the "
+            f"moment {name} was written ({record.get('created_at')}): it is not the batch that "
+            "submit was creating; the record was not changed"
+        )
+
+
+def _batch_size(batch: Any, batch_id: str) -> int:
+    """How many requests the batch holds: the sum of its per-state counts."""
+    counts = getattr(batch, "request_counts", None)
+    total = 0
+    for name in _REQUEST_COUNT_FIELDS:
+        size = getattr(counts, name, None)
+        if not isinstance(size, int):
+            raise TriageError(
+                f"batch {batch_id} does not report its request counts, so it cannot be matched "
+                "to the record; the record was not changed"
+            )
+        total += size
+    return total
+
+
+def adopt(
+    batch_id: str,
+    *,
+    repo_root: Path | None = None,
+    config: WorkforceConfig | None = None,
+    client: Any = None,
+) -> AdoptOutcome:
+    """Name the batch an interrupted ``submit`` was creating, in its ``creating`` record.
+
+    The operator found the batch in the Console after a create call timed out or crashed.
+    The batch is retrieved; its size must equal the record's request count, it must have
+    been created within an hour of the record, and no other record may already own its id
+    (the likeliest mix-up is an earlier batch of the same plan). Nothing is created and
+    nothing is charged: the record's estimate was counting against the cap all along, and
+    ``collect`` records the real cost.
+
+    Raises:
+        SubmissionBlockedError: Another submit holds the lock.
+        TriageError: No record, or more than one, is ``creating``; the batch cannot be
+            retrieved, is already recorded elsewhere, is not the record's size, or was
+            created at a different time.
+    """
+    repo = _repo_root(repo_root)
+    workforce = config if config is not None else load_config(repo_root=repo)
+    settings = workforce.credit.batch_triage
+    batch_id = batch_id.strip()
+    if not batch_id:
+        raise TriageError("--adopt needs the batch id shown in the Console")
+    _creating_record(repo, settings)  # fail fast: nothing to adopt, so no lock to take
+    with _submit_lock(repo, settings):
+        path, record = _creating_record(repo, settings)
+        _refuse_a_recorded_batch(repo, settings, batch_id)
+        api = client if client is not None else _default_client()
+        batch = _retrieve_batch(api, batch_id)
+        size = _batch_size(batch, batch_id)
+        expected = record.get("request_count")
+        if size != expected:
+            raise TriageError(
+                f"batch {batch_id} holds {size} requests but {path.name} recorded {expected}: it "
+                "is not the batch that submit was creating; the record was not changed"
+            )
+        _check_batch_age(batch, batch_id, record, path.name)
+        adopted = {
+            **record,
+            "status": _RECORD_SUBMITTED,
+            "batch_id": batch_id,
+            "adopted_at": _utc_now().strftime(_TIMESTAMP_FORMAT),
+        }
+        try:
+            _write_record(path, adopted)
+        except OSError as exc:
+            raise TriageError(
+                f"could not update {_display_path(path, repo)} ({exc}); batch {batch_id} is "
+                "still not named in it"
+            ) from exc
+    return AdoptOutcome(batch_id=batch_id, record_path=path, request_count=size)
 
 
 # --------------------------------------------------------------------------- #
@@ -1719,6 +2241,7 @@ class CollectOutcome:
     already_collected: bool
     request_count: int
     request_problems: int
+    downgraded: int = 0
 
 
 def _count(value: object) -> int:
@@ -1862,6 +2385,32 @@ def _read_json_line(line: str) -> dict[str, Any] | None:
     return loaded if isinstance(loaded, dict) else None
 
 
+def _judge(
+    plan: Plan, results: Mapping[str, Any], repo: Path
+) -> tuple[list[Verdict], Usage, int, int]:
+    """Verdicts for every planned request, their summed token usage, and two counts.
+
+    Returns ``(verdicts, usage, requests_with_a_problem, downgraded)``. ``_interpret``
+    turns what the API sent into verdicts; ``apply_hint_guard`` then overrules a
+    ``delete`` the prompt forbade, against the package's hints as the tree is now.
+    """
+    hints_by_pkg: dict[str, PackageHints] = {}
+    verdicts: list[Verdict] = []
+    usage = Usage()
+    problems = 0
+    downgraded = 0
+    for planned in plan.requests:
+        answered, used = _interpret(results.get(planned.custom_id), planned)
+        problems += int(any(v.origin != ORIGIN_MODEL for v in answered))
+        if planned.pkg not in hints_by_pkg:
+            hints_by_pkg[planned.pkg] = collect_hints(repo, planned.pkg)
+        answered, demoted = apply_hint_guard(answered, hints_by_pkg[planned.pkg])
+        verdicts += answered
+        usage += used
+        downgraded += demoted
+    return verdicts, usage, problems, downgraded
+
+
 def collect(
     batch_id: str,
     out: Path | None = None,
@@ -1900,18 +2449,12 @@ def collect(
         monotonic=monotonic,
     )
     results = _results_by_custom_id(api, batch_id)
-    verdicts: list[Verdict] = []
-    usage = Usage()
-    problems = 0
-    for planned in plan.requests:
-        answered, used = _interpret(results.get(planned.custom_id), planned)
-        verdicts += answered
-        usage += used
-        problems += int(any(v.origin != ORIGIN_MODEL for v in answered))
+    verdicts, usage, problems, downgraded = _judge(plan, results, repo)
     verdicts += [Verdict(w.finding, "verify", w.reason, ORIGIN_WITHHELD) for w in plan.withheld]
     cost = usage_cost_usd(usage, price, credit.prices.batch_multiplier)
     day = str(record.get("created_at", ""))[:10] or _utc_now().strftime(_DATE_FORMAT)
-    target = out if out is not None else repo / settings.analysis_dir / f"dead-code-triage-{day}.md"
+    name = f"dead-code-triage-{record_path.stem}.md"  # the record's own name: <date> or <date>-2
+    target = out if out is not None else repo / settings.analysis_dir / name
     run_id = f"ws{settings.workstream.lower()}-{batch_id}"
     meta = ReportMeta(
         date=day,
@@ -1928,6 +2471,7 @@ def collect(
         cost_usd=cost,
         workstream=settings.workstream,
         run_id=run_id,
+        downgraded=downgraded,
     )
     _atomic_write_text(target, render_markdown(verdicts, meta, source_root=settings.source_root))
     sent = sum(len(r.findings) for r in plan.requests)
@@ -1956,6 +2500,7 @@ def collect(
         already_collected=row is None,
         request_count=len(plan.requests),
         request_problems=problems,
+        downgraded=downgraded,
     )
 
 
@@ -2039,10 +2584,10 @@ def _print_submit(outcome: SubmitOutcome, repo: Path) -> None:
     )
     if outcome.record_path is not None:
         print(f"record: {_display_path(outcome.record_path, repo)}")
-    day = _utc_now().strftime(_DATE_FORMAT)
+    stem = outcome.record_path.stem if outcome.record_path else _utc_now().strftime(_DATE_FORMAT)
     print(
         f"next: python -m tools.dead_code_triage_batch collect {outcome.batch_id} "
-        f"--out docs/analysis/dead-code-triage-{day}.md"
+        f"--out docs/analysis/dead-code-triage-{stem}.md"
     )
 
 
@@ -2055,6 +2600,11 @@ def _print_collect(outcome: CollectOutcome, batch_id: str, repo: Path) -> None:
         "untrusted answer"
     )
     print(f"document: {_display_path(outcome.out_path, repo)}")
+    if outcome.downgraded:
+        print(
+            f"guard: {outcome.downgraded} delete answers downgraded to verify "
+            "(Protocol members or pydantic validators)"
+        )
     if outcome.ledger_row is not None:
         row = outcome.ledger_row
         print(
@@ -2066,6 +2616,18 @@ def _print_collect(outcome: CollectOutcome, batch_id: str, repo: Path) -> None:
         print("ledger: already recorded for this batch; not charged again")
 
 
+def _print_adopt(outcome: AdoptOutcome, repo: Path) -> None:
+    shown = _display_path(outcome.record_path, repo)
+    print(
+        f"adopted batch {outcome.batch_id} ({outcome.request_count} requests): "
+        f"{shown} now says submitted"
+    )
+    print(
+        f"next: python -m tools.dead_code_triage_batch collect {outcome.batch_id} "
+        f"--out docs/analysis/dead-code-triage-{outcome.record_path.stem}.md"
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m tools.dead_code_triage_batch",
@@ -2074,12 +2636,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     commands = parser.add_subparsers(dest="command", required=True)
     submit_cmd = commands.add_parser("submit", help="Plan, price and submit the batch.")
-    submit_cmd.add_argument("--findings", type=Path, required=True, help="The audit JSON.")
+    submit_cmd.add_argument(
+        "--findings", type=Path, default=None, help="The audit JSON (required unless --adopt)."
+    )
     submit_cmd.add_argument(
         "--cap-usd",
         type=float,
-        required=True,
-        help="Refuse when the estimated cost of this batch is above this many USD.",
+        default=None,
+        help="Refuse when the estimated cost of this batch is above this many USD "
+        "(required unless --adopt).",
     )
     submit_cmd.add_argument("--dry-run", action="store_true", help="Plan and price; call nothing.")
     submit_cmd.add_argument(
@@ -2091,6 +2656,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Send even though the repository secret scanner (gitleaks) could not run; only "
         "the built-in credential patterns apply, and the batch record says so. Without this "
         "a real submit refuses. Not honoured when secret_scan.strict is true.",
+    )
+    submit_cmd.add_argument(
+        "--adopt",
+        metavar="BATCH_ID",
+        default=None,
+        help="Recovery, instead of a submit: an earlier submit was cut off while creating a "
+        "batch (its record says `creating`). Pass the id the Console shows for that batch; "
+        "it is checked against the record and the record becomes `submitted`. Takes no "
+        "other submit option.",
     )
     collect_cmd = commands.add_parser("collect", help="Wait for a batch and write the document.")
     collect_cmd.add_argument("batch_id", help="The id `submit` printed.")
@@ -2111,32 +2685,73 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _check_submit_options(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """``--adopt`` stands alone; every other submit needs the audit JSON and a cap."""
+    if args.adopt is not None:
+        given = [
+            flag
+            for flag, value in (
+                ("--findings", args.findings),
+                ("--cap-usd", args.cap_usd),
+                ("--model", args.model),
+            )
+            if value is not None
+        ]
+        given += [
+            flag
+            for flag, on in (
+                ("--dry-run", args.dry_run),
+                ("--allow-unscanned-egress", args.allow_unscanned_egress),
+            )
+            if on
+        ]
+        if given:
+            parser.error(f"--adopt takes no other submit option (got {', '.join(given)})")
+        return
+    missing = [
+        flag
+        for flag, value in (("--findings", args.findings), ("--cap-usd", args.cap_usd))
+        if value is None
+    ]
+    if missing:
+        parser.error(f"the following arguments are required: {', '.join(missing)}")
+
+
+def _run(args: argparse.Namespace, repo: Path) -> None:
+    if args.command == "collect":
+        collected = collect(
+            args.batch_id,
+            args.out,
+            repo_root=repo,
+            findings_path=args.findings,
+            wait=not args.no_wait,
+            poll_interval_s=args.poll_interval,
+        )
+        _print_collect(collected, args.batch_id, repo)
+    elif args.adopt is not None:
+        _print_adopt(adopt(args.adopt, repo_root=repo), repo)
+    else:
+        outcome = submit(
+            args.findings,
+            args.cap_usd,
+            repo_root=repo,
+            dry_run=args.dry_run,
+            model=args.model,
+            allow_unscanned_egress=args.allow_unscanned_egress,
+        )
+        _print_submit(outcome, repo)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entry point; returns the process exit code."""
-    args = _build_parser().parse_args(argv)
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    if args.command == "submit":
+        _check_submit_options(parser, args)
     repo = _repo_root(args.repo_root)
     try:
-        if args.command == "submit":
-            outcome = submit(
-                args.findings,
-                args.cap_usd,
-                repo_root=repo,
-                dry_run=args.dry_run,
-                model=args.model,
-                allow_unscanned_egress=args.allow_unscanned_egress,
-            )
-            _print_submit(outcome, repo)
-        else:
-            collected = collect(
-                args.batch_id,
-                args.out,
-                repo_root=repo,
-                findings_path=args.findings,
-                wait=not args.no_wait,
-                poll_interval_s=args.poll_interval,
-            )
-            _print_collect(collected, args.batch_id, repo)
-    except (CapExceeded, RefusedFileError) as exc:
+        _run(args, repo)
+    except (CapExceeded, RefusedFileError, SubmissionBlockedError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_REFUSED
     except BatchPendingError as exc:

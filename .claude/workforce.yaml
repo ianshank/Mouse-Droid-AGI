@@ -208,6 +208,10 @@ credit:
         poll_interval_s: 60
         poll_timeout_s: 90000
         source_root: src/mousedroid
+        # One record per submit, written BEFORE the create call (state `creating`) and
+        # rewritten with the batch id afterwards; <UTC date>.json, then <UTC date>-2.json
+        # ... A record left `creating` (or unreadable) blocks the next submit, and a real
+        # submit holds .submit.lock in this directory: see the module docstring.
         batches_dir: reports/credit/batches
         analysis_dir: docs/analysis
         # File names the prompt builder will not read or send (fnmatch, case-insensitive);

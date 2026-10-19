@@ -14,9 +14,12 @@ not installed.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 import math
+import os
 import re
 import socket
 import subprocess
@@ -206,23 +209,54 @@ class _Batches:
         statuses: Iterable[str] = ("ended",),
         results: Iterable[Any] = (),
         create_error: Exception | None = None,
+        ids: Iterable[str] = ("msgbatch_test01",),
     ) -> None:
         self.created: list[list[dict[str, Any]]] = []
         self.statuses = list(statuses)
         self.results_to_serve = list(results)
         self.create_error = create_error
+        self.ids = list(ids)  # the id each create returns, in turn (the last one repeats)
+        self.on_create: Callable[[], None] | None = None  # runs as create is called
+        self.request_total = 3  # the size retrieve reports (the default audit makes 3 requests)
+        self.counts: dict[str, int] | None = None  # or the exact per-state counts to report
+        self.retrieve_error: Exception | None = None
+        self.batch_created_at: datetime | None = datetime(  # two seconds after the fixed clock
+            2026, 10, 19, 14, 2, 13, tzinfo=timezone.utc
+        )
         self.retrieve_calls = 0
 
     def create(self, *, requests: Iterable[dict[str, Any]]) -> Any:
+        if self.on_create is not None:
+            self.on_create()
         if self.create_error is not None:
             raise self.create_error
         self.created.append(list(requests))
-        return types.SimpleNamespace(id="msgbatch_test01", processing_status="in_progress")
+        batch_id = self.ids.pop(0) if len(self.ids) > 1 else self.ids[0]
+        return types.SimpleNamespace(id=batch_id, processing_status="in_progress")
 
     def retrieve(self, batch_id: str) -> Any:
         self.retrieve_calls += 1
+        if self.retrieve_error is not None:
+            raise self.retrieve_error
         status = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
-        return types.SimpleNamespace(id=batch_id, processing_status=status)
+        counts = types.SimpleNamespace(
+            **(
+                self.counts
+                or {
+                    "processing": self.request_total,
+                    "succeeded": 0,
+                    "errored": 0,
+                    "canceled": 0,
+                    "expired": 0,
+                }
+            )
+        )
+        return types.SimpleNamespace(
+            id=batch_id,
+            processing_status=status,
+            request_counts=counts,
+            created_at=self.batch_created_at,
+        )
 
     def results(self, batch_id: str) -> Iterable[Any]:
         return iter(self.results_to_serve)
@@ -237,6 +271,7 @@ class _FakeClient:
         statuses: Iterable[str] = ("ended",),
         results: Iterable[Any] = (),
         create_error: Exception | None = None,
+        ids: Iterable[str] = ("msgbatch_test01",),
     ) -> None:
         self.models_asked: list[str] = []
         self.options_used: list[dict[str, Any]] = []
@@ -248,7 +283,7 @@ class _FakeClient:
             return types.SimpleNamespace(id=resolved, lifecycle="active")
 
         self.models = types.SimpleNamespace(retrieve=_retrieve)
-        self.batches = _Batches(statuses, results, create_error)
+        self.batches = _Batches(statuses, results, create_error, ids)
         self.messages = types.SimpleNamespace(batches=self.batches)
 
     def with_options(self, **options: Any) -> _FakeClient:
@@ -400,10 +435,33 @@ def _plan(repo: Path, rows: list[dict[str, Any]] | None = None) -> triage.Plan:
     return triage.make_plan(findings, _settings(repo))
 
 
-def _record(repo: Path) -> dict[str, Any]:
-    path = repo / "reports" / "credit" / "batches" / f"{_FIXED_DATE}.json"
-    loaded: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+def _batches_dir(repo: Path) -> Path:
+    return repo / "reports" / "credit" / "batches"
+
+
+def _record_files(repo: Path) -> list[Path]:
+    directory = _batches_dir(repo)
+    return sorted(directory.glob("*.json")) if directory.is_dir() else []
+
+
+def _record(repo: Path, name: str = f"{_FIXED_DATE}.json") -> dict[str, Any]:
+    loaded: dict[str, Any] = json.loads((_batches_dir(repo) / name).read_text(encoding="utf-8"))
     return loaded
+
+
+class _ApiStatusError(Exception):
+    """Stands in for the SDK's ``APIStatusError``: the server answered with an HTTP status."""
+
+    def __init__(self, status_code: int) -> None:
+        super().__init__(f"Error code: {status_code} - rejected")
+        self.status_code = status_code
+
+
+def _fail_to_create(repo: Path, error: Exception | None = None) -> None:
+    """Run a submit whose ``create`` call dies in flight, leaving the write-ahead record behind."""
+    client = _FakeClient(create_error=error or TimeoutError("read timed out"))
+    with pytest.raises(triage.TriageError):
+        _submit(repo, client)
 
 
 # --------------------------------------------------------------------------- #
@@ -1166,7 +1224,9 @@ def test_submit_refuses_over_cap_before_any_call(repo: Path) -> None:
     client.messages.batches.create.assert_not_called()
     client.models.retrieve.assert_not_called()
     assert client.mock_calls == []
-    assert not (repo / "reports" / "credit").exists()  # nothing recorded either
+    assert _record_files(repo) == []  # nothing recorded either, and no ledger row
+    assert not (repo / "reports" / "credit" / "ledger.jsonl").exists()
+    assert not _lock_path(repo).exists()  # the lock this refusal briefly took is gone
 
 
 def test_submit_refuses_when_the_workstream_cap_would_be_exceeded(repo: Path) -> None:
@@ -1465,12 +1525,252 @@ def test_submit_creates_the_batch_once_with_no_automatic_retry(repo: Path) -> No
     assert len(client.batches.created) == 1
 
 
-def test_a_failed_create_says_the_batch_may_exist_and_records_nothing(repo: Path) -> None:
+# --------------------------------------------------------------------------- #
+# submit: the write-ahead record (a batch no record names is money nobody counts)
+# --------------------------------------------------------------------------- #
+def test_the_record_is_on_disk_as_creating_before_the_batch_is_created(repo: Path) -> None:
+    client = _FakeClient()
+    seen: list[dict[str, Any]] = []
+    client.batches.on_create = lambda: seen.append(_record(repo))  # what is on disk as create runs
+
+    _submit(repo, client)
+
+    assert len(seen) == 1
+    before = seen[0]
+    assert before["status"] == "creating"
+    assert before["batch_id"] is None  # there is no id yet
+    assert before["estimate_usd"] > 0  # what the cap check counts while the outcome is unknown
+    assert before["plan_fingerprint"]
+    assert before["findings_sha256"]
+    assert before["created_at"] == "2026-10-19T14:02:11Z"
+    assert before["custom_ids"] == ["dead-alpha", "dead-beta", "dead-gamma_py"]
+    assert before["collected"] is None
+    after = _record(repo)
+    assert after["status"] == "submitted"
+    assert after["batch_id"] == "msgbatch_test01"
+    assert after["submitted_at"] == "2026-10-19T14:02:11Z"
+    named = {"status", "batch_id", "submitted_at"}  # naming the batch changes nothing else
+    assert {k: v for k, v in after.items() if k not in named} == {
+        k: v for k, v in before.items() if k not in named
+    }
+
+
+def test_a_failed_create_leaves_a_creating_record_so_the_batch_cannot_be_forgotten(
+    repo: Path,
+) -> None:
+    """DECLARED REVERSAL of ``test_a_failed_create_says_the_batch_may_exist_and_records_nothing``.
+
+    That test pinned the bug: a timeout can follow the server creating the batch, and with
+    no record a rerun made (and paid for) a second batch the cap never saw. The record now
+    exists before the call and stays ``creating`` when the call's outcome is unknown.
+    """
     client = _FakeClient(create_error=TimeoutError("read timed out"))
-    with pytest.raises(triage.TriageError, match="may exist"):
+
+    with pytest.raises(triage.TriageError, match="may exist") as excinfo:
         _submit(repo, client)
-    assert not (repo / "reports" / "credit" / "batches").exists()
+
+    message = str(excinfo.value)
+    assert "--adopt" in message
+    assert "reports/credit/batches/2026-10-19.json" in message
+    record = _record(repo)
+    assert record["status"] == "creating"
+    assert record["batch_id"] is None
     assert not (repo / "reports" / "credit" / "ledger.jsonl").exists()
+
+
+def _must_not_scan(_text: str) -> ScanOutcome:
+    raise AssertionError("the prompts were scanned although a batch may already exist")
+
+
+def test_a_rerun_refuses_while_an_earlier_create_is_unresolved(repo: Path) -> None:
+    _fail_to_create(repo)
+    rerun = _FakeClient()
+
+    with pytest.raises(triage.SubmissionBlockedError) as excinfo:
+        _submit(repo, rerun, scanner=_must_not_scan)  # refused before the (slow) scan starts
+
+    message = str(excinfo.value)
+    assert "may exist" in message
+    assert "Console" in message
+    assert "--adopt" in message
+    assert "reports/credit/batches/2026-10-19.json" in message
+    assert rerun.models_asked == []
+    assert rerun.batches.created == []  # no second batch
+    assert _record(repo)["status"] == "creating"  # and the evidence is untouched
+
+
+def test_the_refusal_does_not_lapse_overnight(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _fail_to_create(repo)
+    _next_day(monkeypatch)
+    rerun = _FakeClient()
+
+    with pytest.raises(triage.SubmissionBlockedError):
+        _submit(repo, rerun)
+
+    assert rerun.batches.created == []
+
+
+def test_an_unresolved_create_still_counts_against_the_workstream_cap(repo: Path) -> None:
+    _write(repo, DEFAULT_CONFIG_RELPATH, _WORKFORCE_YAML.replace("C: 15", "C: 0.1"))
+    with pytest.raises(triage.TriageError):  # ~$0.085 fits under $0.10 on its own
+        _submit(repo, _FakeClient(create_error=TimeoutError("read timed out")), cap_usd=0.1)
+
+    pending = triage._pending_estimate(repo, _settings(repo))
+    assert pending == triage._decimal_of(_record(repo)["estimate_usd"])
+    assert pending > 0
+    with pytest.raises(CapExceeded):  # the unrecorded batch may be running: ~$0.17 in flight
+        triage.submit(
+            _write_findings(repo), 0.1, repo_root=repo, dry_run=True, scanner=_clean_scanner
+        )
+
+
+def test_a_dry_run_is_not_blocked_by_an_unresolved_record_but_says_so(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _fail_to_create(repo)
+    capsys.readouterr()
+
+    outcome = triage.submit(
+        _write_findings(repo), 15.0, repo_root=repo, dry_run=True, scanner=_clean_scanner
+    )
+
+    assert outcome.dry_run
+    err = capsys.readouterr().err
+    assert "creating" in err
+    assert "real submit will refuse" in err
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 413, 422, 429])
+def test_an_outright_rejection_leaves_no_record_and_blocks_nothing(repo: Path, status: int) -> None:
+    client = _FakeClient(create_error=_ApiStatusError(status))
+
+    with pytest.raises(triage.BatchCreateError, match="no batch was created") as excinfo:
+        _submit(repo, client)
+
+    assert excinfo.value.definite
+    assert _record_files(repo) == []
+    assert _submit(repo, _FakeClient()).batch_id == "msgbatch_test01"  # the fixed rerun goes on
+
+
+def _transport_failure(name: str) -> Exception:
+    """What the SDK raises when the transport fails: its own error, the transport's as cause."""
+    cause = type(name, (Exception,), {})(f"{name} from the transport")
+    error = RuntimeError("Connection error.")
+    error.__cause__ = cause
+    return error
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        _transport_failure("ConnectError"),  # TLS interception: the request never left
+        _transport_failure("ConnectTimeout"),
+        _ApiStatusError(400),
+    ],
+    ids=["connect-error", "connect-timeout", "400"],
+)
+def test_a_failure_before_the_request_left_leaves_no_record(repo: Path, error: Exception) -> None:
+    with pytest.raises(triage.BatchCreateError, match="no batch was created") as excinfo:
+        _submit(repo, _FakeClient(create_error=error))
+
+    assert excinfo.value.definite
+    assert _record_files(repo) == []
+
+
+def test_a_connect_failure_a_few_layers_down_still_counts() -> None:
+    deep = _transport_failure("ConnectError")
+    outer = RuntimeError("wrapped again")
+    outer.__cause__ = deep
+
+    assert triage._nothing_was_created(outer)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        TimeoutError("read timed out"),
+        ConnectionError("connection reset"),
+        _transport_failure("ReadTimeout"),  # the request was sent; the answer was lost
+        _transport_failure("RemoteProtocolError"),
+        _ApiStatusError(402),
+        _ApiStatusError(407),  # a proxy, not the API
+        _ApiStatusError(408),
+        _ApiStatusError(409),
+        _ApiStatusError(499),  # nginx's "client closed request": not an API status
+        _ApiStatusError(500),
+        _ApiStatusError(502),
+        _ApiStatusError(503),
+        _ApiStatusError(504),
+        _ApiStatusError(529),
+    ],
+    ids=[
+        "timeout",
+        "reset",
+        "read-timeout",
+        "protocol-error",
+        "402",
+        "407",
+        "408",
+        "409",
+        "499",
+        "500",
+        "502",
+        "503",
+        "504",
+        "529",
+    ],
+)
+def test_an_outcome_nobody_can_know_keeps_the_record(repo: Path, error: Exception) -> None:
+    with pytest.raises(triage.BatchCreateError, match="may exist") as excinfo:
+        _submit(repo, _FakeClient(create_error=error))
+
+    assert not excinfo.value.definite
+    assert _record(repo)["status"] == "creating"
+
+
+def test_nothing_is_created_if_the_record_cannot_be_written_first(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _fail(path: Path, text: str) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(triage, "_atomic_write_text", _fail)
+    client = _FakeClient()
+
+    with pytest.raises(triage.TriageError, match="nothing was sent"):
+        _submit(repo, client)
+
+    assert client.batches.created == []  # no record, no spend
+
+
+def _fail_the_second_write(monkeypatch: pytest.MonkeyPatch) -> dict[str, bool]:
+    """Let the write-ahead record through and fail the update that names the batch."""
+    state = {"armed": True}
+    real = triage._atomic_write_text
+    writes: list[Path] = []
+
+    def _second_fails(path: Path, text: str) -> None:
+        if state["armed"]:
+            writes.append(path)
+            if len(writes) == 2:
+                raise OSError("disk full")
+        real(path, text)
+
+    monkeypatch.setattr(triage, "_atomic_write_text", _second_fails)
+    return state
+
+
+def test_submit_names_the_batch_and_the_way_out_if_the_record_cannot_be_updated(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The batch exists and costs money; losing its id would orphan it."""
+    _fail_the_second_write(monkeypatch)
+
+    with pytest.raises(triage.TriageError, match="msgbatch_test01") as excinfo:
+        _submit(repo)
+
+    assert "--adopt msgbatch_test01" in str(excinfo.value)
+    assert _record(repo)["status"] == "creating"  # so a rerun refuses until it is adopted
 
 
 def _next_day(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1590,7 +1890,7 @@ def test_submit_will_not_send_to_a_retired_model(repo: Path) -> None:
     assert client.batches.created == []
 
 
-def test_submit_refuses_to_overwrite_a_record_it_would_orphan(repo: Path) -> None:
+def test_a_second_batch_the_same_day_waits_for_the_first_to_be_collected(repo: Path) -> None:
     _submit(repo, _FakeClient())
     second = _FakeClient()
     with pytest.raises(triage.TriageError, match="msgbatch_test01"):
@@ -1599,17 +1899,579 @@ def test_submit_refuses_to_overwrite_a_record_it_would_orphan(repo: Path) -> Non
     assert _record(repo)["batch_id"] == "msgbatch_test01"
 
 
-def test_submit_names_the_batch_id_if_the_record_cannot_be_written(
+def _collect_the_first_batch(repo: Path) -> triage.CollectOutcome:
+    plan = _submitted_plan(repo)
+    return _collect(repo, _FakeClient(results=[_answer_all(r) for r in plan.requests]))
+
+
+def test_a_resubmit_the_same_day_is_allowed_once_the_earlier_batch_is_collected(
+    repo: Path,
+) -> None:
+    _collect_the_first_batch(repo)
+    second = _FakeClient(ids=("msgbatch_test02",))
+
+    outcome = _submit(repo, second)
+
+    assert outcome.batch_id == "msgbatch_test02"
+    assert outcome.record_path is not None
+    assert outcome.record_path.name == f"{_FIXED_DATE}-2.json"
+    first = _record(repo)  # the collected record is not overwritten
+    assert first["batch_id"] == "msgbatch_test01"
+    assert first["collected"]
+    assert _record(repo, f"{_FIXED_DATE}-2.json")["batch_id"] == "msgbatch_test02"
+
+
+def test_a_third_submit_waits_for_the_second_although_the_first_is_collected(repo: Path) -> None:
+    _collect_the_first_batch(repo)
+    _submit(repo, _FakeClient(ids=("msgbatch_test02",)))
+    third = _FakeClient()
+
+    with pytest.raises(triage.TriageError, match="msgbatch_test02"):
+        _submit(repo, third)
+
+    assert third.batches.created == []
+
+
+def test_a_third_batch_the_same_day_takes_the_next_free_name(repo: Path) -> None:
+    _collect_the_first_batch(repo)
+    _submit(repo, _FakeClient(ids=("msgbatch_test02",)))
+    plan = _plan(repo)
+    clock = _Clock()
+    triage.collect(
+        "msgbatch_test02",
+        None,
+        repo_root=repo,
+        client=_FakeClient(results=[_answer_all(r) for r in plan.requests]),
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+
+    third = _submit(repo, _FakeClient(ids=("msgbatch_test03",)))
+
+    assert third.record_path is not None
+    assert third.record_path.name == f"{_FIXED_DATE}-3.json"
+    assert _record(repo, f"{_FIXED_DATE}-2.json")["batch_id"] == "msgbatch_test02"  # not reused
+
+
+def test_an_unreadable_record_from_today_blocks_a_second_batch(repo: Path) -> None:
+    _batches_dir(repo).mkdir(parents=True)
+    (_batches_dir(repo) / f"{_FIXED_DATE}.json").write_text("{corrupt", encoding="utf-8")
+    client = _FakeClient()
+
+    with pytest.raises(triage.SubmissionBlockedError, match="cannot be read"):
+        _submit(repo, client)
+
+    assert client.batches.created == []
+
+
+@pytest.mark.parametrize(
+    "content", ["{corrupt", "[1, 2]", ""], ids=["not-json", "not-a-dict", "empty"]
+)
+def test_an_unreadable_record_from_any_day_blocks_a_submit_and_a_dry_run_says_so(
+    repo: Path, capsys: pytest.CaptureFixture[str], content: str
+) -> None:
+    """It may be a batch nobody collected; skipping it would let the cap undercount."""
+    _batches_dir(repo).mkdir(parents=True)
+    (_batches_dir(repo) / "2026-10-01.json").write_text(content, encoding="utf-8")
+    client = _FakeClient()
+
+    with pytest.raises(
+        triage.SubmissionBlockedError, match=re.escape("2026-10-01.json cannot be read")
+    ) as excinfo:
+        _submit(repo, client)
+    assert "Repair or delete it" in str(excinfo.value)  # and the way out is named
+    assert client.models_asked == []
+
+    capsys.readouterr()
+    triage.submit(_write_findings(repo), 15.0, repo_root=repo, dry_run=True, scanner=_clean_scanner)
+    assert "2026-10-01.json cannot be read" in capsys.readouterr().err
+
+
+def test_a_creating_record_saved_with_a_byte_order_mark_still_blocks(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The batch exists and costs money; losing its id would orphan it."""
+    """Windows editors add a BOM; a record they touched must not drop out of sight."""
+    _fail_to_create(repo)
+    path = _batches_dir(repo) / f"{_FIXED_DATE}.json"
+    text = path.read_text(encoding="utf-8")
+    path.write_bytes(b"\xef\xbb\xbf" + text.encode("utf-8"))
+    _next_day(monkeypatch)  # a different day, so only the guard can stop it
+    rerun = _FakeClient()
+
+    with pytest.raises(triage.SubmissionBlockedError, match="still in state `creating`"):
+        _submit(repo, rerun)
+
+    assert rerun.batches.created == []
+
+
+def test_only_the_days_own_record_names_guard_the_day(repo: Path) -> None:
+    _batches_dir(repo).mkdir(parents=True)
+    stray = {"batch_id": "msgbatch_other", "collected": None, "workstream": "A"}
+    notes = _batches_dir(repo) / f"{_FIXED_DATE}-notes.json"
+    notes.write_text(json.dumps(stray), encoding="utf-8")
+
+    assert _submit(repo).batch_id == "msgbatch_test01"
+
+
+def test_each_same_day_batch_is_collected_into_its_own_document(repo: Path) -> None:
+    first = _collect_the_first_batch(repo)
+    _submit(repo, _FakeClient(ids=("msgbatch_test02",)))
+    plan = _plan(repo)
+    clock = _Clock()
+
+    second = triage.collect(
+        "msgbatch_test02",
+        None,
+        repo_root=repo,
+        client=_FakeClient(results=[_answer_all(r) for r in plan.requests]),
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+
+    assert first.out_path.name == f"dead-code-triage-{_FIXED_DATE}.md"
+    assert second.out_path.name == f"dead-code-triage-{_FIXED_DATE}-2.md"
+    assert "msgbatch_test01" in first.out_path.read_text(encoding="utf-8")
+    assert "msgbatch_test02" in second.out_path.read_text(encoding="utf-8")
+
+
+# --------------------------------------------------------------------------- #
+# submit: one at a time
+# --------------------------------------------------------------------------- #
+def _lock_path(repo: Path) -> Path:
+    return _batches_dir(repo) / ".submit.lock"
+
+
+def test_a_held_lock_refuses_a_second_submit_and_is_left_alone(repo: Path) -> None:
+    _batches_dir(repo).mkdir(parents=True)
+    _lock_path(repo).write_text("pid 1\n", encoding="utf-8")
+    client = _FakeClient()
+
+    with pytest.raises(triage.SubmissionBlockedError, match="another submit") as excinfo:
+        _submit(repo, client)
+
+    assert "reports/credit/batches/.submit.lock" in str(excinfo.value)
+    assert "delete the file" in str(excinfo.value)  # a killed run's lock is cleared by hand
+    assert _lock_path(repo).read_text(encoding="utf-8") == "pid 1\n"  # not ours: not removed
+    assert client.models_asked == []
+    assert client.batches.created == []
+
+
+def test_a_lock_that_cannot_be_taken_stops_the_submit_with_a_clear_message(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_open = os.open
+
+    def _denied(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+        if str(path).endswith(".submit.lock"):
+            raise PermissionError("read-only file system")
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", _denied)
+    client = _FakeClient()
+
+    with pytest.raises(triage.TriageError, match="cannot take the submit lock") as excinfo:
+        _submit(repo, client)
+
+    assert "nothing was sent" in str(excinfo.value)
+    assert not isinstance(excinfo.value, triage.SubmissionBlockedError)  # not "another submit"
+    assert client.batches.created == []
+
+
+def test_a_batches_directory_that_cannot_be_created_stops_the_submit_with_a_clear_message(
+    repo: Path,
+) -> None:
+    (repo / "reports" / "credit").mkdir(parents=True)
+    (repo / "reports" / "credit" / "batches").write_text("in the way", encoding="utf-8")
+    client = _FakeClient()
+
+    with pytest.raises(triage.TriageError, match="cannot create the directory"):
+        _submit(repo, client)
+
+    assert client.batches.created == []
+
+
+def test_the_lock_is_held_while_the_batch_is_being_created(repo: Path) -> None:
+    client = _FakeClient()
+    held: list[str] = []
+    client.batches.on_create = lambda: held.append(_lock_path(repo).read_text(encoding="utf-8"))
+
+    _submit(repo, client)
+
+    assert len(held) == 1
+    assert held[0].startswith("pid ")
+    assert not _lock_path(repo).exists()
+
+
+@pytest.mark.parametrize(
+    "how",
+    ["created", "may-exist", "rejected", "interrupted", "over-cap"],
+)
+def test_the_lock_is_released_however_the_submit_ends(repo: Path, how: str) -> None:
+    errors: dict[str, Exception] = {
+        "may-exist": TimeoutError("read timed out"),
+        "rejected": _ApiStatusError(400),
+        "interrupted": KeyboardInterrupt(),
+    }
+    if how == "over-cap":
+        _write(repo, DEFAULT_CONFIG_RELPATH, _WORKFORCE_YAML.replace("C: 15", "C: 0.01"))
+    client = _FakeClient(create_error=errors.get(how))
+
+    with contextlib.suppress(triage.TriageError, CapExceeded, KeyboardInterrupt):
+        _submit(repo, client, cap_usd=0.01 if how == "over-cap" else 15.0)
+
+    assert not _lock_path(repo).exists()
+
+
+def test_a_dry_run_neither_needs_nor_takes_the_lock(repo: Path) -> None:
+    triage.submit(_write_findings(repo), 15.0, repo_root=repo, dry_run=True, scanner=_clean_scanner)
+    assert not _batches_dir(repo).exists()  # nothing was written, the lock included
+
+    _batches_dir(repo).mkdir(parents=True)
+    _lock_path(repo).write_text("pid 1\n", encoding="utf-8")
+    outcome = triage.submit(
+        _write_findings(repo), 15.0, repo_root=repo, dry_run=True, scanner=_clean_scanner
+    )
+    assert outcome.dry_run
+    assert _lock_path(repo).exists()
+
+
+def test_a_submit_that_began_during_anothers_scan_is_stopped_by_the_recheck(repo: Path) -> None:
+    """Two overlapping submits: the first finishes while the second is still scanning prompts."""
+    first = _FakeClient(ids=("msgbatch_first",))
+    second = _FakeClient(ids=("msgbatch_second",))
+    started: list[bool] = []
+
+    def _scanner(_text: str) -> ScanOutcome:
+        if not started:
+            started.append(True)
+            _submit(repo, first)  # the whole of another submit runs inside this window
+        return ScanOutcome(clean=True, available=True)
+
+    with pytest.raises(triage.TriageError, match="msgbatch_first"):
+        _submit(repo, second, scanner=_scanner)
+
+    assert len(first.batches.created) == 1
+    assert second.batches.created == []  # it saw the other batch under the lock and stood down
+    assert [p.name for p in _record_files(repo)] == [f"{_FIXED_DATE}.json"]
+    assert not _lock_path(repo).exists()
+
+
+def test_a_submit_that_began_during_a_cut_off_one_is_stopped_by_its_creating_record(
+    repo: Path,
+) -> None:
+    cut_off = _FakeClient(create_error=TimeoutError("read timed out"))
+    second = _FakeClient()
+    started: list[bool] = []
+
+    def _scanner(_text: str) -> ScanOutcome:
+        if not started:
+            started.append(True)
+            with pytest.raises(triage.TriageError, match="may exist"):
+                _submit(repo, cut_off)
+        return ScanOutcome(clean=True, available=True)
+
+    with pytest.raises(triage.SubmissionBlockedError, match="still in state `creating`"):
+        _submit(repo, second, scanner=_scanner)
+
+    assert second.batches.created == []
+    assert second.models_asked == []
+
+
+def test_adopt_waits_for_a_submit_that_is_still_running(repo: Path) -> None:
+    _fail_to_create(repo)
+    _lock_path(repo).write_text("pid 1\n", encoding="utf-8")
+    client = MagicMock()
+
+    with pytest.raises(triage.SubmissionBlockedError, match="another submit"):
+        triage.adopt("msgbatch_found01", repo_root=repo, client=client)
+
+    assert client.mock_calls == []
+    assert _record(repo)["status"] == "creating"
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [BrokenPipeError("pipe closed"), ValueError("I/O operation on closed file")],
+    ids=["broken-pipe", "closed-file"],
+)
+def test_a_closed_stderr_does_not_stop_the_record_being_named(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    class _Closed(io.StringIO):
+        def write(self, text: str) -> int:
+            raise failure
+
+    monkeypatch.setattr(sys, "stderr", _Closed())
+
+    outcome = _submit(repo)
+
+    assert outcome.batch_id == "msgbatch_test01"
+    assert _record(repo)["status"] == "submitted"
+
+
+# --------------------------------------------------------------------------- #
+# submit --adopt: resolving a create whose outcome nobody recorded
+# --------------------------------------------------------------------------- #
+def test_adopt_turns_a_creating_record_into_a_submitted_one(repo: Path) -> None:
+    _fail_to_create(repo)
+    before = _record(repo)
+    client = _FakeClient()
+
+    outcome = triage.adopt("msgbatch_found01", repo_root=repo, client=client)
+
+    record = _record(repo)
+    assert record["status"] == "submitted"
+    assert record["batch_id"] == "msgbatch_found01"
+    assert record["adopted_at"] == "2026-10-19T14:02:11Z"
+    assert record["estimate_usd"] == before["estimate_usd"]
+    assert record["plan_fingerprint"] == before["plan_fingerprint"]
+    assert outcome.batch_id == "msgbatch_found01"
+    assert outcome.request_count == 3
+    assert outcome.record_path.resolve() == (_batches_dir(repo) / f"{_FIXED_DATE}.json").resolve()
+    assert client.models_asked == []  # adopting looks at the batch; it creates nothing
+    assert client.batches.created == []
+    assert client.batches.retrieve_calls == 1
+
+
+def test_an_adopted_batch_is_collected_like_any_other(repo: Path) -> None:
+    _fail_to_create(repo)
+    triage.adopt("msgbatch_found01", repo_root=repo, client=_FakeClient())
+    plan = _plan(repo)
+
+    outcome = _collect(
+        repo,
+        _FakeClient(results=[_answer_all(r) for r in plan.requests]),
+        batch_id="msgbatch_found01",
+    )
+
+    assert outcome.status == "ok"
+    ledger = (repo / "reports" / "credit" / "ledger.jsonl").read_text(encoding="utf-8")
+    assert json.loads(ledger.splitlines()[0])["run_id"] == "wsc-msgbatch_found01"
+
+
+def test_adopt_resolves_a_batch_whose_record_update_failed(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    disk = _fail_the_second_write(monkeypatch)
+    with pytest.raises(triage.TriageError, match="--adopt msgbatch_test01"):
+        _submit(repo)
+    disk["armed"] = False  # the disk problem is fixed
+
+    triage.adopt("msgbatch_test01", repo_root=repo, client=_FakeClient())
+
+    assert _record(repo)["status"] == "submitted"
+    assert _record(repo)["batch_id"] == "msgbatch_test01"
+
+
+def test_adopt_refuses_a_batch_that_is_not_the_size_of_the_record(repo: Path) -> None:
+    _fail_to_create(repo)
+    client = _FakeClient()
+    client.batches.request_total = 5
+
+    with pytest.raises(triage.TriageError, match="5 requests"):
+        triage.adopt("msgbatch_found01", repo_root=repo, client=client)
+
+    assert _record(repo)["status"] == "creating"
+
+
+def test_adopt_refuses_a_batch_another_record_already_owns(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _submit(repo)  # 2026-10-19: msgbatch_test01, submitted
+    _next_day(monkeypatch)
+    _fail_to_create(repo)  # 2026-10-20: creating
+
+    with pytest.raises(triage.TriageError, match=re.escape("already recorded in 2026-10-19.json")):
+        triage.adopt("msgbatch_test01", repo_root=repo, client=_FakeClient())
+
+    assert _record(repo, "2026-10-20.json")["status"] == "creating"
+
+
+@pytest.mark.parametrize(
+    "counts",
+    [
+        {"processing": 1, "succeeded": 0, "errored": 0, "canceled": 2, "expired": 0},
+        {"processing": 0, "succeeded": 1, "errored": 1, "canceled": 0, "expired": 1},
+    ],
+    ids=["running-and-canceled", "ended-with-errors-and-expiries"],
+)
+def test_adopt_counts_a_batch_in_every_state_it_can_be_in(
+    repo: Path, counts: dict[str, int]
+) -> None:
+    _fail_to_create(repo)
+    client = _FakeClient()
+    client.batches.counts = counts  # three requests, spread over the states
+
+    outcome = triage.adopt("msgbatch_found01", repo_root=repo, client=client)
+
+    assert outcome.request_count == 3
+
+
+@pytest.mark.parametrize(
+    ("created", "accepted"),
+    [
+        (datetime(2026, 10, 19, 14, 2, 11, tzinfo=timezone.utc), True),  # the same second
+        (datetime(2026, 10, 19, 15, 2, 11, tzinfo=timezone.utc), True),  # exactly an hour after
+        (datetime(2026, 10, 19, 15, 1, 11, tzinfo=timezone.utc), True),  # 59 minutes after
+        (datetime(2026, 10, 19, 13, 3, 11, tzinfo=timezone.utc), True),  # 59 minutes before
+        (datetime(2026, 10, 19, 15, 3, 11, tzinfo=timezone.utc), False),  # 61 minutes after
+        (datetime(2026, 10, 19, 13, 1, 11, tzinfo=timezone.utc), False),  # 61 minutes before
+        (datetime(2026, 8, 31, 9, 0, 0, tzinfo=timezone.utc), False),  # seven weeks before
+        (datetime(2026, 10, 19, 14, 2, 15), True),  # no zone: read as UTC
+    ],
+    ids=[
+        "same",
+        "an-hour-after",
+        "59m-after",
+        "59m-before",
+        "61m-after",
+        "61m-before",
+        "seven-weeks",
+        "naive-utc",
+    ],
+)
+def test_adopt_only_takes_a_batch_made_when_the_record_was_written(
+    repo: Path, created: datetime, accepted: bool
+) -> None:
+    _fail_to_create(repo)
+    client = _FakeClient()
+    client.batches.batch_created_at = created
+
+    if accepted:
+        triage.adopt("msgbatch_found01", repo_root=repo, client=client)
+        assert _record(repo)["status"] == "submitted"
+    else:
+        with pytest.raises(triage.TriageError, match="was created") as excinfo:
+            triage.adopt("msgbatch_found01", repo_root=repo, client=client)
+        assert "not the batch that submit was creating" in str(excinfo.value)
+        assert _record(repo)["status"] == "creating"
+
+
+def test_adopt_will_not_guess_when_it_cannot_compare_times(repo: Path) -> None:
+    _fail_to_create(repo)
+    client = _FakeClient()
+    client.batches.batch_created_at = None
+
+    with pytest.raises(triage.TriageError, match="cannot compare"):
+        triage.adopt("msgbatch_found01", repo_root=repo, client=client)
+
+    path = _batches_dir(repo) / f"{_FIXED_DATE}.json"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    del record["created_at"]  # a record that does not say when it was written
+    path.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(triage.TriageError, match="cannot compare"):
+        triage.adopt("msgbatch_found01", repo_root=repo, client=_FakeClient())
+
+
+def test_adopt_refuses_a_batch_the_api_cannot_show(repo: Path) -> None:
+    _fail_to_create(repo)
+    client = _FakeClient()
+    client.batches.retrieve_error = RuntimeError("not found")
+
+    with pytest.raises(triage.TriageError, match="could not retrieve"):
+        triage.adopt("msgbatch_typo", repo_root=repo, client=client)
+
+    assert _record(repo)["status"] == "creating"
+
+
+def test_adopt_with_nothing_to_adopt_says_so_and_calls_nothing(repo: Path) -> None:
+    client = MagicMock()
+    with pytest.raises(triage.TriageError, match="nothing to adopt"):
+        triage.adopt("msgbatch_found01", repo_root=repo, client=client)
+    assert not _batches_dir(repo).exists()  # a no-op leaves no directory and no lock
+
+    _submit(repo)  # a submitted record is not a creating one
+    with pytest.raises(triage.TriageError, match="nothing to adopt"):
+        triage.adopt("msgbatch_found01", repo_root=repo, client=client)
+    assert client.mock_calls == []
+
+
+def test_adopt_will_not_choose_between_two_creating_records(repo: Path) -> None:
+    _fail_to_create(repo)
+    copy = _batches_dir(repo) / "2026-10-18.json"
+    copy.write_text(json.dumps(_record(repo)), encoding="utf-8")
+    client = MagicMock()
+
+    with pytest.raises(triage.TriageError, match="more than one"):
+        triage.adopt("msgbatch_found01", repo_root=repo, client=client)
+
+    assert client.mock_calls == []
+
+
+def test_adopt_refuses_a_batch_that_does_not_report_its_size(repo: Path) -> None:
+    _fail_to_create(repo)
+    client = _FakeClient()
+    client.batches.counts = {"processing": 3}  # the other four states are not reported
+
+    with pytest.raises(triage.TriageError, match="request counts"):
+        triage.adopt("msgbatch_found01", repo_root=repo, client=client)
+
+    assert _record(repo)["status"] == "creating"
+
+
+def test_adopt_needs_a_batch_id(repo: Path) -> None:
+    _fail_to_create(repo)
+    client = MagicMock()
+
+    with pytest.raises(triage.TriageError, match="needs the batch id"):
+        triage.adopt("  ", repo_root=repo, client=client)
+
+    assert client.mock_calls == []
+
+
+def test_adopt_says_so_if_the_record_cannot_be_updated(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fail_to_create(repo)
 
     def _fail(path: Path, text: str) -> None:
         raise OSError("disk full")
 
     monkeypatch.setattr(triage, "_atomic_write_text", _fail)
-    with pytest.raises(triage.TriageError, match="msgbatch_test01"):
-        _submit(repo)
+
+    with pytest.raises(triage.TriageError, match="could not update"):
+        triage.adopt("msgbatch_found01", repo_root=repo, client=_FakeClient())
+
+    assert _record(repo)["status"] == "creating"
+
+
+def test_a_rejection_whose_record_cannot_be_removed_tells_the_operator_to_delete_it(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _stuck(self: Path, missing_ok: bool = False) -> None:
+        raise PermissionError("in use")
+
+    monkeypatch.setattr(Path, "unlink", _stuck)
+
+    with pytest.raises(triage.BatchCreateError, match="delete it by hand") as excinfo:
+        _submit(repo, _FakeClient(create_error=_ApiStatusError(400)))
+
+    assert excinfo.value.definite  # the batch is known not to exist; only the file is stuck
+    assert _record(repo)["status"] == "creating"  # so the next submit would refuse until it goes
+
+
+def test_collect_of_an_unrecorded_batch_points_at_adopt(repo: Path) -> None:
+    _fail_to_create(repo)
+
+    with pytest.raises(triage.TriageError, match="--adopt msgbatch_found01"):
+        _collect(repo, _FakeClient(), batch_id="msgbatch_found01")
+
+
+def test_a_record_without_a_status_is_a_submitted_batch(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A record from before states existed names its batch: not blocking, still collectable."""
+    plan = _submitted_plan(repo)
+    legacy = _record(repo)
+    del legacy["status"]
+    del legacy["submitted_at"]
+    (_batches_dir(repo) / f"{_FIXED_DATE}.json").write_text(json.dumps(legacy), encoding="utf-8")
+    _next_day(monkeypatch)
+
+    assert _submit(repo, _FakeClient(ids=("msgbatch_test02",))).batch_id == "msgbatch_test02"
+
+    outcome = _collect(repo, _FakeClient(results=[_answer_all(r) for r in plan.requests]))
+    assert outcome.status == "ok"
 
 
 def test_submit_keeps_the_findings_path_relative_to_the_repo_in_the_record(repo: Path) -> None:
@@ -1772,6 +2634,90 @@ def test_results_keyed_by_custom_id_not_position(repo: Path) -> None:
     assert "reason for orphan_helper" in document
     assert "reason for value_5" in document
     assert not re.search(r"`value_5`.*alpha", document)
+
+
+def test_hinted_names_are_the_protocol_members_and_the_validator_methods(repo: Path) -> None:
+    hints = triage.collect_hints(repo, f"{_SRC}/alpha")
+
+    assert triage.hinted_names(hints) == frozenset(
+        {"label", "render", "refresh", "_check_size", "_check_all"}
+    )
+
+
+def test_a_delete_for_a_protocol_member_is_downgraded_to_verify_in_code(repo: Path) -> None:
+    """The prompt says never to delete these; a model that does anyway is overruled in code."""
+    plan = _submitted_plan(repo)
+    results = [
+        _answer_all(r, {"render": "delete", "orphan_helper": "delete"}) for r in plan.requests
+    ]
+
+    outcome = _collect(repo, _FakeClient(results=results))
+
+    assert outcome.verdict_counts == {"delete": 1, "verify": 1, "keep": 4}
+    assert outcome.downgraded == 1
+    document = outcome.out_path.read_text(encoding="utf-8")
+    assert re.search(r"`render`.*downgraded from delete", document)
+    assert "reason for render" in document  # the model's own words are kept beside the reason
+    assert re.search(r"`orphan_helper`.*service\.py", document)
+    assert "Delete answers downgraded to `verify` by the tool: 1" in document
+    assert outcome.status == "ok"  # the model did answer: this is not a failed request
+    assert "Findings without a model answer" not in document
+
+
+def test_a_delete_for_a_pydantic_validator_is_downgraded_too(repo: Path) -> None:
+    line = _lineno(_SERVICE_HEAD, "def _check_size")
+    rows = [*_audit_rows(), _row(f"{_SRC}/alpha/service.py", line, "_check_size", "method")]
+    _submit(repo, findings_path=_write_findings(repo, rows))
+    results = [_answer_all(r, {"_check_size": "delete"}) for r in _plan(repo, rows).requests]
+
+    outcome = _collect(repo, _FakeClient(results=results))
+
+    assert outcome.verdict_counts["delete"] == 0
+    assert outcome.downgraded == 1
+
+
+def test_the_guard_touches_only_a_model_delete_of_a_hinted_name(repo: Path) -> None:
+    hints = triage.collect_hints(repo, f"{_SRC}/alpha")
+    hinted = _finding(f"{_SRC}/alpha/service.py", 14, "render", "method")
+    other = _finding(f"{_SRC}/alpha/service.py", 30, "orphan_helper")
+    verdicts = [
+        triage.Verdict(hinted, "keep", "alive", triage.ORIGIN_MODEL),
+        triage.Verdict(hinted, "verify", "unsure", triage.ORIGIN_MODEL),
+        triage.Verdict(other, "delete", "no caller", triage.ORIGIN_MODEL),
+        triage.Verdict(hinted, "delete", "not an answer", triage.ORIGIN_FALLBACK),
+        triage.Verdict(hinted, "delete", "no caller", triage.ORIGIN_MODEL),
+    ]
+
+    guarded, downgraded = triage.apply_hint_guard(verdicts, hints)
+
+    assert downgraded == 1
+    assert guarded[:4] == verdicts[:4]  # everything but the last is returned as it came
+    assert guarded[4].verdict == "verify"
+    assert guarded[4].origin == triage.ORIGIN_MODEL
+    assert guarded[4].finding == hinted
+    assert "downgraded from delete" in guarded[4].reason
+    assert "no caller" in guarded[4].reason
+
+
+def test_collect_reads_a_packages_hints_once_not_once_per_request(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rows = [_row(f"{_SRC}/alpha/util.py", n, f"value_{n}", "variable") for n in range(1, 46)]
+    _submit(repo, findings_path=_write_findings(repo, rows))
+    plan = _plan(repo, rows)
+    asked: list[str] = []
+    real = triage.collect_hints
+
+    def _counting(repo_arg: Path, pkg: str) -> triage.PackageHints:
+        asked.append(pkg)
+        return real(repo_arg, pkg)
+
+    monkeypatch.setattr(triage, "collect_hints", _counting)
+
+    _collect(repo, _FakeClient(results=[_answer_all(r) for r in plan.requests]))
+
+    assert len(plan.requests) == 3  # one package, three requests ...
+    assert asked == [f"{_SRC}/alpha"]  # ... and its hints were read once
 
 
 def test_a_result_for_a_custom_id_nobody_asked_for_is_ignored(repo: Path) -> None:
@@ -2251,6 +3197,100 @@ def test_main_maps_a_refused_spend_to_a_distinct_exit_code(
     err = capsys.readouterr().err
     assert "ERROR" in err
     assert "--cap-usd" in err  # it is the cap that refused, not the scanner
+
+
+def test_main_names_the_second_same_day_document_in_its_next_step(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _collect_the_first_batch(repo)
+    client = _FakeClient(ids=("msgbatch_test02",))
+    monkeypatch.setattr(triage, "_default_client", lambda: client)
+    monkeypatch.setattr(triage, "_default_scanner", lambda *_a, **_k: _clean_scanner)
+    argv = ["submit", "--findings", str(_write_findings(repo)), "--cap-usd", "15"]
+    capsys.readouterr()
+
+    assert triage.main([*argv, "--repo-root", str(repo)]) == 0
+
+    out = capsys.readouterr().out
+    assert f"reports/credit/batches/{_FIXED_DATE}-2.json" in out
+    assert f"collect msgbatch_test02 --out docs/analysis/dead-code-triage-{_FIXED_DATE}-2.md" in out
+
+
+def test_main_collect_says_how_many_deletes_the_guard_downgraded(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plan = _submitted_plan(repo)
+    results = [_answer_all(r, {"render": "delete"}) for r in plan.requests]
+    monkeypatch.setattr(triage, "_default_client", lambda: _FakeClient(results=results))
+    capsys.readouterr()
+
+    assert triage.main(["collect", "msgbatch_test01", "--repo-root", str(repo)]) == 0
+
+    assert "guard: 1 delete answers downgraded to verify" in capsys.readouterr().out
+
+
+def test_main_maps_a_blocked_rerun_to_the_refusal_exit_code(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _fail_to_create(repo)
+    client = _FakeClient()
+    monkeypatch.setattr(triage, "_default_client", lambda: client)
+    monkeypatch.setattr(triage, "_default_scanner", lambda *_a, **_k: _clean_scanner)
+    argv = ["submit", "--findings", str(_write_findings(repo)), "--cap-usd", "15"]
+    capsys.readouterr()
+
+    assert triage.main([*argv, "--repo-root", str(repo)]) == 3
+
+    assert "--adopt" in capsys.readouterr().err
+    assert client.batches.created == []
+
+
+def test_main_adopt_resolves_a_creating_record_without_findings_or_a_cap(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _fail_to_create(repo)
+    client = _FakeClient()
+    monkeypatch.setattr(triage, "_default_client", lambda: client)
+    capsys.readouterr()
+
+    code = triage.main(["submit", "--adopt", "msgbatch_found01", "--repo-root", str(repo)])
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "msgbatch_found01" in out
+    assert "collect msgbatch_found01" in out
+    assert _record(repo)["status"] == "submitted"
+    assert client.batches.created == []
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--findings", "f.json"],
+        ["--cap-usd", "1"],
+        ["--dry-run"],
+        ["--model", "claude-sonnet-5-5"],
+        ["--allow-unscanned-egress"],
+    ],
+    ids=["findings", "cap", "dry-run", "model", "allow-unscanned-egress"],
+)
+def test_main_adopt_takes_no_other_submit_option(extra: list[str]) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        triage.main(["submit", "--adopt", "msgbatch_found01", *extra])
+    assert excinfo.value.code == 2
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [["submit"], ["submit", "--cap-usd", "15"], ["submit", "--findings", "f.json"]],
+    ids=["neither", "no-findings", "no-cap"],
+)
+def test_main_submit_needs_the_audit_and_a_cap_unless_it_is_adopting(
+    repo: Path, argv: list[str]
+) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        triage.main([*argv, "--repo-root", str(repo)])
+    assert excinfo.value.code == 2
 
 
 def test_main_reports_a_missing_audit_json_cleanly(
@@ -2794,6 +3834,65 @@ def test_a_failing_create_is_sent_once_through_the_real_sdk(repo: Path) -> None:
         _submit(repo, client)
 
     assert paths.count("/v1/messages/batches") == 1
+    assert _record(repo)["status"] == "creating"  # a 5xx does not say whether a batch was made
+
+
+def test_a_rejected_create_through_the_real_sdk_leaves_no_record(repo: Path) -> None:
+    """A 400 from the SDK carries ``status_code``: that is how the tool knows no batch exists."""
+    http = _real_http()
+
+    def _handler(request: Any) -> Any:
+        error = {"type": "invalid_request_error", "message": "credit balance is too low"}
+        return http.Response(400, json={"type": "error", "error": error})
+
+    with pytest.raises(triage.BatchCreateError, match="no batch was created"):
+        _submit(repo, _real_client(_handler))
+
+    assert _record_files(repo) == []
+
+
+def test_a_connect_failure_through_the_real_sdk_leaves_no_record(repo: Path) -> None:
+    """TLS interception makes the SDK raise ``APIConnectionError`` from httpx's ``ConnectError``."""
+    http = _real_http()
+
+    def _handler(request: Any) -> Any:
+        raise http.ConnectError("[SSL: CERTIFICATE_VERIFY_FAILED] unable to get local issuer")
+
+    with pytest.raises(triage.BatchCreateError, match="no batch was created"):
+        _submit(repo, _real_client(_handler))
+
+    assert _record_files(repo) == []
+
+
+def test_a_read_timeout_through_the_real_sdk_keeps_the_record(repo: Path) -> None:
+    """The request was sent and the answer lost: a batch may exist."""
+    http = _real_http()
+
+    def _handler(request: Any) -> Any:
+        if request.url.path.startswith("/v1/models/"):
+            raise http.ConnectError("no models endpoint here")  # resolving the model is optional
+        raise http.ReadTimeout("timed out waiting for the answer")
+
+    with pytest.raises(triage.BatchCreateError, match="may exist"):
+        _submit(repo, _real_client(_handler))
+
+    assert _record(repo)["status"] == "creating"
+
+
+def test_adopt_reads_the_request_counts_off_the_sdks_batch_object(repo: Path) -> None:
+    http = _real_http()
+    _fail_to_create(repo)
+    paths: list[str] = []
+
+    def _handler(request: Any) -> Any:
+        paths.append(f"{request.method} {request.url.path}")
+        return http.Response(200, json=_BATCH_JSON)  # a batch of 3 requests
+
+    outcome = triage.adopt("msgbatch_wire", repo_root=repo, client=_real_client(_handler))
+
+    assert paths == ["GET /v1/messages/batches/msgbatch_wire"]
+    assert outcome.request_count == 3
+    assert _record(repo)["batch_id"] == "msgbatch_wire"
 
 
 def test_submit_then_collect_through_the_real_sdk_over_a_mock_http_server(repo: Path) -> None:

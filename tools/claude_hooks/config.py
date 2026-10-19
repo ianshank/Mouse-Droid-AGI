@@ -545,7 +545,10 @@ class BatchTriageConfig(BaseModel):
     )
     batches_dir: str = Field(
         default="reports/credit/batches",
-        description="Repo-relative directory of the per-submit batch records (<UTC date>.json).",
+        description=(
+            "Repo-relative directory of the per-submit batch records (<UTC date>.json, then "
+            "<UTC date>-2.json for a second batch that day), written before the create call."
+        ),
     )
     analysis_dir: str = Field(
         default="docs/analysis",

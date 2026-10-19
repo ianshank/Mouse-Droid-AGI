@@ -20,7 +20,12 @@ Probes and dev utilities (not shipped in the runtime path):
   verify with the Message Batches API, one request per package (a big package is split: 44 requests for 33
   packages on this tree). `submit` prices the batch from `credit.prices` and refuses over a cap before any call;
   `collect` joins results by `custom_id`, writes `docs/analysis/dead-code-triage-<date>.md` and records the real
-  cost in the ledger once. It deletes nothing. Source excerpts go to the API, so a real `submit` needs the
+  cost in the ledger once, and overrules a model `delete` for a Protocol member or pydantic validator (it
+  becomes `verify`). It deletes nothing. `submit` writes its batch record BEFORE the create call (state
+  `creating`) and names the batch in it afterwards; if the call is cut off the record stays `creating`, still
+  counts against the cap, and the next `submit` refuses (exit 3) until you check the Console and run
+  `submit --adopt <batch_id>` (or delete the record); one real `submit` runs at a time (an exclusive
+  `.submit.lock` beside the records). Source excerpts go to the API, so a real `submit` needs the
   repo's secret scanner (`gitleaks` + `.gitleaks.toml`, run on every prompt) and exits 3 without it, unless
   `--allow-unscanned-egress` is given (printed, and written into the batch record as `unscanned_egress: true`;
   `secret_scan.strict: true` forbids even that). `--dry-run` sends nothing, so it only warns. The procedure is
