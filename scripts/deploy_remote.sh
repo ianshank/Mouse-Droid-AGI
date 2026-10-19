@@ -50,19 +50,29 @@ REMOTE_INSTALL_DIR=/opt/mousedroid
 REMOTE_VENV="${REMOTE_INSTALL_DIR}/venv"
 
 # F-059 (R-2/R3-3/R3-4): `rsync --delete` must never remove rover runtime state.
-# The explicit list is the fence. `:- .gitignore` alone protects nothing on a first
-# deploy (the rover has no .gitignore yet) and afterwards only what the rover's
-# copy of it names; it also drops `!` negations, so a tracked
-# reports/endurance/.gitkeep is NOT shipped -- accepted, pinned in
-# tests/unit/scripts/test_deploy_remote_guard.py. Until the retarget (2.4b) lands,
+# The explicit excludes are the fence: the `:- .gitignore` merge alone protects nothing
+# on a first deploy (the rover has no .gitignore yet) and afterwards only what the
+# rover's copy of it names.
+#   FENCED: the seven runtime roots, anchored to the transfer root (/venv/ ...
+#     /tensorrt_cache/): never shipped, never deleted. A same-named directory deeper in
+#     the tree (docs/reports, src/mousedroid/models) is source and ships.
+#   SHIPS: every working-tree file `.gitignore` does not ignore, plus every .gitkeep
+#     sentinel. The merge drops `!` re-includes, so the first rule restores sentinels;
+#     it must precede the merge, and it wins only where the ignore is file-level
+#     (`dir/*`) because rsync never descends into an ignored directory.
+#   DOES NOT SHIP (accepted): anything tracked under a root (reports/*.json and the
+#     reports/endurance/.gitkeep sentinel) and any other tracked file `.gitignore`
+#     ignores or re-includes with `!` (.vscode/*.json, docs/planning/SMOKE_REPORT_TEMPLATE.md).
+# Pinned in tests/unit/scripts/test_deploy_remote_guard.py. Until the retarget (2.4b) lands,
 # do not run this against the rover with default paths (R3-3).
 RSYNC_PROTECT_ARGS=(
+    --filter='+ **/.gitkeep'
     --filter=':- .gitignore'
     --exclude '.git' --exclude '__pycache__' --exclude '.venv' --exclude '*.egg-info'
     --exclude 'node_modules' --exclude '.mypy_cache' --exclude '.pytest_cache'
     --exclude '.ruff_cache' --exclude '.claude'
-    --exclude 'venv/' --exclude 'weights/' --exclude 'models/' --exclude 'logs/'
-    --exclude 'reports/' --exclude 'estop_latch/' --exclude 'tensorrt_cache/'
+    --exclude '/venv/' --exclude '/weights/' --exclude '/models/' --exclude '/logs/'
+    --exclude '/reports/' --exclude '/estop_latch/' --exclude '/tensorrt_cache/'
 )
 
 DEPLOY_MODE="code-only"

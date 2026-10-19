@@ -817,6 +817,12 @@ def test_no_remote_command_string_interpolates_a_raw_validated_path() -> None:
 # The destination here has no `.gitignore` of its own -- a dry run transfers
 # none, and a first deploy has none -- which leaves the explicit list as the only
 # thing protecting the rover. That is the layer worth pinning.
+#
+# Two further properties are pinned beyond "nothing is deleted". The runtime-root
+# excludes are anchored to the transfer root, so a same-named directory deeper in the
+# tree (docs/reports, src/mousedroid/models) is source and still ships. And a tracked
+# .gitkeep sentinel survives the .gitignore merge, which drops the negation lines that
+# would otherwise re-include it.
 
 _rsync_required = pytest.mark.skipif(
     shutil.which("rsync") is None,
@@ -834,6 +840,18 @@ _RUNTIME_ROOTS = (
     "tensorrt_cache",
 )
 
+# A directory that shares a runtime root's NAME but sits below the root is source, not
+# state, and must ship. One per root, so un-anchoring any single exclude is caught.
+_NESTED_SOURCE = (
+    "docs/reports/x.md",
+    "src/mousedroid/models/x.py",
+    "src/mousedroid/venv/x.py",
+    "src/mousedroid/weights/x.py",
+    "src/mousedroid/logs/x.py",
+    "src/mousedroid/estop_latch/x.py",
+    "src/mousedroid/tensorrt_cache/x.py",
+)
+
 
 def _rsync_args() -> list[str]:
     """The fence exactly as the script defines it: one argument per output line."""
@@ -849,34 +867,42 @@ def _rsync_args() -> list[str]:
 
 @pytest.fixture
 def pc_checkout(tmp_path: Path) -> Path:
-    """The PC side of the sync: a git checkout whose ``.gitignore`` names every
-    runtime root, including one negated entry (``reports/endurance/.gitkeep``)."""
+    """The PC side of the sync: a git checkout whose ``.gitignore`` anchors every runtime
+    root (as a root entry should be) and carries two negated ``.gitkeep`` sentinels, with
+    same-named directories BELOW the root that are source and must ship."""
     src = tmp_path / "pc-checkout"
-    for rel in ("src/mousedroid", "scripts", "reports/endurance"):
-        (src / rel).mkdir(parents=True)
+    src.mkdir()
     _git(tmp_path, "init", "-q", "-b", "main", str(src))
     ignored = (
-        "venv/",
-        "weights/",
-        "models/",
-        "logs/",
+        "/venv/",
+        "/weights/",
+        "/models/",
+        "/logs/",
         "reports/endurance/*",
         "!reports/endurance/.gitkeep",
-        "estop_latch/",
-        "tensorrt_cache/",
+        "/estop_latch/",
+        "/tensorrt_cache/",
         "__pycache__/",
+        "cfg/runtime/*",
+        "!cfg/runtime/.gitkeep",
     )
-    (src / ".gitignore").write_text("\n".join(ignored) + "\n", encoding="utf-8")
-    for rel, body in (
+    tracked = (
+        (".gitignore", "\n".join(ignored) + "\n"),
         ("src/mousedroid/__init__.py", ""),
         ("src/mousedroid/main.py", "print('v2')\n"),
         ("scripts/run.sh", "#!/bin/bash\n"),
         ("README.md", "rover\n"),
         ("reports/endurance/.gitkeep", ""),
-    ):
+        ("cfg/runtime/.gitkeep", ""),
+        *((rel, "x\n") for rel in _NESTED_SOURCE),
+    )
+    for rel, body in tracked:
+        (src / rel).parent.mkdir(parents=True, exist_ok=True)
         (src / rel).write_text(body, encoding="utf-8")
     _git(src, "add", "-A")
     _git(src, "commit", "-qm", "baseline")
+    # Generated beside the sentinel and ignored by `cfg/runtime/*`: it must never ship.
+    (src / "cfg" / "runtime" / "generated.yml").write_text("generated: true\n", encoding="utf-8")
     return src
 
 
@@ -930,20 +956,47 @@ def test_delete_never_touches_runtime_state(pc_checkout: Path, rover_tree: Path)
 def test_every_tracked_file_outside_the_fenced_roots_is_transferred(
     pc_checkout: Path, rover_tree: Path
 ) -> None:
-    """R3-4: the positive direction -- and the accepted loss of negated .gitignore entries.
+    """R3-4: the positive direction, the sentinel exception, and the documented loss.
 
     A fence that over-protects would "pass" the deletion case above while quietly
     shipping nothing, so every tracked file outside the fenced roots must still go.
-    ``reports/endurance/.gitkeep`` is the accepted casualty: the ``-`` merge drops
-    ``.gitignore``'s ``!`` negations, and ``reports/`` is fenced whole in any case.
+    The ``-`` merge drops ``.gitignore``'s negation lines, so ``cfg/runtime/.gitkeep``
+    (``cfg/runtime/*`` + ``!cfg/runtime/.gitkeep``) ships only because the include rule
+    precedes the merge -- and only the sentinel does: the generated file beside it stays
+    PC-side. ``reports/endurance/.gitkeep`` is the one documented loss: it sits under a
+    fenced root, and rsync never descends into an excluded directory.
     """
     _, transferred = _dry_run(pc_checkout, rover_tree)
     tracked = set(_git(pc_checkout, "ls-files").splitlines())
     expected = {p for p in tracked if p.split("/")[0] not in _RUNTIME_ROOTS}
     assert "src/mousedroid/main.py" in expected
     assert expected <= transferred, sorted(expected - transferred)
+    assert "cfg/runtime/.gitkeep" in tracked
+    assert "cfg/runtime/.gitkeep" in transferred
+    assert "cfg/runtime/generated.yml" not in transferred
     assert "reports/endurance/.gitkeep" in tracked
     assert "reports/endurance/.gitkeep" not in transferred
+
+
+@_rsync_required
+def test_runtime_root_excludes_are_anchored(pc_checkout: Path, rover_tree: Path) -> None:
+    """Rulings 14/15: a directory that merely shares a root's NAME is source, not state.
+
+    ``/models/`` is anchored to the transfer root; an unanchored ``models/`` also drops
+    ``src/mousedroid/models/`` and ``docs/reports/`` from the sync without a word, while
+    the root-level state it exists to protect stays protected either way. One nested
+    directory per root, so un-anchoring any single exclude turns this red.
+    """
+    assert {Path(p).parent.name for p in _NESTED_SOURCE} == set(_RUNTIME_ROOTS), (
+        "premise: every runtime root has a same-named nested directory below it"
+    )
+    deleting, transferred = _dry_run(pc_checkout, rover_tree)
+    tracked = set(_git(pc_checkout, "ls-files").splitlines())
+    nested = set(_NESTED_SOURCE)
+    assert nested <= tracked, "premise: the nested directories hold tracked source"
+    assert nested <= transferred, sorted(nested - transferred)
+    at_risk = sorted(p for p in deleting if p.split("/")[0] in _RUNTIME_ROOTS)
+    assert not at_risk, f"anchoring must not unprotect the roots: {at_risk}"
 
 
 def test_the_shim_recorded_the_same_rsync_args_the_script_prints(
