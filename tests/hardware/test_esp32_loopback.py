@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pytest
 
+from mousedroid.comms.protocol import EncoderReading, ESP32CommProtocol
 from mousedroid.config.schema import Settings
 from mousedroid.validation.runtime import load_runtime_settings
 from tests._jetson_hardware import is_jetson_host, load_jetson_runtime_settings
@@ -96,17 +97,42 @@ async def driver(settings: Settings, require_serial_device):
 
 
 def _commanded_velocity(settings: Settings, fraction: float) -> float:
-    """Second motion gate (CHARTER §3, F-059).
+    """Second motion gate (CHARTER §3, F-059), and the one operator knob for smoke motion.
 
     ``jetson_smoke_test.sh`` only reaches this module behind
     ``MOUSEDROID_SMOKE_ALLOW_MOTION=1``; the Pydantic gate
     ``esp32.smoke_test_allow_motion`` (default False) must ALSO be open before
-    a non-zero command leaves the host. With it closed the stage still proves
-    command acceptance, the T:1001 frame and e-stop latency — at zero velocity.
+    a non-zero command leaves the host. With it closed the stage still checks
+    that the write did not raise (stock firmware has no per-command ACK), the
+    T:1001 frame and e-stop latency, at zero velocity.
+
+    With it open the command is ``max_velocity_mps * fraction`` capped at
+    ``esp32.smoke_test_velocity_mps``: that field governs every smoke motion, as
+    it does for ``test_motor_smoke.py``, and ``0.0`` locks all of it.
     """
-    if not settings.esp32.smoke_test_allow_motion:
+    esp32 = settings.esp32
+    if not esp32.smoke_test_allow_motion:
         return 0.0
-    return settings.esp32.max_velocity_mps * fraction
+    return min(esp32.max_velocity_mps * fraction, esp32.smoke_test_velocity_mps)
+
+
+async def _read_until_feedback_frame(
+    driver: ESP32CommProtocol, max_reads: int
+) -> tuple[EncoderReading, int]:
+    """Read encoders until a T:1001 frame answers (``imu_valid``), at most ``max_reads`` times.
+
+    The frame is not necessarily the first line the board returns after a command, so the
+    witness gets a budget of reads and the first one wins. ``max_reads=1`` is a single read.
+
+    Returns:
+        The last reading and how many reads it took.
+    """
+    reading = await driver.read_encoders()
+    reads = 1
+    while not reading.imu_valid and reads < max_reads:
+        reading = await driver.read_encoders()
+        reads += 1
+    return reading, reads
 
 
 # ---------------------------------------------------------------------------
@@ -134,31 +160,39 @@ async def test_send_velocity_moves_encoders(driver, settings: Settings) -> None:
     commanded speed into L/R, so a velocity assertion measures nothing; the
     criterion is a FEEDBACK_BASE_INFO (T:1001) frame after the command,
     witnessed by ``EncoderReading.imu_valid`` — never set by the legacy codec.
+    The frame need not be the first line back, so the board gets up to
+    ``esp32.max_consecutive_timeouts`` reads and the first witness wins.
     No skip on this branch: a silent board FAILS. ``esp32.enabled=false`` is a
     config decision (MockESP32Driver), not a measurement, so it skips with the remedy.
+    The e-stop is sent from a ``finally``: whatever the command or a read does, the
+    board is left stopped.
     """
     if not settings.esp32.enabled:
         pytest.skip(
             "esp32.enabled=false routes to MockESP32Driver; "
-            "stack config/jetson_bench_esp32.yaml to probe the board"
+            "stack config/jetson_bench_esp32.yaml or unset MOUSEDROID_ESP32__ENABLED "
+            "to probe the board"
         )
-    # 20% of max velocity — small, safe nudge (0.0 while the Pydantic motion gate is closed)
+    # 20% of max velocity, never above smoke_test_velocity_mps (0.0 while a motion gate is closed)
     max_vel = settings.esp32.max_velocity_mps
     test_vel = _commanded_velocity(settings, 0.2)
     feedback_tolerance = max_vel * 0.05
+    encoderless = not settings.esp32.chassis_has_wheel_encoders
+    max_reads = settings.esp32.max_consecutive_timeouts if encoderless else 1
 
-    await driver.send_velocity(test_vel, 0.0, 0.0)
-    await asyncio.sleep(0.1)  # allow the rover to respond
+    try:
+        await driver.send_velocity(test_vel, 0.0, 0.0)
+        await asyncio.sleep(0.1)  # allow the rover to respond
+        enc, reads = await _read_until_feedback_frame(driver, max_reads)
+    finally:
+        # Stop immediately, even when the command, the sleep or a read raised
+        await driver.emergency_stop()
 
-    enc = await driver.read_encoders()
-    # Stop immediately after reading
-    await driver.emergency_stop()
-
-    if not settings.esp32.chassis_has_wheel_encoders:
+    if encoderless:
         assert enc.imu_valid, (
             f"no FEEDBACK_BASE_INFO frame after {test_vel:.2f} m/s on "
-            f"{settings.esp32.serial_port} (command_set={settings.esp32.command_set!r}); "
-            "the encoder-less criterion needs waveshare_stock and a live board"
+            f"{settings.esp32.serial_port} (command_set={settings.esp32.command_set!r}) "
+            f"in {reads} poll(s); the encoder-less criterion needs waveshare_stock and a live board"
         )
         return
 

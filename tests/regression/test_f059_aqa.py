@@ -112,6 +112,32 @@ def _code_names(fn: ast.AST) -> set[str]:
     return names
 
 
+def _skips_when_the_board_is_configured_off(fn: ast.AST) -> bool:
+    """Whether ``fn`` holds an ``if`` on ``<...>.enabled`` whose body calls ``pytest.skip``.
+
+    Prose cannot satisfy it: a docstring, a message or an unrelated branch that merely mentions
+    the setting is not an ``If`` node reading the attribute and skipping from its body.
+    """
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.If):
+            continue
+        reads_enabled = any(
+            isinstance(sub, ast.Attribute) and sub.attr == "enabled" for sub in ast.walk(node.test)
+        )
+        skips = any(
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "skip"
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id == "pytest"
+            for stmt in node.body
+            for call in ast.walk(stmt)
+        )
+        if reads_enabled and skips:
+            return True
+    return False
+
+
 @pytest.mark.parametrize(
     ("stage", "module", "passed_line"),
     [
@@ -153,8 +179,8 @@ def test_esp32_stages_run_their_hardware_modules_and_grep_passed(
 
 
 def test_loopback_motion_tests_branch_on_the_encoder_flag_and_the_motion_gate() -> None:
-    """R-1 + review focus 2: the encoder-less criterion is present and both motion
-    commands go through the Pydantic motion gate.
+    """R-1 + review focus 2 + ruling 32: the encoder-less criterion is present, and both motion
+    commands go through the Pydantic motion gate, capped by the one operator knob.
     """
     fns = _hardware_functions("test_esp32_loopback.py")
     velocity = _code_names(fns["test_send_velocity_moves_encoders"])
@@ -163,7 +189,12 @@ def test_loopback_motion_tests_branch_on_the_encoder_flag_and_the_motion_gate() 
     assert "imu_valid" in velocity
     assert "_commanded_velocity" in velocity
     assert "_commanded_velocity" in estop
-    assert "smoke_test_allow_motion" in _code_names(fns["_commanded_velocity"])
+    gate = _code_names(fns["_commanded_velocity"])
+    assert "smoke_test_allow_motion" in gate
+    # smoke_test_velocity_mps governs every smoke motion (0.0 locks all of it), as a ceiling:
+    # `min` caps the command, a `max` would turn the setpoint into a floor.
+    assert "smoke_test_velocity_mps" in gate, "the gate must cap the command at the one knob"
+    assert "min" in gate, "smoke_test_velocity_mps is a ceiling on the command, not a floor"
 
 
 def test_power_chain_test_skips_when_the_board_is_configured_off() -> None:
@@ -173,4 +204,43 @@ def test_power_chain_test_skips_when_the_board_is_configured_off() -> None:
     the overlay; the test must skip with the remedy rather than measure the mock.
     """
     fns = _hardware_functions("test_power_chain_smoke.py")
-    assert "enabled" in _code_names(fns["test_power_chain_within_budget"])
+    assert _skips_when_the_board_is_configured_off(fns["test_power_chain_within_budget"]), (
+        "test_power_chain_within_budget must `if not <...>.enabled: pytest.skip(...)`"
+    )
+
+
+def test_loopback_velocity_test_skips_when_the_board_is_configured_off() -> None:
+    """R3-2: the loopback velocity test must not pass against MockESP32Driver either.
+
+    Same hazard as the power stage: an exported MOUSEDROID_ESP32__ENABLED=false beats the
+    overlay and a mock answers every read, so the test skips with the remedy instead.
+    """
+    fns = _hardware_functions("test_esp32_loopback.py")
+    assert _skips_when_the_board_is_configured_off(fns["test_send_velocity_moves_encoders"]), (
+        "test_send_velocity_moves_encoders must `if not <...>.enabled: pytest.skip(...)`"
+    )
+
+
+def test_loopback_velocity_test_stops_the_board_in_a_finally_and_polls_within_the_budget() -> None:
+    """Ruling 33: the board is left stopped whatever the command or a read does, and the
+    encoder-less witness gets the driver's own timeout budget of reads, not a single poll.
+    """
+    fns = _hardware_functions("test_esp32_loopback.py")
+    velocity = fns["test_send_velocity_moves_encoders"]
+    stops_in_finally = any(
+        isinstance(node, ast.Try)
+        and any(
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "emergency_stop"
+            for stmt in node.finalbody
+            for call in ast.walk(stmt)
+        )
+        for node in ast.walk(velocity)
+    )
+    assert stops_in_finally, "emergency_stop() must run in a `finally` around the command and reads"
+    names = _code_names(velocity)
+    assert "max_consecutive_timeouts" in names, "the poll budget comes from the schema"
+    assert "_read_until_feedback_frame" in names, "the T:1001 witness is polled, not read once"
+    poll = _code_names(fns["_read_until_feedback_frame"])
+    assert {"read_encoders", "imu_valid"} <= poll, "the poll must read until imu_valid answers"

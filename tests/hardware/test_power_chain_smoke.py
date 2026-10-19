@@ -21,7 +21,8 @@ async def test_power_chain_within_budget(
     if not jetson_settings.esp32.enabled:
         pytest.skip(
             "esp32.enabled=false routes to MockESP32Driver; "
-            "stack config/jetson_bench_esp32.yaml to probe the board"
+            "stack config/jetson_bench_esp32.yaml or unset MOUSEDROID_ESP32__ENABLED "
+            "to probe the board"
         )
 
     driver = build_esp32_driver(jetson_settings)

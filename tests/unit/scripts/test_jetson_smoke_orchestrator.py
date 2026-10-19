@@ -549,7 +549,8 @@ def test_esp32_stages_skip_when_the_bench_overlay_is_opted_out(
 # What `pytest -ra -v` prints for the power test when it skips: the run still exits 0.
 _POWER_SKIP_REASON = (
     "esp32.enabled=false routes to MockESP32Driver; "
-    "stack config/jetson_bench_esp32.yaml to probe the board"
+    "stack config/jetson_bench_esp32.yaml or unset MOUSEDROID_ESP32__ENABLED "
+    "to probe the board"
 )
 _POWER_SKIPPED_OUTPUT = (
     "tests/hardware/test_power_chain_smoke.py::test_power_chain_within_budget SKIPPED [100%]\n"
