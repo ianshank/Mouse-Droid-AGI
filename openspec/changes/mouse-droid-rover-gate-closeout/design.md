@@ -83,16 +83,18 @@ asserts each stage's module path, the `PASSED` grep and the `esp32_stage_configs
 `test_loopback_motion_tests_branch_on_the_encoder_flag_and_the_motion_gate` (AST over the hardware
 module: `chassis_has_wheel_encoders` and `imu_valid` in the velocity test; `_commanded_velocity(` in
 both motion tests; `smoke_test_allow_motion` in the helper), and the polarity pins
-`test_loopback_motion_gate_stays_closed_unless_the_pydantic_gate_opens` (`66ded81`),
 `test_loopback_velocity_test_skips_when_the_board_is_configured_off` and
-`test_loopback_velocity_test_stops_the_board_in_a_finally_and_polls_within_the_budget` (`44e4a17`).
+`test_loopback_velocity_test_stops_the_board_in_a_finally_and_polls_within_the_budget` (both added in
+`5a04660`, with the `_skips_when_the_board_is_configured_off` helper that `44e4a17` later tightened)
+and `test_loopback_motion_gate_stays_closed_unless_the_pydantic_gate_opens` (`66ded81`).
 
 **Rejected.** Running `tests/hardware/test_motor_smoke.py` from the motor stage instead (it reads the
 flag but is not what the F-008 `validation_command` greps; swapping the module would also change the
 e-stop latency evidence). Making the skip a `xfail` (a silent board must be red, not yellow).
 
 **Lands in** task 1.2 (PR-B — landed on `claude/f059-pr-b-gate-measures-board`: `14b83b1`, `57d6996`,
-`5a04660` (Rulings 32/33), `66ded81`/`44e4a17` (polarity pins); tip `44e4a17`, open as PR #258, base PR-0's branch); the
+`5a04660` (Rulings 32/33 and the two loopback polarity pins), `66ded81` (the motion-gate polarity
+pin), `44e4a17` (tightens the enabled-skip helper); tip `44e4a17`, open as PR #258, base PR-0's branch); the
 overlay flag in 2.1 (PR-D — landed `dc5eedf`, pre-rebase `1263a5d`; PR #259, base PR-B's branch).
 Asymmetry with the power stage is recorded in D-4 (R3-5).
 
@@ -348,11 +350,14 @@ SHAs: 3a6a551→3311d28, f76b2c3→e02f71e, 1a43e3b→3de8c3f, 7679361→19d9a24
   is also why a `docker compose build` needs the unit path to be picked up. **The rule (Rulings
   39/40):** the unit runs `docker compose up --abort-on-container-exit` *attached* (line 79) with
   `Restart=on-failure` and `RestartSec=10` (lines 83–84), so an in-place restart of a container the
-  unit manages makes compose abort and the unit fail, after which systemd's on-failure retry runs
-  `ExecStartPre` + `compose up` over whatever state the container is in — `ExecStop=` is skipped when
-  the main process exits on its own, so ~~(fix round 2) a recreate by detour through `compose down`
-  10 s later~~ is not what happens; what does is unverified on hardware, and the rule is never to race
-  it. `container` is therefore allowed only when NO `mousedroid-docker` unit is enabled AND its
+  unit manages makes compose abort and the unit fail; `ExecStop=` runs even after a self-exit
+  (systemd.service(5): the stop operation is always performed once the service started successfully,
+  even when its processes terminated on their own), so the unit ends in `compose down` and the
+  `Restart=on-failure` retry recreates the container through `ExecStartPre` + `compose up` after
+  `RestartSec` — round 2's "recreate by detour" was the documented behaviour; ~~(fix round 3)
+  `ExecStop=` is skipped when the main process exits on its own~~ was not. The refusal exists for
+  that reason; the behaviour on this rover is still to be observed once on the bench, and the rule is
+  never to race it. `container` is therefore allowed only when NO `mousedroid-docker` unit is enabled AND its
   `ActiveState` is `inactive` (compose-only, `restart: unless-stopped`); `active`, `activating` (the
   `RestartSec` window), `failed` and an unreadable state all **refuse**, fail closed, before any sync
   and again at restart time (`read_unit_state`), and the unit-mode "runs under compose only" hint
@@ -465,9 +470,9 @@ rover has none; the bare-metal installer is `--full`'s). Probing the container o
 restart (compose has not listed it yet; the check would be skipped in silence). A single hard-wired
 restart (the unit restart recreates; the in-place restart skips the overlay sync and preflight —
 the operator must choose, so the mode is a variable). An in-place `docker restart` under a unit that is enabled or in any state but
-`inactive` (compose aborts, the unit fails, and systemd's on-failure retry runs `ExecStartPre` +
-`compose up` over whatever state the container is in — the combination the script refuses, fail
-closed).
+`inactive` (compose aborts, the unit fails, `ExecStop=` runs `compose down` even after the self-exit
+— systemd.service(5) — and the on-failure retry recreates the container after `RestartSec`: the
+combination the script refuses, fail closed).
 
 **Lands in** tasks 2.4a then 2.4b as one PR — PR-E/F, open as PR #260 (base trunk `f57d99b`; closes
 #253): `3311d28`, `e02f71e` (2.4a) and `3de8c3f`, `19d9a24`, `b3e7732`, `30c6c6a`, `4fa0014` (2.4b)
@@ -542,8 +547,9 @@ forwarded per command. After step 3.3's git-fetch delivery the restart follows t
 39/40): with the unit enabled, or its `ActiveState` anything but `inactive` (`active`, `activating`,
 `failed`, unreadable), restart **through the unit** and accept the recreate — an in-place restart of
 a container the attached `compose up --abort-on-container-exit` manages aborts compose and fails the
-unit, after which systemd's on-failure retry runs `ExecStartPre` + `compose up` over whatever state
-the container is in (unverified on hardware; never race it); re-run the import probe, since a
+unit, whose `ExecStop=` then runs `compose down` even after the self-exit (systemd.service(5)) and
+whose on-failure retry recreates the container after `RestartSec` — a recreate by detour, still to be
+observed once on this rover; never race it; re-run the import probe, since a
 recreate drops hot-installed packages. Only with no unit enabled and `ActiveState` `inactive` is
 `docker restart mousedroid` the restart. The git-fetch path runs no floor guard — that guard (Ruling
 38) protects `deploy_remote.sh --config-only` — so the ladder orders code before config by hand: the

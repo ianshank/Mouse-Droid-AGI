@@ -339,10 +339,18 @@ Recorded so a later pass does not re-raise them.
 9. **Fix round 3 (2026-10-19) corrections** — Ruling 38's text (the floor guard tells an unreachable
    rover from a stale tree; a drift pin keeps the probed path honest, #191 having moved the field
    once); Rulings 39/40 as landed (`container` only with no unit enabled and `ActiveState`
-   `inactive`, refused otherwise); the "systemd re-runs it through `compose down` after 10 s" claim
-   softened — `ExecStop=` is skipped when the main process exits on its own, so the on-failure
-   retry is `ExecStartPre` + `compose up` over whatever state the container is in, unverified on
-   hardware and never to be raced; PR numbers and the rebased PR-D/PR-E SHAs.
+   `inactive`, refused otherwise); ~~the "systemd re-runs it through `compose down` after 10 s" claim
+   softened — `ExecStop=` is skipped when the main process exits on its own~~ (wrong; reversed in
+   correction 10); PR numbers and the rebased PR-D/PR-E SHAs.
+10. **Fix round 4 (2026-10-19) corrections** — round 3's "`ExecStop=` is skipped when the main process
+   exits on its own" was false: systemd.service(5) performs the stop operation whenever the service
+   started successfully, even if its processes terminated on their own, so an in-place restart under
+   an attached unit ends in `compose down` + a recreate after `RestartSec` — round 2's "recreate by
+   detour" was the documented behaviour; the refusal exists for that reason; the behaviour on this
+   rover is still to be observed once on the bench. The safety rule (refuse `container` while the
+   unit is enabled or not inactive) is unchanged. Also: the deploy spec's bench-ordering scenario now
+   carries the landed predicate, and the loopback polarity pins are attributed to the commits that
+   added them (`5a04660`, `66ded81`; `44e4a17` only tightened a helper).
 
 ## 7. Success criteria
 

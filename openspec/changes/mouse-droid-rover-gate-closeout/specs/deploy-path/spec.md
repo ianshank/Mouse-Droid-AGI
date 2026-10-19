@@ -123,10 +123,11 @@ D-6). The scenarios below describe the fence PR-E landed (`claude/f059-pr-e-rsyn
   3.3's hot-installs recreates the container and discards them unless the image was rebuilt
 - **AND** `MOUSEDROID_REMOTE_RESTART_MODE=container` is **refused**, fail closed, before any sync
   and again at restart time (`read_unit_state`; `30c6c6a`, `4fa0014`): an in-place `docker restart`
-  of a container the attached unit manages makes compose abort and the unit fail, after which
-  systemd's on-failure retry runs `ExecStartPre` + `compose up` over whatever state the container is
-  in — `ExecStop=` is skipped when the main process exits on its own; unverified on hardware, never
-  raced — and the `RestartSec` auto-restart window is inside the refusal
+  of a container the attached unit manages makes compose abort and the unit fail; `ExecStop=` runs
+  even after a self-exit (systemd.service(5)), so the unit ends in `compose down` and the
+  `Restart=on-failure` retry recreates the container after `RestartSec` — the refusal exists for
+  that reason; the behaviour on this rover is still to be observed once on the bench, never raced —
+  and the `RestartSec` auto-restart window is inside the refusal
 - **AND** the unit-mode "runs under compose only" hint uses the same predicate, so it is never given
   where `container` would refuse
 - **AND** pinned by `tests/unit/scripts/test_deploy_remote_guard.py::test_the_default_restart_mode_restarts_the_unit_and_not_the_container`,
@@ -214,10 +215,12 @@ thresholds there trips `battery_critical` on a missing reading (review focus 3).
 - **WHEN** trunk is delivered by git-fetch
 - **THEN** `sudo bash scripts/sync_jetson_overlay.sh` runs only after `import mousedroid.main`
   succeeds on the new tree
-- **AND** the restart that follows obeys the rule: through the unit when `systemctl is-active
-  mousedroid-docker` prints `active` — accepting the recreate, re-running the import probe, rebuilding
-  the image when more than a few packages were hot-installed — and in place only when no unit is
-  active (Ruling 39; ~~Ruling 37's always-in-place wording~~)
+- **AND** the restart that follows obeys the landed rule: through the unit when it is enabled or its
+  `ActiveState` is anything but `inactive` — an enabled-but-stopped or `activating` unit refuses the
+  in-place restart — accepting the recreate, re-running the import probe, rebuilding the image when
+  more than a few packages were hot-installed; in place only when no unit is enabled and the unit is
+  `inactive` (Rulings 39/40; ~~Ruling 37's always-in-place wording~~; ~~round 2's `is-active`-alone
+  predicate~~)
 
 ## Requirement: firmware MUST be hash-pinned in a tracked record and flashed only by a verify-then-dry-run script
 
