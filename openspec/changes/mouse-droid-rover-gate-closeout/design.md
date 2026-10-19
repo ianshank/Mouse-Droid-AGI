@@ -92,8 +92,8 @@ flag but is not what the F-008 `validation_command` greps; swapping the module w
 e-stop latency evidence). Making the skip a `xfail` (a silent board must be red, not yellow).
 
 **Lands in** task 1.2 (PR-B — landed on `claude/f059-pr-b-gate-measures-board`: `14b83b1`, `57d6996`,
-`5a04660` (Rulings 32/33), `66ded81`/`44e4a17` (polarity pins); tip `44e4a17`, open as PR #258); the
-overlay flag in 2.1 (PR-D — landed `1263a5d`; PR-D is rebasing onto PR-B).
+`5a04660` (Rulings 32/33), `66ded81`/`44e4a17` (polarity pins); tip `44e4a17`, open as PR #258, base PR-0's branch); the
+overlay flag in 2.1 (PR-D — landed `dc5eedf`, pre-rebase `1263a5d`; PR #259, base PR-B's branch).
 Asymmetry with the power stage is recorded in D-4 (R3-5).
 
 ## D-2 — The production overlay speaks the stock dialect at 115200
@@ -137,8 +137,8 @@ ran, after PR-H.
 overlay would flip). Keeping the env-only lever (the overlay would keep lying about the board it is
 for).
 
-**Lands in** task 2.1 (PR-D — landed `1263a5d` on `claude/f059-pr-d-config-flips`; docs `b770987`;
-PR-D is rebasing onto PR-B).
+**Lands in** task 2.1 (PR-D — landed `dc5eedf` on `claude/f059-pr-d-config-flips`, docs `3c98f1e` —
+pre-rebase `1263a5d`/`b770987`; rebased onto PR-B, tip `7ca10d0`, open as PR #259).
 
 ## D-3 — Preflight probes the board through the public driver protocol
 
@@ -204,7 +204,8 @@ by waiting for unsolicited frames (no bounded criterion).
 
 **Lands in** tasks 1.3 and 1.4 (PR-C — landed `a70ce29`, `f3e6644`, `9439b14`, the fix round
 `48820c4`, `95de41f` (the trend pin judges the unit by its last `TREND_CHECKS` line) and `dffb332`
-(changelog) on `claude/f059-pr-c-preflight-probe`; tip `dffb332`, open as PR #256). Docs: `docs/runbooks/jetson-full-validation.md`
+(changelog) on `claude/f059-pr-c-preflight-probe`; tip `dffb332`, open as PR #256, base PR-0's
+branch). Docs: `docs/runbooks/jetson-full-validation.md`
 line 158 ("construction-only" → "a probe, not a construction check … FAIL on silence or a connect
 error … run it cold"), `docs/runbooks/jetson-rover-smoke.md` (the one-time downgrade row).
 
@@ -233,7 +234,8 @@ One docstring sentence records it (task 1.2); no new test.
 **Code before config (plan review-focus 3).** A rover still running `032942b` has no 1.0 V floor
 (the field post-dates the pin), so installing these thresholds before trunk code trips
 `battery_critical` on a missing reading. The bench ladder orders code first (3.3), and
-`bash scripts/deploy_remote.sh --config-only` refuses a remote tree without the field (D-6).
+`bash scripts/deploy_remote.sh --config-only` refuses a remote tree without the field, tells an
+unreachable rover apart from a stale one, and pins the probed path against drift (Ruling 38, D-6).
 
 **Pins inverted** (task 2.2):
 `tests/regression/test_jetson_deploy_prep_backwards_compat.py::test_default_plus_production_overlay_stack_loads`
@@ -250,7 +252,7 @@ line is present and floorless).
 keeps the power stage vacuous for exactly the retest that needs it). Adding a floor to the power
 test (turns a missing reading back into a green).
 
-**Lands in** task 2.2 (PR-D — landed `906daf2`; PR-D is rebasing onto PR-B).
+**Lands in** task 2.2 (PR-D — landed `e2e3ec1`, pre-rebase `906daf2`; PR #259).
 
 ## D-5 — Latch ON in production, explicitly OFF on the lidar-only stack; the AQA loads the stack
 
@@ -291,21 +293,26 @@ lidar_only YAML declares the key) and `::test_runbooks_point_operators_at_the_re
 **Rejected.** Leaving the latch OFF with the software watchdog only (CF-2's alternative). Relying
 on inheritance (the exact defect R-7 found).
 
-**Lands in** task 2.3 (PR-D — landed `345b504`; the `--config` clause is Ruling 36, landed as
-`2f15e43` — the re-arm commands in the three runbooks and the overlay comment name the production
-overlay, pinned in `test_f059_aqa.py`; PR-D is rebasing onto PR-B).
+**Lands in** task 2.3 (PR-D — landed `410de11`; the `--config` clause is Ruling 36, landed as
+`c06561b` — the re-arm commands in the three runbooks and the overlay comment name the production
+overlay, pinned in `test_f059_aqa.py`, with `7ca10d0` naming the overlay in the hints; pre-rebase
+`345b504`/`2f15e43`; rebased onto PR-B, tip `7ca10d0`, open as PR #259).
 
 ## D-6 — Deploy path: fence and retarget `rsync --delete` in one PR; git-fetch is the recorded fallback
 
 *(reconstructed 2026-10-19 — original in the drafting-session zip; rewritten fix round 1 to the
-fence PR-E landed — Rulings 18, 23, 24, 26, 27, 37, 39)*
+fence PR-E landed — Rulings 18, 23, 24, 26, 27, 35, 37, 38, 39, 40)*
 
-**Landed state (fix round 2).** `claude/f059-pr-e-rsync-fence` at `1e05241` carries the fence, the
-retarget, the floor-probe path pin, the health-check wait scoped to a unit restart this run made
-(Ruling 35) and `MOUSEDROID_REMOTE_RESTART_MODE` with default **`unit`** — which recreates, so a bare
-`bash scripts/deploy_remote.sh` after bench step 3.3's hot-installs discards them unless the image
-was rebuilt. Round 3 — Ruling 39's refusal of `container` while the unit is active — is in flight
-(`c8cade6`, failing tests first).
+**Landed state (fix round 3).** `claude/f059-pr-e-rsync-fence`, rebased onto trunk `f57d99b`, tip
+`4fa0014`, open as PR #260 (base trunk; closes #253): `3311d28` the fence, `e02f71e` anchored roots
+and sentinels, `3de8c3f` the retarget, `19d9a24` no venv fall-through and the bounded wait,
+`b3e7732` the floor-probe path pin and its rc-255 branch, the wait scoped to a unit restart this run
+made (Ruling 35) and `MOUSEDROID_REMOTE_RESTART_MODE` with default **`unit`** — which recreates, so a
+bare `bash scripts/deploy_remote.sh` after bench step 3.3's hot-installs discards them unless the
+image was rebuilt — and `30c6c6a` + `4fa0014` the in-place restart only when no unit is enabled and
+`ActiveState` is `inactive`, refused otherwise (Rulings 39/40). Earlier rounds cited the pre-rebase
+SHAs: 3a6a551→3311d28, f76b2c3→e02f71e, 1a43e3b→3de8c3f, 7679361→19d9a24, 1e05241→b3e7732,
+62ca779→30c6c6a, 1e26de7→4fa0014.
 
 **Decision (CF-4, split per R-2 into two tasks, one PR).**
 
@@ -330,35 +337,52 @@ was rebuilt. Round 3 — Ruling 39's refusal of `container` while the unit is ac
   `/opt/mousedroid/src` in `scripts/validate_compose_env.sh::_SOURCE_PATHS_IN_USE`) is **not**
   retargeted. `restart_service` restarts `mousedroid-docker` when enabled (the unit's `ExecStartPre`
   re-syncs the overlay and runs the fail-closed preflight), then the bare-metal unit if that is
-  enabled too — and the mode is explicit, `MOUSEDROID_REMOTE_RESTART_MODE=unit|container` (`1e05241`,
-  default `unit`; Rulings 37/39). `unit` is the systemd restart: `ExecStop` is `docker compose down`
-  (`scripts/mousedroid-docker.service` line 80), so the container is **recreated** and its writable
-  layer — every hot-installed package — discarded, and the `ExecStartPre` overlay sync + preflight
-  re-run. `container` is `docker restart mousedroid` in place: it keeps the image the container was
-  created from, bind-mounted code and the hand-synced overlay take effect and the writable layer
-  survives — which is also why a `docker compose build` needs the unit path to be picked up.
-  **The rule (Ruling 39):** the unit runs `docker compose up --abort-on-container-exit` *attached*
-  (line 79) with `Restart=on-failure` and `RestartSec=10` (lines 83–84), so an in-place restart of a
-  container the unit is attached to makes compose abort, the unit fail and systemd re-run it through
-  `compose down` 10 s later — a recreate by detour. While `systemctl is-active mousedroid-docker`
-  prints `active`, only `unit` is correct and the script **refuses** `container` (round 3, in flight);
-  with no unit active
-  (compose-only, `restart: unless-stopped`), `container` is the in-place restart. The bench (3.3)
-  applies the same rule and accepts the recreate when the unit is active (re-run the import probe;
-  more than a few hot-installed packages → rebuild the image; the camera may need a host reboot,
-  2026-07-15). `run_health_check` **waits** only after a unit restart this run made (`DOCKER_UNIT_RESTARTED`, set where `restart_service`
+  enabled too — and the mode is explicit, `MOUSEDROID_REMOTE_RESTART_MODE=unit|container` (`b3e7732`, refined by
+  `30c6c6a`/`4fa0014`; default `unit`; Rulings 37/39/40). `unit` is the systemd restart: `ExecStop` is
+  `docker compose down` (`scripts/mousedroid-docker.service` line 80), so the container is
+  **recreated** and its writable layer — every hot-installed package — discarded, and the
+  `ExecStartPre` overlay sync + preflight re-run. `container` is `docker restart mousedroid` in place:
+  it keeps the image, the compose config and the `env_file` the container was created with — none of
+  which `docker restart` re-reads — and skips the unit's fail-closed `ExecStartPre` preflight;
+  bind-mounted code and the hand-synced overlay take effect and the writable layer survives, which
+  is also why a `docker compose build` needs the unit path to be picked up. **The rule (Rulings
+  39/40):** the unit runs `docker compose up --abort-on-container-exit` *attached* (line 79) with
+  `Restart=on-failure` and `RestartSec=10` (lines 83–84), so an in-place restart of a container the
+  unit manages makes compose abort and the unit fail, after which systemd's on-failure retry runs
+  `ExecStartPre` + `compose up` over whatever state the container is in — `ExecStop=` is skipped when
+  the main process exits on its own, so ~~(fix round 2) a recreate by detour through `compose down`
+  10 s later~~ is not what happens; what does is unverified on hardware, and the rule is never to race
+  it. `container` is therefore allowed only when NO `mousedroid-docker` unit is enabled AND its
+  `ActiveState` is `inactive` (compose-only, `restart: unless-stopped`); `active`, `activating` (the
+  `RestartSec` window), `failed` and an unreadable state all **refuse**, fail closed, before any sync
+  and again at restart time (`read_unit_state`), and the unit-mode "runs under compose only" hint
+  uses the same predicate. The bench (3.3) applies the same rule and accepts the recreate whenever a
+  unit is enabled or not inactive (re-run the import probe; more than a few hot-installed packages →
+  rebuild the image; the camera may need a host reboot, 2026-07-15). `run_health_check` **waits** only after a unit restart this run made (`DOCKER_UNIT_RESTARTED`, set where `restart_service`
   restarts the unit): `wait_for_container` polls once a second, wall-clock-bounded by
   `MOUSEDROID_REMOTE_HEALTH_WAIT_S` (default 30; `0` probes once; a malformed value is refused; an ssh
   255 ends the wait at once), for the pinned container name `mousedroid` to be listed, then execs the
   health check — a container that never appears after that restart is a **WARNING, never a silent
   skip** (Ruling 27); when this run did not restart the unit the container is probed once and an
-  unlisted one is an info line, not a warning (Ruling 35; `1e05241`).
+  unlisted one is an info line, not a warning (Ruling 35; `b3e7732`).
   `--code-only` **never runs `deploy_jetson.sh`** (Ruling 26): with no venv it leaves the bare-metal
   installer alone, with neither a venv nor the Docker unit it warns and carries on; only `--full` runs
   the installer, and the header says not to run `--full` against the Docker-spine rover.
-  **Code-before-config guard:** `deploy_config` first runs `require_remote_safety_floor`, which greps
+  **Code-before-config guard:**
+  `deploy_config` first runs `require_remote_safety_floor`, which greps
   `battery_implausible_below_v` in the remote `src/mousedroid/config/schema/reward_safety.py` and dies
-  "deploy code first" when it is absent (D-4).
+  "deploy code first" when it is absent (D-4). **Ruling 38 (`b3e7732`):** the guard tells an
+  unreachable rover from a stale tree — ssh rc 255 dies "cannot reach the rover at `<host>`; nothing
+  installed", any other failure dies "predates `safety.battery_implausible_below_v` — deploy code
+  first" — and a drift pin,
+  `tests/unit/scripts/test_deploy_remote_guard.py::test_the_safety_floor_probe_reads_a_marker_this_tree_carries`
+  (proven live by `::test_the_safety_floor_probe_pin_goes_red_on_a_scratch_copy`), regexes the
+  `grep -q <marker> ${REMOTE_SRC_Q}/<path>` line out of the script and asserts `<path>` exists in this
+  repository and contains `<marker>`: the field already moved once, when #191 split the single
+  `schema.py` module under `src/mousedroid/config/` into the `src/mousedroid/config/schema/` package,
+  and a later move would otherwise make the guard refuse every `--config-only` after new code was on
+  disk and before anything was restarted; `::test_config_only_says_so_when_the_rover_drops_out_at_the_floor_probe`
+  pins the rc-255 branch.
 
 **R3-3 — the default was a live hazard, not a nesting bug.** ~~(rev 2) The current default nests the
 repo root inside the package parent.~~ → **(rev 2, after R3-3)** on a clean rover it `--delete`d
@@ -418,8 +442,18 @@ ubuntu-latest ships it): `tests/unit/scripts/test_deploy_remote_guard.py::test_d
 `::test_the_health_check_waits_for_the_container_to_be_listed`,
 `::test_the_health_check_warns_when_the_container_is_never_listed`,
 `::test_a_malformed_health_wait_is_refused`, `::test_the_remote_container_is_the_one_compose_pins`;
-the restart-mode pins landed with `1e05241` (mode selection, default `unit`); the refusal of
-`container` under an active unit is round 3's pin.
+the restart-mode pins (`b3e7732`, `30c6c6a`, `4fa0014`):
+`::test_the_default_restart_mode_restarts_the_unit_and_not_the_container`,
+`::test_the_container_restart_mode_restarts_in_place_when_no_unit_is_enabled_or_running`,
+`::test_the_container_restart_mode_refuses_when_a_unit_is_enabled_or_running`,
+`::test_the_container_restart_mode_refuses_when_the_unit_state_cannot_be_read`,
+`::test_the_restart_time_check_uses_the_same_predicate`,
+`::test_the_compose_only_hint_is_not_given_when_container_mode_would_refuse`,
+`::test_the_container_restart_mode_warns_when_there_is_nothing_to_restart`,
+`::test_the_help_says_plainly_that_the_unit_restart_recreates_the_container`; the floor-guard pins
+`::test_config_only_says_so_when_the_rover_drops_out_at_the_floor_probe`,
+`::test_the_safety_floor_probe_reads_a_marker_this_tree_carries`,
+`::test_the_safety_floor_probe_pin_goes_red_on_a_scratch_copy` (Ruling 38).
 
 **Rejected.** Retargeting first, or in a separate later PR (R-2: deletes `venv/`, `weights/`,
 `models/` on first deploy; Ruling 18: a trunk window with the fenced-but-mistargeted script).
@@ -430,13 +464,14 @@ shipping). Falling through to `deploy_jetson.sh` when `--code-only` finds no ven
 rover has none; the bare-metal installer is `--full`'s). Probing the container once right after the
 restart (compose has not listed it yet; the check would be skipped in silence). A single hard-wired
 restart (the unit restart recreates; the in-place restart skips the overlay sync and preflight —
-the operator must choose, so the mode is a variable). An in-place `docker restart` under an active
-unit (compose aborts, systemd recreates by detour 10 s later — the combination the script refuses).
+the operator must choose, so the mode is a variable). An in-place `docker restart` under a unit that is enabled or in any state but
+`inactive` (compose aborts, the unit fails, and systemd's on-failure retry runs `ExecStartPre` +
+`compose up` over whatever state the container is in — the combination the script refuses, fail
+closed).
 
-**Lands in** tasks 2.4a then 2.4b as one PR — PR-E, landed `3a6a551`, `f76b2c3` (2.4a) and
-`1a43e3b`, `7679361`, `1e05241` (2.4b — Rulings 35/37/38: the floor-probe path pinned, the wait
-scoped, the restart mode with default `unit`) on `claude/f059-pr-e-rsync-fence`; round 3 (Ruling
-39) in flight at `c8cade6`; ticks at merge.
+**Lands in** tasks 2.4a then 2.4b as one PR — PR-E/F, open as PR #260 (base trunk `f57d99b`; closes
+#253): `3311d28`, `e02f71e` (2.4a) and `3de8c3f`, `19d9a24`, `b3e7732`, `30c6c6a`, `4fa0014` (2.4b)
+on `claude/f059-pr-e-rsync-fence`, tip `4fa0014`; ticks at merge.
 
 ## D-7 — The evidence record
 
@@ -449,7 +484,9 @@ the probe transcripts (3.5/3.6/3.7/3.8), `f008-check-<stamp>.txt` (the `validate
 output), and `decision.md` — the decision-tree leaf taken, the commands run, the frames seen, and the
 firmware provenance ("stock as shipped, unflashed" or the app sha256 written). `.txt`/`.md` only —
 `*.log` is gitignored (`.gitignore` line 112). `hw-evidence-auditor` must trace every hardware claim
-in `decision.md` to a file in that directory before PR-H merges.
+in `decision.md` to a file in that directory before PR-H merges. When `bash scripts/deploy_remote.sh`
+delivered the tree instead of git-fetch, its transcript belongs in the record too: the floor-guard
+line tells "cannot reach the rover; nothing installed" from "deploy code first" (Ruling 38, D-6).
 
 **F-008 closes only on that record.** `status: "done"`, `implemented_in` = the **full hex SHA the
 rover ran** (never a branch name — `.claude/skills/feature-closeout/SKILL.md`), `notes` += evidence
@@ -501,12 +538,17 @@ opted out (`MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY=`) the `motor` and `power` stag
 without running pytest** — a mock PASS would be a green that measures nothing — and with the overlay
 stacked a test that skips is a stage **FAIL** (`57d6996`). The checkpoint's substance is the health
 check and the `camera` stage. The board is first measured at 3.5/3.6, with the bench overlay
-forwarded per command. After step 3.3's git-fetch delivery the restart follows the rule (Ruling 39):
-with `systemctl is-active mousedroid-docker` printing `active`, restart **through the unit** and
-accept the recreate (the attached `compose up --abort-on-container-exit` + `Restart=on-failure`
-would turn an in-place restart into a recreate by detour anyway); re-run the import probe, since a
-recreate drops hot-installed packages. Only with no unit active is `docker restart mousedroid` the
-restart. ~~(fix round 1, Ruling 37) always in place~~.
+forwarded per command. After step 3.3's git-fetch delivery the restart follows the rule (Rulings
+39/40): with the unit enabled, or its `ActiveState` anything but `inactive` (`active`, `activating`,
+`failed`, unreadable), restart **through the unit** and accept the recreate — an in-place restart of
+a container the attached `compose up --abort-on-container-exit` manages aborts compose and fails the
+unit, after which systemd's on-failure retry runs `ExecStartPre` + `compose up` over whatever state
+the container is in (unverified on hardware; never race it); re-run the import probe, since a
+recreate drops hot-installed packages. Only with no unit enabled and `ActiveState` `inactive` is
+`docker restart mousedroid` the restart. The git-fetch path runs no floor guard — that guard (Ruling
+38) protects `deploy_remote.sh --config-only` — so the ladder orders code before config by hand: the
+overlay sync comes only after the import probe passes. ~~(fix round 1, Ruling 37) always in place~~
+~~(fix round 2, Ruling 39) `is-active` alone decides~~.
 
 **Time box.** Session 1 (bench day 1 — the runbook dates its evidence directory
 `reports/esp32_bench/<date>/` 2026-10-20) = 3.1–3.9 + the decision; session 2 (the following day) =
@@ -595,8 +637,7 @@ single-image script with a new path (wrong layout, wrong baud, no verification).
 `combine/target.bin` (unidentified, smaller than either app).
 
 **Lands in** task 2.5 (PR-G — landed `cee6e9e`, `dad0ac4`, `8866101` and the security round `1e69f8e`
-(the record validator runs isolated; operands hardened) on `claude/f059-pr-g-firmware`; tip
-`1e69f8e`, open as PR #257).
+(the record validator runs isolated; operands hardened) on `claude/f059-pr-g-firmware`; tip `1e69f8e`, rebased onto trunk `f57d99b`, open as PR #257, base trunk).
 
 ## D-11 — The bench overlay (EX-1): the only place `esp32.enabled` becomes true
 
@@ -648,7 +689,7 @@ YAML).
 
 **Lands in** task 1.1 (PR-B — landed `bbbda25`, `4706338` and the opt-out SKIP `df5bcd3` (Ruling 31:
 the reason reads `bench ESP32 overlay opted out (MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY is empty): no chassis declared, stage not run`) on `claude/f059-pr-b-gate-measures-board`; tip `44e4a17`,
-open as PR #258). Bench use: `BENCH_CFG=…/jetson_production.yaml,…/jetson_bench_esp32.yaml`
+open as PR #258, base PR-0's branch). Bench use: `BENCH_CFG=…/jetson_production.yaml,…/jetson_bench_esp32.yaml`
 forwarded per `docker exec`; nothing is copied to `/etc/mousedroid`.
 
 ## D-12 — Catalog edge and the F-050/F-051 deferral (EX-2, EX-3)
@@ -683,7 +724,8 @@ it would go red on any later legitimate catalog edit and skip on depth-1 clones.
 `in_progress` (the selector would keep saying "resume F-050" the moment F-059 is no longer
 `in_progress`).
 
-**Lands in** task 0.1 (PR-0) — landed.
+**Lands in** task 0.1 (PR-0 — the bundle + the catalog; opens last, after the lanes) — landed on this
+branch.
 
 ## D-13 — Exclusive serial open; warm and cold smoke-run modes (Phase 4)
 

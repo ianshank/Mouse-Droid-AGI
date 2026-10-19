@@ -118,7 +118,7 @@ ssh $ROVER_USER@$ROVER_HOST "git -C /opt/mousedroid fetch origin && git -C /opt/
 ssh $ROVER_USER@$ROVER_HOST 'docker exec -w /opt/mousedroid mousedroid python3 -c "import mousedroid.main, mousedroid.factory, mousedroid.validation.runtime; print(\"import ok\")"'
 ```
 
-On `ModuleNotFoundError: No module named 'X'`, install the package into the running container, re-run the import, and log every package (writable layer — gone on any recreate, and a restart through the systemd unit is one; see the restart rule below — with the unit active, more than a few packages means rebuild the image instead of hot-installing):
+On `ModuleNotFoundError: No module named 'X'`, install the package into the running container, re-run the import, and log every package (writable layer — gone on any recreate, and a restart through the systemd unit is one; see the restart rule below — with a unit enabled or not inactive, more than a few packages means rebuild the image instead of hot-installing):
 
 ```bash
 docker exec mousedroid python3 -m pip install --no-cache-dir "<spec from pyproject.toml>"
@@ -136,17 +136,17 @@ docker compose -f /opt/mousedroid/docker-compose.jetson.yml --env-file /dev/null
 sudo bash /opt/mousedroid/scripts/sync_jetson_overlay.sh
 ```
 
-Restart the container. Which way depends on whether the systemd unit is attached to it — check first:
+Restart the container. Which way depends on whether the systemd unit claims it — check both the enablement and the `ActiveState` first, and fail closed:
 
 ```bash
-systemctl is-active mousedroid-docker
-sudo systemctl restart mousedroid-docker    # when it printed "active": restart THROUGH the unit
-docker restart mousedroid                   # only when NO unit is active (compose-only, restart: unless-stopped)
+systemctl is-enabled mousedroid-docker; systemctl show -p ActiveState --value mousedroid-docker
+sudo systemctl restart mousedroid-docker    # enabled, or any state but "inactive" (active, activating, failed, unreadable): restart THROUGH the unit
+docker restart mousedroid                   # only when NOT enabled AND "inactive" (compose-only, restart: unless-stopped)
 ```
 
-**Unit active → restart through the unit and accept the recreate.** The unit runs `docker compose up --abort-on-container-exit` attached, with `Restart=on-failure`, `RestartSec=10` and `ExecStop=docker compose down` (`scripts/mousedroid-docker.service`): an in-place `docker restart` of a container the unit is attached to makes compose abort, the unit fail, and systemd re-run it through `compose down` 10 s later — a recreate by detour. Never `docker restart` a container the unit is attached to. The unit restart recreates the container on purpose (and re-runs the `ExecStartPre` overlay sync + preflight): every package hot-installed above is lost — re-run the import probe afterwards; more than a few packages means rebuild the image instead — and the camera may need a host reboot (2026-07-15).
+**Unit enabled or not inactive → restart through the unit and accept the recreate.** The unit runs `docker compose up --abort-on-container-exit` attached, with `Restart=on-failure`, `RestartSec=10` and `ExecStop=docker compose down` (`scripts/mousedroid-docker.service`): an in-place `docker restart` of a container the unit manages makes compose abort and the unit fail, and after `RestartSec` systemd retries `ExecStartPre` + `compose up` over whatever state the container is in — systemd skips `ExecStop=` when the main process exits on its own, so what that retry does to the container is unverified on hardware; never race it, and never `docker restart` a container the unit manages (the `RestartSec` window counts as `activating`). The unit restart recreates the container on purpose (and re-runs the `ExecStartPre` overlay sync + preflight): every package hot-installed above is lost — re-run the import probe afterwards; more than a few packages means rebuild the image instead — and the camera may need a host reboot (2026-07-15).
 
-**No unit active → restart in place.** `docker restart mousedroid` keeps the image the container was created from: bind-mounted code and the hand-synced overlay take effect and the writable layer survives — which also means that after a `docker compose build` the new image is picked up only by the unit path (or `docker compose … up -d`), never by `docker restart`. `scripts/deploy_remote.sh` exposes the same choice as `MOUSEDROID_REMOTE_RESTART_MODE=unit|container` (the default is `unit`, so a bare `deploy_remote.sh` after the hot-installs above recreates the container and discards them unless the image was rebuilt) and refuses the hazardous combination — `container` while the unit is active (PR-E round 3).
+**Not enabled and inactive → restart in place.** `docker restart mousedroid` keeps the image, the compose config and the `env_file` the container was created with — none of which `docker restart` re-reads — and skips the unit's fail-closed `ExecStartPre` preflight: bind-mounted code and the hand-synced overlay take effect and the writable layer survives, which also means that after a `docker compose build` the new image is picked up only by the unit path (or `docker compose … up -d`), never by `docker restart`. `scripts/deploy_remote.sh` exposes the same choice as `MOUSEDROID_REMOTE_RESTART_MODE=unit|container` (PR #260; the default is `unit`, so a bare `deploy_remote.sh` after the hot-installs above recreates the container and discards them unless the image was rebuilt) and refuses `container` whenever a unit is enabled or in any state but `inactive` — before any sync and again at restart time.
 
 **Checkpoint A′:** `healthy` within 60 s (after a restart through the unit, re-run the import probe above — a recreate drops hot-installed packages); `--health-check` exit 0; the log shows `command_set=waveshare_stock` and the mock driver:
 

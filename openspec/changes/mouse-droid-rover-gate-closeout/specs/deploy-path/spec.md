@@ -5,7 +5,7 @@
 Delta for `scripts/deploy_remote.sh`, its sibling `scripts/jetson_validate.sh`, the firmware record
 and the config-compat pin. The fence (2.4a) and the retarget (2.4b) land as **one PR**, fence commit
 first (Rulings 18/23); git-fetch delivery is the recorded fallback and the bench's primary (CF-4,
-D-6). The scenarios below describe the fence PR-E landed (`claude/f059-pr-e-rsync-fence` `7679361`)
+D-6). The scenarios below describe the fence PR-E landed (`claude/f059-pr-e-rsync-fence`, rebased onto trunk `f57d99b`, tip `4fa0014`, open as PR #260)
 — the bundle follows the landed code (Ruling 24).
 
 ## Requirement: `rsync --delete` MUST never remove rover runtime state
@@ -82,7 +82,8 @@ D-6). The scenarios below describe the fence PR-E landed (`claude/f059-pr-e-rsyn
   names `/opt/mousedroid`
 
 ### Scenario: fence and retarget land together; the script header carries the warning
-- **GIVEN** PR-E (`3a6a551`, `f76b2c3` fence; `1a43e3b`, `7679361` retarget)
+- **GIVEN** PR-E/F (`3311d28`, `e02f71e` fence; `3de8c3f`, `19d9a24`, `b3e7732`, `30c6c6a`, `4fa0014`
+  retarget and follow-ups; PR #260, base trunk `f57d99b`, closes #253)
 - **WHEN** its commits are read in order
 - **THEN** the fence precedes the retarget, and no trunk commit ever carries the fenced script with
   the old default — there is no window in which an operator needs a "do not run" notice
@@ -108,34 +109,47 @@ D-6). The scenarios below describe the fence PR-E landed (`claude/f059-pr-e-rsyn
   `docker exec -w /opt/mousedroid mousedroid python3 -m mousedroid.main --health-check`
 - **AND** when the unit is absent, no restart is attempted and the run still exits 0
 
-### Scenario: the restart mode is explicit, and the hazardous combination is refused (Rulings 37/39)
+### Scenario: the restart mode is explicit, and the hazardous combination is refused (Rulings 37/39/40)
 - **GIVEN** `scripts/mousedroid-docker.service`: `ExecStart` is `docker compose up
   --abort-on-container-exit`, attached (line 79), `ExecStop` is `docker compose down` (line 80),
   `Restart=on-failure` and `RestartSec=10` (lines 83–84), and the `ExecStartPre` lines run the
   overlay sync and the preflight
-- **WHEN** `systemctl is-active mousedroid-docker` prints `active`
-- **THEN** `MOUSEDROID_REMOTE_RESTART_MODE=unit` (landed `1e05241`; the default) restarts through the
-  unit — the
-  container is **recreated**, the writable layer and every hot-installed package discarded, the
+- **WHEN** the unit is enabled, or `systemctl show -p ActiveState --value mousedroid-docker` prints
+  anything but `inactive` (`active`, `activating`, `failed`, or the state cannot be read)
+- **THEN** `MOUSEDROID_REMOTE_RESTART_MODE=unit` (the default; `b3e7732`) restarts through the unit —
+  the container is **recreated**, the writable layer and every hot-installed package discarded, the
   overlay re-synced and the preflight run — and that recreate is accepted
 - **AND** because `unit` is the default, a bare `bash scripts/deploy_remote.sh` after bench step
   3.3's hot-installs recreates the container and discards them unless the image was rebuilt
-- **AND** `MOUSEDROID_REMOTE_RESTART_MODE=container` is **refused** while the unit is active (PR-E
-  round 3, in flight): an in-place `docker restart` of a container the unit is attached to makes
-  compose abort, the unit fail, and systemd re-run it through `compose down` 10 s later — a recreate
-  by detour
+- **AND** `MOUSEDROID_REMOTE_RESTART_MODE=container` is **refused**, fail closed, before any sync
+  and again at restart time (`read_unit_state`; `30c6c6a`, `4fa0014`): an in-place `docker restart`
+  of a container the attached unit manages makes compose abort and the unit fail, after which
+  systemd's on-failure retry runs `ExecStartPre` + `compose up` over whatever state the container is
+  in — `ExecStop=` is skipped when the main process exits on its own; unverified on hardware, never
+  raced — and the `RestartSec` auto-restart window is inside the refusal
+- **AND** the unit-mode "runs under compose only" hint uses the same predicate, so it is never given
+  where `container` would refuse
+- **AND** pinned by `tests/unit/scripts/test_deploy_remote_guard.py::test_the_default_restart_mode_restarts_the_unit_and_not_the_container`,
+  `::test_the_container_restart_mode_refuses_when_a_unit_is_enabled_or_running`,
+  `::test_the_container_restart_mode_refuses_when_the_unit_state_cannot_be_read`,
+  `::test_the_restart_time_check_uses_the_same_predicate`,
+  `::test_the_compose_only_hint_is_not_given_when_container_mode_would_refuse`
 
-### Scenario: with no unit active, the in-place restart is the restart
-- **GIVEN** a compose-only rover (`restart: unless-stopped`, no `mousedroid-docker` unit active)
+### Scenario: with no unit enabled and the unit inactive, the in-place restart is the restart
+- **GIVEN** a compose-only rover (`restart: unless-stopped`; no `mousedroid-docker` unit enabled
+  and its `ActiveState` `inactive`)
 - **WHEN** `MOUSEDROID_REMOTE_RESTART_MODE=container` runs
-- **THEN** `docker restart mousedroid` restarts in place: it keeps the image the container was
-  created from, bind-mounted code and the hand-synced overlay take effect, the writable layer
-  survives
+- **THEN** `docker restart mousedroid` restarts in place: it keeps the image, the compose config and
+  the `env_file` the container was created with — none of which `docker restart` re-reads — and
+  skips the unit's fail-closed `ExecStartPre` preflight; bind-mounted code and the hand-synced
+  overlay take effect, the writable layer survives
 - **AND** because the image is kept, a `docker compose build` is picked up only by the unit path
   (or `docker compose … up -d`), never by `docker restart`
-- **AND** the runbook (3.3) applies the same rule: unit active → through the unit, accepting the
-  recreate (re-run the import probe; more than a few hot-installed packages → rebuild the image; the
-  camera may need a host reboot, 2026-07-15); no unit → in place
+  (`::test_the_container_restart_mode_restarts_in_place_when_no_unit_is_enabled_or_running`,
+  `::test_the_container_restart_mode_warns_when_there_is_nothing_to_restart`)
+- **AND** the runbook (3.3) applies the same rule: unit enabled or not inactive → through the unit,
+  accepting the recreate (re-run the import probe; more than a few hot-installed packages → rebuild
+  the image; the camera may need a host reboot, 2026-07-15); neither → in place
 
 ### Scenario: the health check waits after a unit restart this run made, then warns (Rulings 27/35)
 - **GIVEN** a run whose `restart_service` restarted `mousedroid-docker` (`DOCKER_UNIT_RESTARTED=1`),
@@ -155,7 +169,7 @@ D-6). The scenarios below describe the fence PR-E landed (`claude/f059-pr-e-rsyn
 - **WHEN** `run_health_check` runs
 - **THEN** the container is probed once, with no wait
 - **AND** an unlisted container is logged as an info line ("not running and this run did not restart
-  the Docker unit — container health check skipped"), never as a WARNING (`1e05241`)
+  the Docker unit — container health check skipped"), never as a WARNING (`b3e7732`)
 
 ### Scenario: `--code-only` never runs the bare-metal installer (Ruling 26)
 - **GIVEN** a Docker-spine rover with no `/opt/mousedroid/venv`
@@ -176,6 +190,24 @@ thresholds there trips `battery_critical` on a missing reading (review focus 3).
   `battery_implausible_below_v`
 - **WHEN** `bash scripts/deploy_remote.sh --config-only` runs
 - **THEN** it exits non-zero with "deploy code first" on stderr and installs nothing
+
+### Scenario: an unreachable rover is not a stale tree (Ruling 38)
+- **GIVEN** a rover whose ssh link drops at the floor probe (ssh exit 255)
+- **WHEN** `bash scripts/deploy_remote.sh --config-only` runs
+- **THEN** `require_remote_safety_floor` dies "cannot reach the rover at `<host>`; nothing installed"
+  — never "deploy code first" — and installs nothing
+- **AND** `tests/unit/scripts/test_deploy_remote_guard.py::test_config_only_says_so_when_the_rover_drops_out_at_the_floor_probe`
+  pins the branch (`b3e7732`)
+
+### Scenario: the probed path cannot drift away from the tree (Ruling 38)
+- **GIVEN** the guard's `grep -q <marker> ${REMOTE_SRC_Q}/<path>` line
+- **WHEN** `::test_the_safety_floor_probe_reads_a_marker_this_tree_carries` runs
+- **THEN** it regexes `<path>` and `<marker>` out of the script and asserts `<path>` exists in this
+  repository and contains `<marker>` — the field already moved once, when #191 split the single
+  `schema.py` module under `src/mousedroid/config/` into the `src/mousedroid/config/schema/` package,
+  and a later move would otherwise make the guard refuse every `--config-only` after new code was on
+  disk
+- **AND** `::test_the_safety_floor_probe_pin_goes_red_on_a_scratch_copy` proves the pin is live
 
 ### Scenario: the bench is ordered the same way
 - **GIVEN** bench step 3.3
