@@ -108,30 +108,54 @@ D-6). The scenarios below describe the fence PR-E landed (`claude/f059-pr-e-rsyn
   `docker exec -w /opt/mousedroid mousedroid python3 -m mousedroid.main --health-check`
 - **AND** when the unit is absent, no restart is attempted and the run still exits 0
 
-### Scenario: the restart mode is explicit — a unit restart recreates the container (Ruling 37)
-- **GIVEN** `scripts/mousedroid-docker.service`, whose `ExecStop` is `docker compose down` (line 80)
-  and whose `ExecStartPre` lines run the overlay sync and the preflight
-- **WHEN** `MOUSEDROID_REMOTE_RESTART_MODE=unit` (landing in PR-E)
-- **THEN** the unit restart stops the stack with `compose down` and brings it up again — the
+### Scenario: the restart mode is explicit, and the hazardous combination is refused (Rulings 37/39)
+- **GIVEN** `scripts/mousedroid-docker.service`: `ExecStart` is `docker compose up
+  --abort-on-container-exit`, attached (line 79), `ExecStop` is `docker compose down` (line 80),
+  `Restart=on-failure` and `RestartSec=10` (lines 83–84), and the `ExecStartPre` lines run the
+  overlay sync and the preflight
+- **WHEN** `systemctl is-active mousedroid-docker` prints `active`
+- **THEN** `MOUSEDROID_REMOTE_RESTART_MODE=unit` (landed `1e05241`; the default) restarts through the
+  unit — the
   container is **recreated**, the writable layer and every hot-installed package discarded, the
-  overlay re-synced and the preflight run
-- **AND** `MOUSEDROID_REMOTE_RESTART_MODE=container` runs `docker restart mousedroid` in place —
-  bind-mounted code and the hand-synced overlay take effect, the writable layer survives — and is the
-  mode after packages were hot-installed (bench step 3.3), because a recreate has wedged the camera
-  before (2026-07-15)
-- **AND** the runbook names the unit restart as right only when its overlay sync + preflight are
-  wanted and nothing is hot-installed
+  overlay re-synced and the preflight run — and that recreate is accepted
+- **AND** because `unit` is the default, a bare `bash scripts/deploy_remote.sh` after bench step
+  3.3's hot-installs recreates the container and discards them unless the image was rebuilt
+- **AND** `MOUSEDROID_REMOTE_RESTART_MODE=container` is **refused** while the unit is active (PR-E
+  round 3, in flight): an in-place `docker restart` of a container the unit is attached to makes
+  compose abort, the unit fail, and systemd re-run it through `compose down` 10 s later — a recreate
+  by detour
 
-### Scenario: the health check waits, then warns — never skips in silence (Ruling 27)
-- **GIVEN** a restart that returns before compose has the container listed
+### Scenario: with no unit active, the in-place restart is the restart
+- **GIVEN** a compose-only rover (`restart: unless-stopped`, no `mousedroid-docker` unit active)
+- **WHEN** `MOUSEDROID_REMOTE_RESTART_MODE=container` runs
+- **THEN** `docker restart mousedroid` restarts in place: it keeps the image the container was
+  created from, bind-mounted code and the hand-synced overlay take effect, the writable layer
+  survives
+- **AND** because the image is kept, a `docker compose build` is picked up only by the unit path
+  (or `docker compose … up -d`), never by `docker restart`
+- **AND** the runbook (3.3) applies the same rule: unit active → through the unit, accepting the
+  recreate (re-run the import probe; more than a few hot-installed packages → rebuild the image; the
+  camera may need a host reboot, 2026-07-15); no unit → in place
+
+### Scenario: the health check waits after a unit restart this run made, then warns (Rulings 27/35)
+- **GIVEN** a run whose `restart_service` restarted `mousedroid-docker` (`DOCKER_UNIT_RESTARTED=1`),
+  which returns before compose has the container listed
 - **WHEN** `run_health_check` runs
-- **THEN** `wait_for_container` polls once a second for up to `MOUSEDROID_REMOTE_HEALTH_WAIT_S`
-  (default 30; `0` probes once) and execs the health check as soon as `mousedroid` is listed
+- **THEN** `wait_for_container` polls once a second, wall-clock-bounded by
+  `MOUSEDROID_REMOTE_HEALTH_WAIT_S` (default 30; `0` probes once; an ssh 255 ends the wait at once),
+  and execs the health check as soon as `mousedroid` is listed
 - **AND** a container that never appears yields `WARNING: container mousedroid not running after
   <N>s — container health check skipped`, and a malformed wait value is refused before any remote
   command (`::test_the_health_check_waits_for_the_container_to_be_listed`,
   `::test_the_health_check_warns_when_the_container_is_never_listed`,
   `::test_a_malformed_health_wait_is_refused`)
+
+### Scenario: without a unit restart, an unlisted container is information, not a warning (Ruling 35)
+- **GIVEN** a run that did not restart the Docker unit (`container` mode, or no unit enabled)
+- **WHEN** `run_health_check` runs
+- **THEN** the container is probed once, with no wait
+- **AND** an unlisted container is logged as an info line ("not running and this run did not restart
+  the Docker unit — container health check skipped"), never as a WARNING (`1e05241`)
 
 ### Scenario: `--code-only` never runs the bare-metal installer (Ruling 26)
 - **GIVEN** a Docker-spine rover with no `/opt/mousedroid/venv`
@@ -158,8 +182,10 @@ thresholds there trips `battery_critical` on a missing reading (review focus 3).
 - **WHEN** trunk is delivered by git-fetch
 - **THEN** `sudo bash scripts/sync_jetson_overlay.sh` runs only after `import mousedroid.main`
   succeeds on the new tree
-- **AND** the restart that follows is in place (`docker restart mousedroid`), never the unit restart
-  that would recreate the container and drop the packages hot-installed in that step (Ruling 37)
+- **AND** the restart that follows obeys the rule: through the unit when `systemctl is-active
+  mousedroid-docker` prints `active` — accepting the recreate, re-running the import probe, rebuilding
+  the image when more than a few packages were hot-installed — and in place only when no unit is
+  active (Ruling 39; ~~Ruling 37's always-in-place wording~~)
 
 ## Requirement: firmware MUST be hash-pinned in a tracked record and flashed only by a verify-then-dry-run script
 

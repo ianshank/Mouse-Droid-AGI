@@ -49,12 +49,14 @@ firmware echoes the commanded speed into `L`/`R`, so a velocity assertion there 
 ### Scenario: the open gate is bounded by the smoke setpoint (Ruling 32)
 - **GIVEN** a bench-only overlay that sets `esp32.smoke_test_allow_motion: true` on the command line
 - **WHEN** either motion test commands a velocity
-- **THEN** `_commanded_velocity` never exceeds `esp32.smoke_test_velocity_mps` (default 0.05 m/s),
-  whatever `max_velocity_mps` says
+- **THEN** `_commanded_velocity` returns `min(max_velocity_mps × fraction, smoke_test_velocity_mps)`
+  — never above `esp32.smoke_test_velocity_mps` (default 0.05 m/s), whatever `max_velocity_mps`
+  says (`5a04660`)
 - **AND** `smoke_test_velocity_mps: 0.0` locks all smoke motion even with both gates open
 
 ### Scenario: the stage ↔ test pairing cannot drift silently
-- **GIVEN** `tests/regression/test_f059_aqa.py`
+- **GIVEN** `tests/regression/test_f059_aqa.py::test_esp32_stages_run_their_hardware_modules_and_grep_passed`
+  (parametrised over the motor and power stages) and the AST pins beside it
 - **WHEN** `test_motor` stops running the loopback module, stops grepping
   `test_send_velocity_moves_encoders PASSED`, or the velocity test loses its
   `chassis_has_wheel_encoders` / `imu_valid` branch or the `_commanded_velocity` gate
@@ -211,8 +213,9 @@ would contend for the frames rather than fail (Ruling 28).
 ### Scenario: the no-chassis checkpoint opts out
 - **GIVEN** `MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY=` (set but empty)
 - **WHEN** the motor or power stage runs
-- **THEN** no overlay is stacked and the stage records SKIP **without running pytest** — a mock
-  PASS would be a green that measures nothing (Ruling 31)
+- **THEN** no overlay is stacked and the stage records SKIP **without running pytest**, with the
+  reason `bench ESP32 overlay opted out (MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY is empty): no chassis declared, stage not run` (`df5bcd3`) — a mock PASS would be a green that measures nothing
+  (Ruling 31)
 - **AND** the evidence record says the stage was skipped, not that the chassis was measured
 
 ### Scenario: a stacked run whose test skips is a FAIL

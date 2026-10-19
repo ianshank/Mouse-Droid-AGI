@@ -103,7 +103,7 @@ docker exec -w /opt/mousedroid -e MOUSEDROID_MOCK_HARDWARE=false -e MOUSEDROID_S
 docker exec -w /opt/mousedroid -e MOUSEDROID_MOCK_HARDWARE=false -e MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY= mousedroid bash scripts/jetson_smoke_test.sh camera
 ```
 
-`power` → `SKIP: power chain smoke …` — with the bench overlay explicitly opted out the stage records SKIP without running pytest (nothing here measures the chassis; a mock PASS would be a green that measures nothing). The checkpoint's substance is the health check and `camera`.
+`power` → `SKIP: power chain smoke` with the reason `bench ESP32 overlay opted out (MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY is empty): no chassis declared, stage not run` — with the bench overlay explicitly opted out the stage records SKIP without running pytest (nothing here measures the chassis; a mock PASS would be a green that measures nothing). The checkpoint's substance is the health check and `camera`.
 
 - [ ] **3.3 Deploy trunk via git-fetch (20–30 min; CF-4 fallback is the primary path today).** From the PC:
 
@@ -118,7 +118,7 @@ ssh $ROVER_USER@$ROVER_HOST "git -C /opt/mousedroid fetch origin && git -C /opt/
 ssh $ROVER_USER@$ROVER_HOST 'docker exec -w /opt/mousedroid mousedroid python3 -c "import mousedroid.main, mousedroid.factory, mousedroid.validation.runtime; print(\"import ok\")"'
 ```
 
-On `ModuleNotFoundError: No module named 'X'`, install the package into the running container, re-run the import, and log every package (writable layer — gone on any recreate: `--force-recreate`, or a unit restart, whose `ExecStop` is `docker compose down`; restart in place with `docker restart mousedroid`, below):
+On `ModuleNotFoundError: No module named 'X'`, install the package into the running container, re-run the import, and log every package (writable layer — gone on any recreate, and a restart through the systemd unit is one; see the restart rule below — with the unit active, more than a few packages means rebuild the image instead of hot-installing):
 
 ```bash
 docker exec mousedroid python3 -m pip install --no-cache-dir "<spec from pyproject.toml>"
@@ -136,15 +136,19 @@ docker compose -f /opt/mousedroid/docker-compose.jetson.yml --env-file /dev/null
 sudo bash /opt/mousedroid/scripts/sync_jetson_overlay.sh
 ```
 
-Restart the container **in place** — bind-mounted code and the hand-synced overlay take effect on a plain restart, and the writable layer (any package hot-installed above) survives:
+Restart the container. Which way depends on whether the systemd unit is attached to it — check first:
 
 ```bash
-docker restart mousedroid
+systemctl is-active mousedroid-docker
+sudo systemctl restart mousedroid-docker    # when it printed "active": restart THROUGH the unit
+docker restart mousedroid                   # only when NO unit is active (compose-only, restart: unless-stopped)
 ```
 
-Do **not** use `sudo systemctl restart mousedroid-docker` here: the unit's `ExecStop` is `docker compose down` (`scripts/mousedroid-docker.service`), so a unit restart RECREATES the container — every hot-installed package is lost, and a recreate has wedged the camera before (2026-07-15). The unit restart is the right choice only when you want its `ExecStartPre` overlay sync + preflight **and** nothing is hot-installed (a rebuilt image, for instance). `scripts/deploy_remote.sh` exposes the same choice as `MOUSEDROID_REMOTE_RESTART_MODE=unit|container` (landing in PR-E).
+**Unit active → restart through the unit and accept the recreate.** The unit runs `docker compose up --abort-on-container-exit` attached, with `Restart=on-failure`, `RestartSec=10` and `ExecStop=docker compose down` (`scripts/mousedroid-docker.service`): an in-place `docker restart` of a container the unit is attached to makes compose abort, the unit fail, and systemd re-run it through `compose down` 10 s later — a recreate by detour. Never `docker restart` a container the unit is attached to. The unit restart recreates the container on purpose (and re-runs the `ExecStartPre` overlay sync + preflight): every package hot-installed above is lost — re-run the import probe afterwards; more than a few packages means rebuild the image instead — and the camera may need a host reboot (2026-07-15).
 
-**Checkpoint A′:** `healthy` within 60 s; `--health-check` exit 0; the log shows `command_set=waveshare_stock` and the mock driver:
+**No unit active → restart in place.** `docker restart mousedroid` keeps the image the container was created from: bind-mounted code and the hand-synced overlay take effect and the writable layer survives — which also means that after a `docker compose build` the new image is picked up only by the unit path (or `docker compose … up -d`), never by `docker restart`. `scripts/deploy_remote.sh` exposes the same choice as `MOUSEDROID_REMOTE_RESTART_MODE=unit|container` (the default is `unit`, so a bare `deploy_remote.sh` after the hot-installs above recreates the container and discards them unless the image was rebuilt) and refuses the hazardous combination — `container` while the unit is active (PR-E round 3).
+
+**Checkpoint A′:** `healthy` within 60 s (after a restart through the unit, re-run the import probe above — a recreate drops hot-installed packages); `--health-check` exit 0; the log shows `command_set=waveshare_stock` and the mock driver:
 
 ```bash
 docker inspect -f '{{.State.Health.Status}}' mousedroid

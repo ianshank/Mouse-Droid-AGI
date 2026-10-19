@@ -2,9 +2,9 @@
 
 **F-number:** F-059 (reserved in `features.yaml` by task 0.1 at `739494e`; F-009–F-014 and F-033
 remain burned holes per ADR-013)
-**Status:** proposed — revision 2, reconstructed, with the round-3 review and fix round 1
-(2026-10-19, after the in-repo adversarial review of `3735c66`) folded in
-**Branch:** `claude/f059-bundle` @ `5b2cf71` (fix round 1 on top)
+**Status:** proposed — revision 2, reconstructed, with the round-3 review and fix rounds 1–2
+(2026-10-19, after the in-repo adversarial reviews of `3735c66` and `f5bbdf2`) folded in
+**Branch:** `claude/f059-bundle` @ `f5bbdf2` (fix round 2 on top)
 **Compared against:** trunk `f57d99b` — the SHA all three review rounds read — on the repository's
 default branch `claude/markdown-implementation-plan-aVJ2l` (there is no `main`).
 
@@ -157,11 +157,11 @@ table was missing from the first reconstruction.)*
 | # | Finding | Evidence | Review |
 |---|---|---|---|
 | D-1 | The Anthropic gateway always sends a sampling parameter: `_create_message` passes `temperature=self._cfg.temperature` on every call, and the SDK is imported lazily inside `start()`. A bare model-id swap to a generation that rejects non-default sampling parameters would flip `_degraded=True` and serve the fallback while the overlay names the primary — the gap WS-A's `AnthropicRequestConfig` closes (§5). The 400-on-`temperature` behaviour of the 5.5 generation is [Likely]: quoted from the `claude-api` skill's model table (cached 2026-10-06), not re-verified against the live API. | `src/mousedroid/llm_gateway/anthropic_gateway.py` 173 (`import anthropic` inside `start`), 301–327 (`_create_message`, `temperature=self._cfg.temperature`) | survives rounds 1–3; sourced fix round 1 (finding 12) |
-| D-2 | There is no cloud-VLM seam for the credit to exercise (§6 correction 2). The only VLM seam is local and mocked: `src/mousedroid/factory/mission.py::build_vlm_progress` returns `None` unless `mission.vlm_progress_enabled` and otherwise wraps `src/mousedroid/reward/vlm_progress.py::MockVLMProgress` in `VLMProgressHead` ("A real VLM backend (HF-hosted, BLIP-2, …) is a separate sprint"); `VLMProgressBackend` is a `Protocol` with that one implementation; the gateway's `_create_message` takes strings, never frames. | `src/mousedroid/factory/mission.py` 42–72; `src/mousedroid/reward/vlm_progress.py` 44 (`VLMProgressBackend`), 65 (`MockVLMProgress`), 103 (`VLMProgressHead`) | survives; symbol cited fix round 1 (finding 8) |
+| D-2 | There is no cloud-VLM seam for the credit to exercise (§6 correction 2). The only VLM seam is local and mocked: `src/mousedroid/factory/mission.py::build_vlm_progress` returns `None` unless `mission.vlm_progress_enabled` and otherwise wraps `src/mousedroid/reward/vlm_progress.py::MockVLMProgress` in `VLMProgressHead` — `build_vlm_progress`'s own docstring says "A real VLM backend (HF-hosted, BLIP-2, …) is a separate sprint"; `VLMProgressBackend` is a `Protocol` with that one implementation; the gateway's `_create_message` takes strings, never frames. | `src/mousedroid/factory/mission.py` 42–72; `src/mousedroid/reward/vlm_progress.py` 44 (`VLMProgressBackend`), 65 (`MockVLMProgress`), 103 (`VLMProgressHead`) | survives; symbol cited fix round 1 (finding 8) |
 | D-3 | `reports/dead_code/` is gitignored, so WS-C's input chain is local-only: `python scripts/dead_code_audit.py` regenerates the findings file and the triage document records its sha256 and the vulture version (§6 correction 3). | `.gitignore` 336; `scripts/dead_code_audit.py` | survives rounds 1–3 |
 | D-4 | Five surfaces name the model id and must move together on a retarget or the golden goes red: both overlays' `model_name`, the metrics sample seed `src/mousedroid/telemetry/metrics/registry.py::generate_metrics_sample`, the golden populate script `tests/regression/_render_prometheus_populate.py` and the golden `tests/regression/fixtures/render_prometheus_golden.txt` — all `claude-haiku-4-5` today. | `config/jetson_production.yaml` 96; `config/jetson_claude_pilot.yaml` 37; `registry.py` 268–273; `_render_prometheus_populate.py` 64–69; golden 174–175, 198 | survives rounds 1–3 |
 | D-5 | **#242 uncalled; purity pin lacks `anthropic`.** PR #242 ("external agent integration", `ea1d6b9`) added the cloud-agent seams — `src/mousedroid/factory/agents.py` (`build_mission_decomposer`, `build_memory_mirror`, `build_cloud_tool_adapter`), `src/mousedroid/agents/adk_adapter.py`, `src/mousedroid/agents/composio_adapter.py`, `src/mousedroid/memory/honcho_mirror.py` — and nothing outside `src/mousedroid/factory/` calls the three builders, so the credit cannot exercise them; the purity pin #242 shipped, `tests/regression/test_hot_loop_import_purity.py::_FORBIDDEN_MODULES`, names only `google.adk`, `honcho`, `composio`, `composio_core`, so a hot-loop `import anthropic` (or `claude_agent_sdk`, once WS-B adds it) would pass. **Still live at `5b2cf71`. Ruling 22:** task 5.4 adds `"anthropic"` and `"claude_agent_sdk"` to the tuple (CHARTER §4 invariant 10, hot-loop purity; D-14). | `git show ea1d6b9 --stat`; a repo-wide grep for the three builders outside `src/mousedroid/factory/` → none; `tests/regression/test_hot_loop_import_purity.py` 13–18 | **CONFIRMED round 1; still live; closed by Ruling 22 in 5.4** |
-| D-6 | Neither cloud SDK is a declared dependency: `pyproject.toml`'s `llm` extra is `llama-cpp-python` + `huggingface-hub`, and no extra names `anthropic` or `claude-agent-sdk`; the gateway degrades rather than crashes when the SDK is absent (the lazy import), and on the rover the SDK is hot-installed into the writable layer. WS-B adds an `agent_reviewer` extra rather than widening `llm`. | `pyproject.toml` 100–103 (`llm`), no `agent_reviewer` / `claude-agent-sdk` entry; `anthropic_gateway.py` 173 | survives rounds 1–3 |
+| D-6 | ~~(this reconstruction, fix round 1) Neither cloud SDK is a declared dependency; on the rover the Anthropic SDK is hot-installed into the writable layer.~~ → **(fix round 2, finding A)** false for `anthropic`: `pyproject.toml` declares an `anthropic` extra (`anthropic>=0.40`) and `Dockerfile.jetson` Stage 4b bakes it into the image, non-fatally ("cloud LLM tier — PR #107"; a failed install leaves the local fallback only), so the baked SDK survives a recreate (`deployments/jetson-image.json` `notes`); the `llm` extra is `llama-cpp-python` + `huggingface-hub` only, and the gateway still imports the SDK lazily and degrades to the local tier when the install failed. Only `claude-agent-sdk` is undeclared today — WS-B adds an `agent_reviewer` extra for it rather than widening `llm` or `anthropic`. The purity pin still gains both names (Ruling 22 stands): the orchestrator must never import either, baked or not. | `pyproject.toml` 155–156 (`anthropic`), 100–103 (`llm`), no `agent_reviewer` / `claude-agent-sdk` entry; `Dockerfile.jetson` 167–173 (Stage 4b); `deployments/jetson-image.json` `notes`; `anthropic_gateway.py` 173 | survives rounds 1–3; corrected fix round 2 |
 | D-7 | `tools/llm_latency_probe.py` is argparse-driven and writes no JSON at all, so a latency run leaves no tracked artifact and cannot prove which backend served; WS-A adds `--report-json` with `served: primary\|fallback`. `RegexInjectionFilter` (`src/mousedroid/security/injection_filter.py`) guards NL leaving the rover toward actuation, not reviewer output — which is why WS-B's `policy.py` records why it is not applied there. | `tools/llm_latency_probe.py` 46, 238–256 (argparse; no `json` import); `src/mousedroid/security/injection_filter.py` | survives rounds 1–3 |
 
 ## 3. Scope
@@ -300,7 +300,8 @@ Recorded so a later pass does not re-raise them.
    exercise by sending camera frames to a cloud vision model. The only VLM seam in the tree is local
    and mocked: `src/mousedroid/factory/mission.py::build_vlm_progress` returns `None` unless
    `mission.vlm_progress_enabled` and otherwise wraps `src/mousedroid/reward/vlm_progress.py::MockVLMProgress`
-   in `VLMProgressHead` (its docstring: a real backend "is a separate sprint"); `VLMProgressBackend`
+   in `VLMProgressHead` (`build_vlm_progress`'s docstring, not the head's: a real backend "is a separate
+   sprint"); `VLMProgressBackend`
    is a `Protocol` with that one implementation; the Anthropic gateway's `_create_message` takes
    strings, never frames; growth/VLA distillation is off-loop and local. Building such a seam is
    CHARTER-§3-adjacent and out of scope; the credit goes to reviewer and triage work on surfaces that
@@ -327,8 +328,14 @@ Recorded so a later pass does not re-raise them.
    `~/firmware` is unreachable from the container (3.9, Ruling 20); the bench-overlay opt-out
    records SKIP, not a mock PASS (Ruling 31); the preflight probe reports connect errors, not lock
    errors, until 4.1 (Ruling 28); re-arm commands name the production config (Ruling 36); the
-   bench restarts the container in place, because a unit restart recreates it (Ruling 37); weekday
-   labels replaced by dates.
+   bench restarts through the unit when it is active and in place only when none is (Rulings 37/39);
+   weekday labels replaced by dates.
+8. **Fix round 2 (2026-10-19) corrections** — the Anthropic SDK is a declared extra baked into the
+   image, not hot-installed; only `claude-agent-sdk` is undeclared (D-6, D-14); the pairing pin's
+   landed name is `test_esp32_stages_run_their_hardware_modules_and_grep_passed`; "separate sprint"
+   is `build_vlm_progress`'s docstring; the health-check wait is scoped to a unit restart this run
+   made (Ruling 35); the restart rule (Ruling 39); status notes carry landed SHAs and PR numbers,
+   with the restart-mode default `unit`.
 
 ## 7. Success criteria
 
@@ -374,8 +381,11 @@ Recorded so a later pass does not re-raise them.
    path outside the fenced roots transfers, and a tracked sentinel under a file-level ignore ships
    while the eight documented non-shipping tracked files (B-7) do not; the default `REMOTE_SRC` is
    `/opt/mousedroid`; `--code-only` never runs `deploy_jetson.sh`; the container health check waits a
-   bounded `MOUSEDROID_REMOTE_HEALTH_WAIT_S` and WARNs, never skips silently; the restart mode is
-   explicit (`MOUSEDROID_REMOTE_RESTART_MODE=unit|container`, Ruling 37); `--config-only` refuses a
+   bounded `MOUSEDROID_REMOTE_HEALTH_WAIT_S` after a unit restart this run made and WARNs, never
+   skips silently (without such a restart an unlisted container is an info line — Ruling 35); the
+   restart mode is
+   explicit (`MOUSEDROID_REMOTE_RESTART_MODE=unit|container`) and the hazardous combination —
+   `container` while the unit is active — is refused (Rulings 37/39); `--config-only` refuses a
    remote tree that lacks `battery_implausible_below_v` ("deploy code first"). Fence and retarget
    land as one PR (Rulings 18/23/24/26/27).
 6. **Firmware is pinned and flashing is verify-then-dry-run.** The tracked record pins the four
