@@ -282,3 +282,16 @@ def test_production_overlay_speaks_stock_firmware_on_an_encoder_less_chassis() -
     assert cfg.esp32.serial_baud == WAVESHARE_STOCK_BAUD
     assert cfg.esp32.chassis_has_wheel_encoders is False
     assert cfg.esp32.enabled is False  # the flip to true lives only in the bench overlay
+
+
+def test_production_overlay_arms_battery_thresholds_and_the_power_gate_has_no_floor() -> None:
+    """CF-1 / R-6: thresholds are live; the runtime screens 0.0 V, the smoke gate does not."""
+    cfg = load_settings(_PROD, config_dir=_CONFIG_DIR)
+    assert (cfg.safety.battery_warn_v, cfg.safety.battery_critical_v) == (10.5, 9.5)
+    # runtime screens 0.0 V
+    assert 0.0 < cfg.safety.battery_implausible_below_v < cfg.safety.battery_critical_v
+    power = (_REPO_ROOT / "tests" / "hardware" / "test_power_chain_smoke.py").read_text(
+        encoding="utf-8"
+    )
+    # R-6: the gate is stricter than the runtime
+    assert "battery_voltage_v >= jetson_settings.safety.battery_critical_v" in power

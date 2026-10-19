@@ -27,6 +27,7 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 from mousedroid.config.loader import load_settings
 from mousedroid.config.schema import ESP32Config
@@ -222,18 +223,25 @@ def test_default_plus_production_overlay_stack_loads() -> None:
     ``jetson-nightly.yml`` stacks both overlays, while compose and the
     full-validation script load the production file alone — both resolution
     modes must stay valid.
+
+    REVERSAL (F-059 CF-1): the overlay arms the battery thresholds instead of
+    zeroing them. They now equal the base, so "the overlay wins" can no longer
+    be an inequality with the base and is pinned through the raw declaration.
     """
     stacked = load_settings(_DEFAULT_CONFIG, _PROD_CONFIG)
     base_only = load_settings(_DEFAULT_CONFIG)
+    declared = yaml.safe_load(_PROD_CONFIG.read_text(encoding="utf-8"))["safety"]
 
     assert stacked.platform == "mouse_droid"
     # The production overlay must WIN on every key it declares — including the
-    # new esp32 opt-out — rather than being shadowed by the earlier overlay.
+    # esp32 opt-out — rather than being shadowed by the earlier overlay.
     assert stacked.esp32.enabled is False
-    assert stacked.safety.battery_critical_v == 0.0
+    # REVERSAL (F-059 CF-1): thresholds are armed, not zeroed. They equal the base,
+    # so "override wins" is pinned via the raw declaration, not a base inequality.
+    assert declared["battery_critical_v"] == stacked.safety.battery_critical_v == 9.5
+    assert declared["battery_warn_v"] == stacked.safety.battery_warn_v == 10.5
     assert stacked.safety.min_valid_sensors == 1
-    # ...and those really are overrides, not coincidences.
-    assert base_only.safety.battery_critical_v != 0.0
+    # ...and min_valid_sensors really is an override, not a coincidence.
     assert base_only.safety.min_valid_sensors != 1
     # Deep merge, not wholesale replacement: blocks the production overlay
     # does not declare at all (model, mcts, memory, …) keep their base values.

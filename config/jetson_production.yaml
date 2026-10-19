@@ -4,14 +4,13 @@ debug: false
 
 safety:
   min_valid_sensors: 1
-  # Battery monitoring is DISABLED on this rig because the Orin Nano
-  # developer kit has no onboard battery voltage sensor and the ESP32 does
-  # not report a reliable voltage over the existing serial protocol. Leaving
-  # these at 0.0 honours the schema's documented "0 disables" semantic.
-  # When a battery ADC is wired up, override these to the hardware
-  # thresholds (schema defaults are 10.5V warn / 9.5V critical).
-  battery_critical_v: 0.0
-  battery_warn_v: 0.0
+  # F-059 CF-1: stock firmware reports bus voltage (`v`) in FEEDBACK_BASE_INFO, so
+  # the thresholds are live. A board answering without `v` reads 0.0, which
+  # battery_implausible_below_v (1.0) routes to log-only, never e-stop — while the
+  # power smoke gate deliberately FAILS on it (peer review R-6). Code before
+  # config on the rover: the 032942b image has no 1.0 V floor (review focus 3).
+  battery_warn_v: 10.5
+  battery_critical_v: 9.5
   max_loop_time_ms: 200.0
   # This 200 ms ceiling became a live interlock when the monitor started
   # receiving each tick's real measured total rather than the sensor-read
