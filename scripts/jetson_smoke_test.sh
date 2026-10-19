@@ -404,10 +404,13 @@ PYEOF
 # ---------------------------------------------------------------------------
 # 3. Serial
 # ---------------------------------------------------------------------------
-# A probe, not an open/write check. It opens the port exclusively, so a port the orchestrator
-# (or any opener that also locks) holds FAILs with "Could not exclusively lock port", and it
-# needs a reply to the command-set probe: opening a port proves a device node, not a board, so
-# silence is a FAIL too. The only way to pass is a response.
+# A probe, not an open/write check. It opens the port exclusively, so a port another opener in the
+# same container holds (the orchestrator, when this runs by `docker exec`) FAILs with "Could not
+# exclusively lock port". The lock does not cross the container boundary: run directly on the host
+# this stage shares no device node with a containerised orchestrator, so stop the container first
+# (jetson_full_smoke_run.sh does that in cold mode). It also needs a reply to the command-set
+# probe: opening a port proves a device node, not a board, so silence is a FAIL too. The only way
+# to pass is a response.
 
 test_serial() {
     log_section "Serial Port Test"

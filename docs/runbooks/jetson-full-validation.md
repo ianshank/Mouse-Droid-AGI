@@ -171,15 +171,15 @@ The rover ESP32 is currently non-functional. The pass tolerates this:
 - The `smoke:serial`, `smoke:motor`, and `smoke:power` steps are **non-blocking**
   (WARN, not FAIL) — they capture repair diagnostics without failing the gate.
 - The ESP32 port is opened **exclusively**. `SerialESP32Driver` and the `smoke:serial`
-  probe both take pyserial's `flock` (`exclusive=True`), so an opener that finds the port
-  held FAILs fast with `Could not exclusively lock port` instead of sharing the UART with
-  the holder and reading half of its frames. That is also why Phase 2 stops the container
-  first: with `esp32.enabled` true the orchestrator owns the port, and a probe beside it
-  would fail rather than measure. The lock is advisory and per device node, so it stops
-  openers that also lock and share the node (processes in one container), not a program
-  that opens the port without locking. `smoke:serial` is a probe in the same sense: it
-  needs a reply, so a silent board FAILs (a WARN here), and an open nobody answers no
-  longer passes.
+  probe both take pyserial's `flock` (`exclusive=True`), so two openers inside one
+  container collide: the second FAILs fast with `Could not exclusively lock port` instead
+  of sharing the UART and reading half of its frames. The lock does not reach across the
+  container boundary. It is an advisory `flock` on one device node, and the host and every
+  other container get their own node for the device, so Phase 2's probes, which run from
+  the host venv, would NOT collide with a live orchestrator: what keeps them off its port
+  is that Phase 2 stops the container first. Nor does the lock see a program that opens the
+  port without locking. `smoke:serial` is a probe in the same sense: it needs a reply, so a
+  silent board FAILs (a WARN here), and an open nobody answers no longer passes.
 - `smoke:motor` and `smoke:power` stack `config/jetson_bench_esp32.yaml` (one key,
   `esp32.enabled: true`) onto the validation's config stack through
   `esp32_stage_configs_csv` (F-059), so they talk to the board rather than the

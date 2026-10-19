@@ -92,10 +92,16 @@ MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION=true \
     bash scripts/jetson_full_smoke_run.sh
 ```
 
-Exported on the host it reaches every stage; left unset it is not forwarded at
-all, not even as an empty string, so the container's own environment and config
-decide (the schema default is closed). The `mcp_motor_smoke` stage passes
-`false` itself when the host leaves it unset.
+Exported on the host it reaches every stage. Left unset it never arrives as an
+empty string, but what happens instead differs by mode: a warm stage (`docker
+exec`) runs with the variable **removed**, so the gate falls back to the YAML
+and schema default (closed) whatever `/etc/mousedroid/docker.env` says for the
+orchestrator, and only an export on the host can open it; a cold stage (`docker
+compose run`) keeps the service's own value, so a `docker.env` that opens the
+gate stays open there. The `mcp_motor_smoke` stage passes `false` itself when
+the host leaves it unset. A stale `=true` left exported in your shell now takes
+effect, where before the wrapper stopped it at the host: unset it when you are
+done.
 
 **Direct invocation (`jetson_smoke_test.sh motor`)** — operators must set
 BOTH env vars so the bash gate AND the Python gate let motion through:
@@ -158,19 +164,29 @@ bench experiments.
 
 The `serial` stage is a probe, so it needs a reply: it opens the port
 exclusively (as the driver does) and silence FAILs, where it used to record a
-PASS for an open nobody answered. A port another opener holds FAILs too, with
-`Could not exclusively lock port`, rather than sharing the UART with the holder.
-The lock is advisory and per device node, so it stops openers that also lock and
-share the node (processes in one container), not a program that opens the port
-without locking.
+PASS for an open nobody answered. A port another opener inside the same
+container holds FAILs too, with `Could not exclusively lock port`, rather than
+sharing the UART with the holder: the wrapper's `serial` stage runs by `docker
+exec` in the orchestrator's own container, so it and the driver back each other.
+The lock does not reach across the container boundary. It is an advisory
+`flock` on one device node, and the host and every other container get their
+own node for the device, so a host process or a second container holding the
+port goes unseen, as does a program that opens it without locking. What keeps a
+smoke stage off the orchestrator's port is stopping the orchestrator (cold mode,
+or Phase 2 of the full-validation runbook), not the lock. A stage that only
+skipped (pyserial missing from the image) records `SKIPPED`, never `PASS`.
 
 ## Triage matrix
 
 | Symptom in `SUMMARY.md` | First check |
 |-------------------------|-------------|
 | `usbc` FAIL | `ls /dev/serial/by-id/` — confirm both CP2102N (rover) and CP2102 (lidar) cables are seated and not held by another process. |
-| `serial` FAIL `Could not exclusively lock port` after `usbc` PASS | Another opener holds the ESP32 port; the stage and the driver both open it exclusively, so the second opener fails fast. The usual holder is the orchestrator in the `mousedroid` container with `esp32.enabled` true. Through the wrapper that case is refused up front (next row); for a direct `jetson_smoke_test.sh serial`, stop the container first (`docker stop mousedroid`, then `docker start mousedroid`). Restarting it does not help, because it re-opens the port. |
-| `serial`, `motor`, `power` or `mcp_motor_smoke` FAIL `warm smoke refused` | Not a rover fault. The wrapper will not open the ESP32 port beside a running orchestrator: the container's own settings have `esp32.enabled` true, or the wrapper could not read them (the reason says which). Re-run with `MOUSEDROID_SMOKE_ESP32_MODE=cold`, which stops the container for the ESP32 stages and starts it again. |
+| `serial` FAIL `Could not exclusively lock port` after `usbc` PASS | Another opener inside the same container holds the ESP32 port (the stage and the driver both open it exclusively, so the second one fails fast). The usual holder is the orchestrator with `esp32.enabled` true; through the wrapper that case is refused up front (next row), so you only see this from a direct `docker exec`. Run it cold instead: `MOUSEDROID_SMOKE_ESP32_MODE=cold` stops the orchestrator for the stage. The lock cannot see a holder outside the container, and a stage run directly on the host (`bash scripts/jetson_smoke_test.sh serial`) shares no device node with the container's orchestrator, so it would share the UART silently: `docker stop mousedroid` first and `docker restart mousedroid` after. |
+| `serial`, `motor`, `power` or `mcp_motor_smoke` FAIL `warm smoke refused` | Not a rover fault. The wrapper will not open the ESP32 port beside a running orchestrator: the container's own settings have `esp32.enabled` true (serial protocol, not `mock_hardware`), or the wrapper could not read them (the reason says which). Re-run with `MOUSEDROID_SMOKE_ESP32_MODE=cold`, which stops the container for the ESP32 stages and restarts it. |
+| any ESP32 stage FAIL `cold smoke refused: the transient container cannot be created (...)` | Not a rover fault, and nothing was stopped: the dry run before the stop could not create the transient container, so the orchestrator is still running. Compose's own message is in the row. The usual cause is an unreadable `/etc/mousedroid/docker.env` (`permission denied`; `compose run` reads it even with `required: false`): run the wrapper as a user that can read it, or with `sudo`. |
+| any ESP32 stage FAIL `cold smoke aborted: docker stop ... failed` | The container did not stop, so it may still own the port: the stage did not run and the wrapper restarted the container. Check `docker ps` and `docker logs mousedroid`, then re-run. |
+| `serial`, `motor` or `power` SKIPPED | The stage ran nothing and says why: pyserial missing from the image (`serial`), or `MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY` set empty (`motor`, `power`). A skipped ESP32 stage never records PASS. |
+| `mcp_motor_smoke` PASS with a `mock driver: ...` note | The stage stacks no bench overlay, so with `esp32.enabled: false` its velocity and e-stop checks ran against `MockESP32Driver` (only the MCP polling is real). It is not a measurement of the board, and in cold mode it opened no window of its own. |
 | `motor` FAIL `encoder loopback inactive` | First: is `chassis_has_wheel_encoders` right for this chassis? The WAVE ROVER is encoder-less (audit R3): with the flag `false` the stage requires a T:1001 frame (`EncoderReading.imu_valid`) instead of wheel velocity, and a silent board FAILS (the FAIL reason reads `no FEEDBACK_BASE_INFO frame after ... in N poll(s)`, with the traceback in `motor.log`; check the command-set/baud row below before the wiring). A reason of `esp32.enabled=false` means the stage never reached the board: stack `config/jetson_bench_esp32.yaml` or unset `MOUSEDROID_ESP32__ENABLED`. On an encoder-bearing chassis: rover power; motor/encoder wiring; rover firmware version. Re-run with `MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION=true` only after lifting the rover off the ground. |
 | `serial` FAIL `No response from ESP32` on a presumed-live board | Command-set/baud mismatch (audit R1/R2): stock firmware ignores legacy commands and runs 115 200 baud. The FAIL line names the `command_set` and `baud` the probe used. Retry with `MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock` before declaring the board dead. |
 | `power` FAIL on e-stop latency | `ESP32Config.emergency_stop_budget_ms` may need re-tuning OR the UART is congested — check `command_dispatch` log volume in `power.log`. |
@@ -217,14 +233,16 @@ does not give a cold run. The cold path for those sensors is Phase 2 of
 container and probes from the host venv.
 
 The ESP32 stages (`serial`, `motor`, `power`, `mcp_motor_smoke`) are the
-exception, because the serial driver opens the ESP32 UART exclusively and a
-running orchestrator and a smoke stage cannot both hold it.
+exception, because a running orchestrator and a smoke stage must not both hold
+the ESP32 UART. The serial driver opens it exclusively, but that lock only
+collides inside one container (see above), so the wrapper does not lean on it:
+it either refuses the stage or stops the orchestrator.
 `MOUSEDROID_SMOKE_ESP32_MODE` says how the wrapper gives them the port:
 
 | Mode | What the wrapper does |
 |------|-----------------------|
-| `warm` (default) | Runs them through `docker exec` in the running container. Right while that container's own ESP32 is the mock (`esp32.enabled: false`, the shipped production posture), because its orchestrator then holds no port. If the orchestrator owns the port (`esp32.enabled` true and not `mock_hardware`), each ESP32 stage is **refused**: recorded `FAIL` with `warm smoke refused: the orchestrator in mousedroid owns the ESP32 port; re-run with MOUSEDROID_SMOKE_ESP32_MODE=cold` (`EXPECTED-FAIL` for a stage demoted to non-blocking) and not run. A refused blocking stage stops the run like any blocking failure. The wrapper refuses the same way when it cannot tell who owns the port. |
-| `cold` | Stops the container, runs the ESP32 stages in a transient container from the same compose service (`docker compose run --rm --no-deps --name mousedroid-cold-smoke`: same image and device passthrough, orchestrator not started), and starts the container again before the next stage that needs it: once after `power`, once after `mcp_motor_smoke`. If `docker stop` fails the stage is not run, since the container may still own the port. An EXIT trap restarts the container on any exit, a signal included, and removes the transient container first. Compose reads the device paths (`MOUSEDROID_ESP32_DEV` and the other `MOUSEDROID_*_DEV` keys) from the shell that runs the wrapper, not from `/etc/mousedroid/docker.env`, so export any overrides you keep there first. |
+| `warm` (default) | Runs them through `docker exec` in the running container. Right while that container's own ESP32 is the mock (`esp32.enabled: false`, the shipped production posture), because its orchestrator then holds no port. If the orchestrator owns the port (`esp32.enabled` true, not `mock_hardware`, serial protocol), each ESP32 stage is **refused**: recorded `FAIL` with `warm smoke refused: the orchestrator in mousedroid owns the ESP32 port; re-run with MOUSEDROID_SMOKE_ESP32_MODE=cold` (`EXPECTED-FAIL` for a stage demoted to non-blocking) and not run. A refused blocking stage stops the run like any blocking failure. The wrapper refuses the same way when it cannot tell who owns the port. |
+| `cold` | Dry-runs the transient container first, with the orchestrator still up (`docker compose run --rm --no-deps --entrypoint true`): if compose cannot create it, the stages are refused with compose's message and nothing is stopped. Then stops the container, runs the ESP32 stages in a transient container from the same compose service (`docker compose run --rm --no-deps --name mousedroid-cold-smoke`: same image and device passthrough, orchestrator not started, python under the stage's `timeout` like the warm wrapper) and restarts the container before the next stage that needs it: after `power`, and again after `mcp_motor_smoke` if the orchestrator owns the port (with nothing owning a port that stage measures the mock, so it runs in the container with no window and its row says so). A leftover transient container is removed before each stage. If `docker stop` fails the stage is not run, since the container may still own the port. The restore is `docker restart`, because a `docker start` issued while a stop is still running does nothing, and an EXIT trap repeats it on every exit the shell can catch. SIGKILL cannot be caught: after a `kill -9` of the wrapper inside a cold window, `docker start mousedroid` by hand. Before `llm_probe` the wrapper waits for the restarted container's healthcheck, bounded (`MOUSEDROID_SMOKE_HEALTH_RETRIES` x `MOUSEDROID_SMOKE_HEALTH_INTERVAL_S`, 30 x 5 s), and never fails the run for it. `compose run` reads `/etc/mousedroid/docker.env`, so run the wrapper as a user that can read it. |
 
 ```bash
 MOUSEDROID_SMOKE_ESP32_MODE=cold bash scripts/jetson_full_smoke_run.sh
