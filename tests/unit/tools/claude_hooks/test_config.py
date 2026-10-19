@@ -16,6 +16,7 @@ from tools.claude_hooks.config import (
     ConfigError,
     WorkforceConfig,
     load_config,
+    parse_config_text,
 )
 
 
@@ -109,6 +110,37 @@ def test_non_mapping_document_is_rejected(tmp_path: Path) -> None:
     _write_config(tmp_path, "- just\n- a\n- list\n")
     with pytest.raises(ConfigError, match="must contain a YAML mapping"):
         load_config(repo_root=tmp_path)
+
+
+def test_parse_config_text_is_what_load_config_applies_to_a_file(tmp_path: Path) -> None:
+    """The reviewer reads the config from a git blob; the schema and messages must not differ."""
+    body = "freeze:\n    feature_key: F-777\ncredit:\n    caps_usd:\n        B: 5\n"
+    _write_config(tmp_path, body)
+    from_file = load_config(repo_root=tmp_path)
+    from_text = parse_config_text(body, source="abc123:.claude/workforce.yaml")
+    assert from_text == from_file
+    assert from_text.freeze.feature_key == "F-777"
+    assert from_text.credit.caps_usd == {"B": 5.0}
+
+
+@pytest.mark.parametrize("body", ["", "# only a comment\n", "---\n"])
+def test_parse_config_text_of_an_empty_document_is_the_defaults(body: str) -> None:
+    assert parse_config_text(body, source="x") == WorkforceConfig()
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        ("freeze: [unclosed\n", "invalid YAML"),
+        ("- a\n- list\n", "must contain a YAML mapping"),
+        ("unknown_section:\n    a: 1\n", "unknown_section"),
+        ("coverage:\n    tools_line_min: 101\n", "invalid workforce config"),
+    ],
+)
+def test_parse_config_text_names_the_source_in_every_failure(body: str, message: str) -> None:
+    with pytest.raises(ConfigError, match=message) as excinfo:
+        parse_config_text(body, source="deadbeef:.claude/workforce.yaml")
+    assert "deadbeef:.claude/workforce.yaml" in str(excinfo.value)
 
 
 def test_unreadable_file_is_rejected(tmp_path: Path) -> None:

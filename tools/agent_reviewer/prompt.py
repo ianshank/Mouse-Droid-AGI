@@ -13,14 +13,17 @@ quietly skips - a file when:
   checked on the NAME before the file is opened;
 * its text contains something shaped like a credential (an Anthropic key, a Hugging
   Face token, an AWS key id, a GitHub token, a private-key block); or
-* its text matches a regex declared in ``.gitleaks.toml`` (read at run time, so the
-  repo's own secret policy is the single source - the placeholders it allowlists are
-  refused here too: a cloud prompt has no use for a fake key);
+* its text matches a regex declared in ``.gitleaks.toml``. The runner passes that file's
+  text as it is at the BASE ref - the working tree belongs to the head under review, and a
+  head that can rewrite the secret policy can switch the screen off - so the repo's own
+  secret policy is the single source (the placeholders it allowlists are refused here
+  too: a cloud prompt has no use for a fake key);
 
 and the assembled prompt is then scanned by the workforce's own ``gitleaks`` wrapper
 (the default ruleset ``.gitleaks.toml`` extends), so a pattern the Python screens do
-not know still has a chance to stop it. When ``gitleaks`` is not installed the scan
-is skipped with a warning, unless ``secret_scan.strict`` is true.
+not know still has a chance to stop it. The program is found on ``PATH`` without looking in
+the working directory, and the policy file it reads is the base ref's copy. When ``gitleaks``
+is not installed the scan is skipped with a warning, unless ``secret_scan.strict`` is true.
 
 A refusal never repeats the text that triggered it.
 """
@@ -29,6 +32,7 @@ from __future__ import annotations
 
 import re
 import sys
+import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Final
@@ -61,12 +65,14 @@ saved verbatim as the review. If the context you need is missing, say what is mi
 end with NEEDS_CONTEXT instead of guessing.
 
 You can read files and run `git diff`, `git log` and `git show`; you cannot write, edit, run
-tests or any other program, or reach the network. Pathspecs go after `--` and are literal (a
-glob matches nothing), `--all` and the other whole-history options are refused, and
-`git show <rev>:<path>` works only for a file that exists at the base - read a file the change
-adds from `git diff <base>...<head> -- <path>`. A refused tool call is the harness doing its
-job, not a defect in the code under review: do not report it, and do not retry it in another
-form."""
+tests or any other program, or reach the network. Name commits only by the full ids in the
+task (optionally followed by ^, ^N or ~N): a branch name, HEAD, an abbreviation or a blob id
+is refused. Attach option values to the option (`-n5`, `--grep=text`). Pathspecs go after
+`--` and are literal (a glob matches nothing); `--all`, `--raw` and the other whole-history
+or blob-id options are refused; and `git show <commit>:<path>` works only for a file that
+exists at the base - read a file the change adds from `git diff <base>...<head> -- <path>`.
+A refused tool call is the harness doing its job, not a defect in the code under review: do
+not report it, and do not retry it in another form."""
 
 DIAGNOSTICS_EVIDENCE_RULE: Final = """\
 ## When an MCP diagnostic is evidence
@@ -149,33 +155,38 @@ def _regex_sources(data: Mapping[str, Any]) -> list[str]:
     return found
 
 
-def gitleaks_regexes(repo_root: Path, cfg: WorkforceConfig) -> list[re.Pattern[str]]:
-    """Compile the regexes declared in the repository's ``.gitleaks.toml``.
+def gitleaks_regexes(
+    toml_text: str | None, *, source: str = ".gitleaks.toml"
+) -> list[re.Pattern[str]]:
+    """Compile the regexes declared in a ``.gitleaks.toml``, given its text.
 
-    A missing file is an empty list (the repo has no custom secret policy). A file
-    that exists but cannot be read or compiled is a refusal: a prompt must not be
-    built while the policy that guards it is unreadable.
+    The text is the file as it is at the TRUSTED base ref; nothing here reads the working
+    tree. ``None`` is an empty list (the base has no custom secret policy). Text that
+    cannot be parsed or compiled is a refusal: a prompt must not be built while the policy
+    that guards it is unreadable.
+
+    Args:
+        toml_text: The file's text, or ``None`` when the base ref has no such file.
+        source: What to call it in messages.
 
     Raises:
-        PromptRefusedError: The file is not valid TOML, or a regex in it does not compile.
+        PromptRefusedError: The text is not valid TOML, or a regex in it does not compile.
     """
-    relpath = cfg.secret_scan.config_file
-    path = repo_root / relpath
-    if not path.is_file():
+    if toml_text is None:
         return []
     try:
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        data = tomllib.loads(toml_text)
+    except tomllib.TOMLDecodeError as exc:
         raise PromptRefusedError(
-            f"{relpath} cannot be read as TOML ({type(exc).__name__}); not building a prompt "
+            f"{source} cannot be read as TOML ({type(exc).__name__}); not building a prompt "
             "without the secret policy"
         ) from exc
     patterns: list[re.Pattern[str]] = []
-    for source in _regex_sources(data):
+    for pattern_source in _regex_sources(data):
         try:
-            patterns.append(re.compile(source))
+            patterns.append(re.compile(pattern_source))
         except re.error as exc:
-            raise PromptRefusedError(f"a regex in {relpath} does not compile ({exc})") from exc
+            raise PromptRefusedError(f"a regex in {source} does not compile ({exc})") from exc
     return patterns
 
 
@@ -190,13 +201,20 @@ def _screen_content(text: str, *, label: str, patterns: Sequence[re.Pattern[str]
             )
 
 
-def read_includable(path: str | Path, *, repo_root: Path, cfg: WorkforceConfig) -> str:
+def read_includable(
+    path: str | Path,
+    *,
+    repo_root: Path,
+    cfg: WorkforceConfig,
+    gitleaks_toml: str | None = None,
+) -> str:
     """Read a repository file for inclusion in a prompt, or refuse.
 
     Args:
         path: Repo-relative (or absolute, inside the repo) path.
         repo_root: Repository root.
-        cfg: Workforce config (names the ``.gitleaks.toml`` to read).
+        cfg: Workforce config (names the ``.gitleaks.toml`` in messages).
+        gitleaks_toml: That file's text at the TRUSTED base ref (``None``: no custom policy).
 
     Returns:
         The file's text.
@@ -222,11 +240,14 @@ def read_includable(path: str | Path, *, repo_root: Path, cfg: WorkforceConfig) 
         text = full.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         raise PromptRefusedError(f"cannot read {rel} as UTF-8 text ({type(exc).__name__})") from exc
-    _screen_content(text, label=rel, patterns=gitleaks_regexes(repo_root, cfg))
+    patterns = gitleaks_regexes(gitleaks_toml, source=cfg.secret_scan.config_file)
+    _screen_content(text, label=rel, patterns=patterns)
     return text
 
 
-def screen_included_text(text: str, *, label: str, repo_root: Path, cfg: WorkforceConfig) -> None:
+def screen_included_text(
+    text: str, *, label: str, cfg: WorkforceConfig, gitleaks_toml: str | None = None
+) -> None:
     """Refuse ``text`` (supplied by the caller, not read from the working tree) as a prompt part.
 
     The same screens :func:`read_includable` applies to a file: the name ``label`` is checked
@@ -239,24 +260,52 @@ def screen_included_text(text: str, *, label: str, repo_root: Path, cfg: Workfor
     reason = policy.secret_path_reason(label)
     if reason:
         raise PromptRefusedError(f"refusing to include {label}: {reason}")
-    _screen_content(text, label=label, patterns=gitleaks_regexes(repo_root, cfg))
+    patterns = gitleaks_regexes(gitleaks_toml, source=cfg.secret_scan.config_file)
+    _screen_content(text, label=label, patterns=patterns)
+
+
+def _run_gitleaks(text: str, cfg: WorkforceConfig, gitleaks_toml: str | None) -> ScanOutcome:
+    """Scan ``text`` with the program found without looking in the working directory.
+
+    The workforce wrapper resolves the command with ``shutil.which``, which on Windows tries
+    the working directory first; a ``gitleaks.exe`` committed to the head would run with the
+    API key in its environment. So the program is resolved here, from absolute ``PATH``
+    directories only, and the wrapper is handed the absolute path. The policy file it reads
+    is the base ref's copy, written to a scratch directory laid out like a checkout.
+    """
+    executable = policy.resolve_executable(cfg.secret_scan.command)
+    if executable is None:
+        return ScanOutcome(
+            clean=True, available=False, detail=f"'{cfg.secret_scan.command}' not found on PATH"
+        )
+    trusted = cfg.model_copy(
+        update={"secret_scan": cfg.secret_scan.model_copy(update={"command": executable})}
+    )
+    with tempfile.TemporaryDirectory(prefix="agent-reviewer-gitleaks-") as scratch:
+        root = Path(scratch)
+        if gitleaks_toml is not None:
+            policy_file = root / cfg.secret_scan.config_file
+            policy_file.parent.mkdir(parents=True, exist_ok=True)
+            policy_file.write_text(gitleaks_toml, encoding="utf-8", newline="\n")
+        return secret_scan.scan_content(text, trusted, repo_root=root, target=_SCAN_TARGET)
 
 
 def scan_with_gitleaks(
     text: str,
     *,
-    repo_root: Path,
     cfg: WorkforceConfig,
     label: str,
+    gitleaks_toml: str | None = None,
     scanner: Scanner | None = None,
 ) -> None:
     """Run the workforce's ``gitleaks`` wrapper over ``text``; raise on a finding.
 
     Args:
         text: The text about to leave the machine (a prompt) or be committed (a review).
-        repo_root: Repository root (locates ``.gitleaks.toml``).
         cfg: Workforce config (the scanner command and ``secret_scan.strict``).
         label: What is being scanned, for the message.
+        gitleaks_toml: The ``.gitleaks.toml`` text at the TRUSTED base ref the scan uses
+            (``None``: gitleaks' default ruleset).
         scanner: Replaces the real scan (tests).
 
     Raises:
@@ -264,10 +313,7 @@ def scan_with_gitleaks(
             ``secret_scan.strict`` is true. When it is unavailable and not strict the
             scan is skipped with a warning.
     """
-    if scanner is not None:
-        outcome = scanner(text)
-    else:
-        outcome = secret_scan.scan_content(text, cfg, repo_root=repo_root, target=_SCAN_TARGET)
+    outcome = scanner(text) if scanner is not None else _run_gitleaks(text, cfg, gitleaks_toml)
     if outcome.available and not outcome.clean:
         raise PromptRefusedError(
             f"gitleaks reported a finding in {label}: {outcome.detail[:_DETAIL_CHARS]}"
@@ -288,6 +334,7 @@ def build(
     cfg: WorkforceConfig,
     extra_files: Sequence[str | Path] = (),
     agent_text: str | None = None,
+    gitleaks_toml: str | None = None,
     scanner: Scanner | None = None,
 ) -> str:
     """Assemble the reviewer's system prompt.
@@ -301,6 +348,8 @@ def build(
             ref: the working tree belongs to the head under review, and a head that can
             rewrite the reviewer's own instructions can neutralise its review. When omitted
             the file is read from the working tree (callers that trust it).
+        gitleaks_toml: The ``.gitleaks.toml`` text at the TRUSTED base ref, for the regex
+            screens and the ``gitleaks`` scan (``None``: no custom secret policy).
         scanner: Replaces the ``gitleaks`` scan of the assembled prompt (tests).
 
     Returns:
@@ -311,20 +360,28 @@ def build(
         PromptRefusedError: Any included file, or the assembled prompt, was refused.
     """
     if agent_text is None:
-        agent = read_includable(cfg.agent_reviewer.agent_file, repo_root=repo_root, cfg=cfg)
+        agent = read_includable(
+            cfg.agent_reviewer.agent_file,
+            repo_root=repo_root,
+            cfg=cfg,
+            gitleaks_toml=gitleaks_toml,
+        )
     else:
         screen_included_text(
-            agent_text, label=cfg.agent_reviewer.agent_file, repo_root=repo_root, cfg=cfg
+            agent_text,
+            label=cfg.agent_reviewer.agent_file,
+            cfg=cfg,
+            gitleaks_toml=gitleaks_toml,
         )
         agent = agent_text
     sections = [strip_front_matter(agent), OPERATING_CONSTRAINTS, DIAGNOSTICS_EVIDENCE_RULE]
     for extra in extra_files:
-        text = read_includable(extra, repo_root=repo_root, cfg=cfg)
+        text = read_includable(extra, repo_root=repo_root, cfg=cfg, gitleaks_toml=gitleaks_toml)
         sections.append(f"## Context file: {Path(extra).as_posix()}\n\n{text}")
     sections.append(HOUSE_OUTPUT_SHAPE)
     prompt = "\n\n".join(section.strip() for section in sections) + "\n"
     scan_with_gitleaks(
-        prompt, repo_root=repo_root, cfg=cfg, label="the assembled prompt", scanner=scanner
+        prompt, cfg=cfg, label="the assembled prompt", gitleaks_toml=gitleaks_toml, scanner=scanner
     )
     return prompt
 
@@ -355,6 +412,8 @@ def build_user_prompt(
         "",
         f"- base: {base_ref} = {base_sha}",
         f"- head: {head_ref} = {head_sha}",
+        "- in git commands name commits only by those two full ids (add ^ or ~N for their "
+        "ancestors); branch names, HEAD and abbreviations are refused.",
         f"- start with `git diff --stat {base_sha}...{head_sha}`, then read each changed "
         f"file's diff with `git diff {base_sha}...{head_sha} -- <path>` (a literal path).",
     ]

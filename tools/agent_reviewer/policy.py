@@ -4,41 +4,46 @@ Threat model
 ------------
 The reviewer runs on the operator's workstation with an API key in its environment,
 against a change set that may be HOSTILE: the head commit controls every file in the
-working tree. So nothing the reviewed tree controls may reach an exec sink, an
-environment that holds the key, or a path the reviewer should not read. Everything
-that enforces that lives here, as plain data and pure functions, so tests pin it
-without the SDK, a network or a key. The layers, in the order the SDK applies them:
+working tree. So the trust boundary is the BASE ref - nothing the reviewed tree controls
+may reach an exec sink, an environment that holds the key, a path the reviewer should
+not read, or the reviewer's own configuration and instructions. Everything that enforces
+that lives here, as plain data and pure functions, so tests pin it without the SDK, a
+network or a key. The layers, in the order the SDK applies them:
 
 1. ``BASE_TOOLS`` (``tools=``): the model is only shown ``Read``, ``Grep``,
    ``Glob`` and ``Bash``. ``Write``, ``Edit``, the web tools and the subagent tool
    do not exist for it.
 2. :class:`BashGuard` (a PreToolUse hook): hooks run FIRST. A whitelist -
    ``git diff|log|show``, nothing else, as one plain command. It refuses the git
-   options that write a file, run a configured program, read outside the repo or
-   widen the search to every ref (``--all``, ``--reflog``, ...); pathspecs after
-   ``--`` must be literal (no globs, no ``:`` magic, nothing starting with ``-``);
-   and ``git show <rev>:<path>`` is accepted only for a non-secret file TRACKED AT
-   THE BASE REF, because a path the literal-token screen never sees (a history-wide
-   form, a path the head renamed) is a path it cannot vouch for. It returns nothing
-   when it has no objection: an explicit "allow" would approve the call on its own,
-   skipping the allowlist match below, so the hook can only tighten, never grant.
-   There is no pytest and no interpreter on the list: ``--collect-only`` still
-   imports the repository's ``conftest.py`` and test modules, which is the head
-   commit's code running in a process that holds the key.
+   options that write a file, run a configured program, read outside the repo, widen
+   the search to every ref (``--all``, ``--reflog``, ...) or print blob ids
+   (``--raw``, ``--abbrev``). Pathspecs after ``--`` must be literal (no globs, no ``:``
+   magic, nothing starting with ``-``). A revision must be one of the PINNED commits
+   (the resolved base and head ids) with ancestry suffixes (``^``, ``~N``): a bare blob
+   or tree id, an abbreviation or a ref name could name an object whatever its path, so
+   none is accepted. And ``git show <rev>:<path>`` is accepted only for a non-secret
+   file TRACKED AT THE BASE REF. The hook returns nothing when it has no objection: an
+   explicit "allow" would approve the call on its own, skipping the allowlist match
+   below, so it can only tighten, never grant. There is no pytest and no interpreter
+   on the list: ``--collect-only`` still imports the repository's ``conftest.py`` and
+   test modules, which is the head commit's code running in a process that holds the key.
 3. :func:`disallowed_tools` (deny rules): evaluated even if the hook were to fail.
    Writes, web access, subagents, every actuation tool by name, and reads of
    secret files (``*.env``, ``docker.env*``) and credential directories.
 4. ``permission_mode="dontAsk"``: anything not pre-approved is denied instead of
    prompting - a headless run has nobody to ask.
 5. ``ALLOWED`` (``allowed_tools=``): the allowlist itself.
-6. :func:`build_mcp_servers`: the only MCP server is ``mousedroid``, and its entry
-   is BUILT IN CODE from constants - the interpreter is ``sys.executable``, the
-   arguments are :data:`MCP_ARGS`, the environment is :data:`MCP_ENV` - never passed
-   through from any ``.mcp.json``. The file is read from the trusted BASE ref (not
-   the working tree, which the head controls) and only to CONFIRM that it still
-   declares the pinned invocation; a mismatch refuses the run. ``strict_mcp_config``
-   keeps the CLI from loading any other server (the ``github`` entry of
-   ``.mcp.json`` carries a token and can write).
+6. :func:`build_mcp_servers`: the only MCP server is ``mousedroid``, and its entry is
+   BUILT IN CODE from constants - never passed through from any ``.mcp.json``. The
+   interpreter is ``sys.executable`` run ISOLATED (``-I``: neither the working
+   directory nor any ``PYTHON*`` variable reaches the import path), through a fixed
+   bootstrap that first changes to a scratch directory outside the checkout (the
+   CLI's stdio schema has no ``cwd``) and then runs ``mousedroid`` with a
+   configuration file that the runner materialised there from the BASE ref. The ``.mcp.json``
+   is read from the base ref too and only CONFIRMS that it still declares the pinned
+   invocation; a mismatch refuses the run. ``strict_mcp_config`` keeps the CLI from
+   loading any other server (the ``github`` entry of ``.mcp.json`` carries a token and
+   can write).
 7. ``setting_sources=[]``: no user, project or local settings file can widen any
    of the above - and the head's ``.claude/settings.json`` hooks never run.
 8. :func:`process_env`: the environment the reviewer adds for the CLI process is an
@@ -49,6 +54,10 @@ without the SDK, a network or a key. The layers, in the order the SDK applies th
    the processes the CLI starts is that none of them runs tree-controlled code
    (layers 2 and 6), that the MCP server entry blanks the credential variables, and,
    as an opt-in, the CLI's own ``CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`` (see README).
+9. :func:`resolve_executable`: ``git`` and ``gitleaks`` are looked up in the absolute
+   directories of ``PATH`` only. ``shutil.which`` and Windows' ``CreateProcess`` both
+   look in the working directory first, so a ``git.exe`` committed to the head would
+   run with the key in its environment.
 
 Why there is no ``RegexInjectionFilter`` here
 ---------------------------------------------
@@ -69,7 +78,7 @@ Known limits, stated so nobody has to discover them
 * The Bash guard is a whitelist over a small character set, not a shell parser.
   It fails closed (an unusual-but-harmless command is refused) because the
   alternative is parsing shell.
-* ``git log -p`` over the named revisions shows every file those commits ever
+* ``git log -p`` over the pinned revisions shows every file those commits ever
   touched, including a secret file committed in the past and still reachable.
   Env files are gitignored and the CI secret scan covers history; the guard does not
   re-scan git's output.
@@ -179,15 +188,33 @@ CREDENTIAL_READ_DENY: Final[tuple[str, ...]] = (
 #: finds it is what decides whose code the server executes (see ``run_review``).
 MCP_MODULE: Final = "mousedroid"
 
-#: The module invocation the mock MCP server is started with, copied from the
-#: committed ``.mcp.json``. The entry handed to the SDK is built from THIS, never from
-#: the file: the file only has to confirm it (a mismatch refuses the run).
-MCP_ARGS: Final[tuple[str, ...]] = ("-m", MCP_MODULE, "--config", "config/default.yaml")
+#: The repo-relative configuration file the server is started with. The runner reads it
+#: from the BASE ref and hands the server a copy in a temporary directory; the checkout's
+#: own copy (which the head controls) is never given to it.
+MCP_CONFIG_RELPATH: Final = "config/default.yaml"
+
+#: The invocation the committed ``.mcp.json`` must still declare. It is only a pin to
+#: CONFIRM against: the entry handed to the SDK is built from constants, never from the
+#: file (see :func:`mcp_launch_args`), and a mismatch refuses the run.
+MCP_DECLARED_ARGS: Final[tuple[str, ...]] = ("-m", MCP_MODULE, "--config", MCP_CONFIG_RELPATH)
 
 #: What the committed ``.mcp.json`` may name as the interpreter. The entry built for the
 #: SDK always uses ``sys.executable`` - an absolute path, so no search of the working
 #: directory (which the head controls, and which Windows searches before ``PATH``).
 MCP_DECLARED_COMMANDS: Final = frozenset({"python", "python3"})
+
+#: What the server is started through, as ``python -I -c <this> <absolute config path>``.
+#: One line and single quotes only, so no command-line quoting can change it. It changes
+#: to the scratch directory that holds the configuration - the CLI's stdio schema has no
+#: ``cwd`` - and then does what ``python -m mousedroid --config <file>`` does.
+#: ``-I`` keeps the working directory and every ``PYTHON*`` variable off the import path.
+MCP_BOOTSTRAP: Final = (
+    "import os,runpy,sys;"
+    "c=sys.argv[1];"
+    "os.chdir(os.path.dirname(c));"
+    f"sys.argv=[{MCP_MODULE!r},'--config',c];"
+    f"runpy.run_module({MCP_MODULE!r},run_name='__main__',alter_sys=True)"
+)
 
 #: The whole environment the MCP server entry carries (the CLI lays it over its own).
 MCP_ENV: Final[Mapping[str, str]] = MappingProxyType(
@@ -200,9 +227,6 @@ MCP_ENV: Final[Mapping[str, str]] = MappingProxyType(
         # Defence in depth: even if an actuation tool name slipped past the rules above,
         # the server refuses to expose or run it.
         "MOUSEDROID_MCP__EXPOSE_ACTUATION_TOOLS": "false",
-        # `python -m` puts the working directory first on sys.path; a planted json.py or
-        # mousedroid/ in the head would run. 3.11+ honours this; older Pythons ignore it.
-        "PYTHONSAFEPATH": "1",
         # The CLI's environment holds the key and may be laid under this entry's: blank
         # every credential variable so the server never sees a value.
         "ANTHROPIC_API_KEY": "",
@@ -222,9 +246,15 @@ GIT_ENV: Final[Mapping[str, str]] = MappingProxyType(
 #: Variables copied from the parent when set; nothing else is copied.
 PROCESS_ENV_PASSTHROUGH: Final[tuple[str, ...]] = ("PATH", "HOME", "LANG")
 
-#: Constants forced into the CLI process (and so into its Bash children).
+#: Constants forced into the CLI process (and so into its Bash children). On Windows the
+#: programs the CLI starts are not looked for in the working directory - the checkout under
+#: review - before ``PATH``.
 FORCED_PROCESS_ENV: Final[Mapping[str, str]] = MappingProxyType(
-    {**GIT_ENV, "MOUSEDROID_MOCK_HARDWARE": "true"}
+    {
+        **GIT_ENV,
+        "MOUSEDROID_MOCK_HARDWARE": "true",
+        "NoDefaultCurrentDirectoryInExePath": "1",
+    }
 )
 
 # --- Bash guard vocabulary -------------------------------------------------- #
@@ -262,13 +292,20 @@ _GIT_DENIED_LONG: Final[tuple[str, ...]] = (
     "--walk-reflogs",
     "--alternate-refs",
     "--indexed-objects",
+    # print blob ids, which a later call could try to use as a revision
+    "--raw",
+    "--abbrev",
 )
 
 # -O<orderfile> reads an arbitrary file; -g is --walk-reflogs.
 _GIT_DENIED_SHORT_PREFIXES: Final[tuple[str, ...]] = ("-O", "-g")
 
-# A plain revision, range or repo-relative path before `--` (no glob, no `:`).
-_REVISION: Final = re.compile(r"[A-Za-z0-9._/@^~+-]+")
+# A pinned commit id (SHA-1 or SHA-256, lowercase) plus ancestry suffixes: `^`, `^2`, `~`,
+# `~3`. Nothing else names an object the guard lets through: a bare blob or tree id, an
+# abbreviation, a ref name or `<rev>^{tree}` could print an object whatever its path.
+_COMMIT_ISH: Final = re.compile(r"([0-9a-f]{40}|[0-9a-f]{64})((?:\^[0-9]*|~[0-9]*)*)")
+# `A..B` and `A...B`.
+_RANGE_SEPARATOR: Final = re.compile(r"\.\.\.?")
 # A literal file path after `--`: must not start with `-`, no `* ? [ :`, no `~`.
 _LITERAL_PATH: Final = re.compile(r"[A-Za-z0-9._][A-Za-z0-9._/ +@%=,-]*")
 
@@ -361,14 +398,54 @@ def process_env(environ: Mapping[str, str] | None = None) -> dict[str, str]:
     return env
 
 
+def _is_executable(path: str) -> bool:
+    return os.path.isfile(path) and os.access(path, os.X_OK)
+
+
+def resolve_executable(name: str, environ: Mapping[str, str] | None = None) -> str | None:
+    """Return the absolute path of the program ``name`` found on ``PATH``, or ``None``.
+
+    Only ABSOLUTE directories of ``PATH`` are searched - never the working directory, and
+    not an empty or relative entry. ``shutil.which`` and Windows' ``CreateProcess`` both
+    look in the working directory first, so a ``git.exe`` or ``gitleaks.exe`` committed to
+    the head under review would otherwise run in the reviewer's own process, with the API
+    key in its environment. A ``name`` that already has a directory part is returned only
+    when it is absolute and executable.
+
+    Args:
+        name: The program, with or without its extension.
+        environ: The environment whose ``PATH`` (and, on Windows, ``PATHEXT``) is searched
+            (default: ``os.environ``).
+    """
+    if os.path.dirname(name):
+        return name if os.path.isabs(name) and _is_executable(name) else None
+    source = os.environ if environ is None else environ
+    names = [name]
+    if os.name == "nt":
+        extensions = [ext for ext in source.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";") if ext]
+        if os.path.splitext(name)[1].lower() not in {ext.lower() for ext in extensions}:
+            names = [name + ext for ext in extensions]
+    for directory in source.get("PATH", "").split(os.pathsep):
+        directory = directory.strip('"')
+        if not directory or not os.path.isabs(directory):
+            continue
+        for candidate in names:
+            path = os.path.join(directory, candidate)
+            if _is_executable(path):
+                return path
+    return None
+
+
 # --------------------------------------------------------------------------- #
 # The Bash guard
 # --------------------------------------------------------------------------- #
 _BASH_ALLOWED_SUMMARY: Final = (
     "Bash is limited to `git diff`, `git log` and `git show`, as one plain command: no "
-    "chaining, pipes, redirection, substitution or variables. Pathspecs go after `--` and "
-    "are literal paths (no globs); `git show <rev>:<path>` names only a file tracked at "
-    "the base ref - read a file the change adds from `git diff <base>...<head> -- <path>`."
+    "chaining, pipes, redirection, substitution or variables. Name commits only by the full "
+    "ids pinned in the task (optionally followed by ^, ^N or ~N), attach option values to "
+    "the option (-n5, --grep=text), put pathspecs after `--` as literal paths (no globs), and "
+    "use `git show <commit>:<path>` only for a file tracked at the base - read a file the "
+    "change adds from `git diff <base>...<head> -- <path>`."
 )
 
 
@@ -415,11 +492,50 @@ def _pathspec_reason(word: str) -> str | None:
     return _path_token_reason(word) or _secret_token_reason(word)
 
 
-def _rev_path_reason(word: str, base_paths: Collection[str]) -> str | None:
-    """Check ``<rev>:<path>``: only a non-secret file tracked at the trusted base ref."""
+def _revision_part_reason(part: str, revisions: Collection[str], *, word: str) -> str | None:
+    """Check one revision: a pinned commit id, optionally with ancestry suffixes."""
+    match = _COMMIT_ISH.fullmatch(part)
+    if match is not None and match.group(1) in revisions:
+        return None
+    pinned = " and ".join(sorted(revisions)) or "none (this guard has no pinned commit)"
+    return (
+        f"{word!r} is not a revision this review allows: name commits only by the full ids "
+        f"pinned in the task ({pinned}), optionally followed by ^, ^N or ~N. Put paths after "
+        "`--`, and attach option values to the option (-n5, --grep=text): a separate word is "
+        "read as a revision."
+    )
+
+
+def _revision_reason(word: str, revisions: Collection[str]) -> str | None:
+    """Check a revision expression: a pinned commit alone, or as ``A..B`` / ``A...B``.
+
+    A bare blob or tree id, an abbreviation, a ref name or ``<rev>^{tree}`` could name an
+    object whatever its path, so none of them is accepted; neither is a commit id the
+    task did not pin. Either end of a range may be empty (``A..``) and a leading ``^``
+    excludes a commit.
+    """
+    parts = _RANGE_SEPARATOR.split(word)
+    if len(parts) > 2:
+        return f"{word!r}: a range has two ends (A..B or A...B)."
+    for part in parts:
+        if not part and len(parts) == 2:
+            continue
+        reason = _revision_part_reason(
+            part[1:] if part.startswith("^") else part, revisions, word=word
+        )
+        if reason:
+            return reason
+    return None
+
+
+def _rev_path_reason(
+    word: str, base_paths: Collection[str], revisions: Collection[str]
+) -> str | None:
+    """Check ``<rev>:<path>``: a pinned commit and a non-secret file tracked at the base ref."""
     rev, _, path = word.partition(":")
-    if not rev or not _REVISION.fullmatch(rev):
-        return f"{word!r}: before the `:` there must be a plain revision."
+    reason = _revision_part_reason(rev, revisions, word=word)
+    if reason:
+        return reason
     if not path or ":" in path:
         return f"{word!r} is not a <rev>:<path> naming one file."
     if secret_path_reason(path):
@@ -432,21 +548,20 @@ def _rev_path_reason(word: str, base_paths: Collection[str]) -> str | None:
     return None
 
 
-def _git_word_reason(word: str, base_paths: Collection[str]) -> str | None:
-    """Check a word before ``--``: an option, a ``<rev>:<path>``, or a revision / path."""
+def _git_word_reason(
+    word: str, base_paths: Collection[str], revisions: Collection[str]
+) -> str | None:
+    """Check a word before ``--``: an option, a ``<rev>:<path>``, or a revision expression."""
     if word.startswith("-"):
         return _git_option_reason(word) or _secret_token_reason(word)
     if ":" in word:
-        return _rev_path_reason(word, base_paths)
-    if not _REVISION.fullmatch(word):
-        return (
-            f"{word!r} is not a plain revision or path (letters, digits and . _ / @ ^ ~ + -); "
-            "put paths after `--`, and keep them literal."
-        )
-    return _path_token_reason(word) or _secret_token_reason(word)
+        return _rev_path_reason(word, base_paths, revisions)
+    return _revision_reason(word, revisions)
 
 
-def _check_git(argv: list[str], base_paths: Collection[str]) -> str | None:
+def _check_git(
+    argv: list[str], base_paths: Collection[str], revisions: Collection[str]
+) -> str | None:
     subcommand = argv[1]
     if subcommand not in _GIT_SUBCOMMANDS:
         return f"`git {subcommand}` is not read-only inspection. {_BASH_ALLOWED_SUMMARY}"
@@ -455,7 +570,11 @@ def _check_git(argv: list[str], base_paths: Collection[str]) -> str | None:
         if word == "--" and not after_separator:
             after_separator = True
             continue
-        reason = _pathspec_reason(word) if after_separator else _git_word_reason(word, base_paths)
+        reason = (
+            _pathspec_reason(word)
+            if after_separator
+            else _git_word_reason(word, base_paths, revisions)
+        )
         if reason:
             return reason
     return None
@@ -475,7 +594,12 @@ def _unquoted_expansion(command: str) -> str | None:
     return None
 
 
-def check_bash_command(command: object, *, base_paths: Collection[str] = frozenset()) -> str | None:
+def check_bash_command(
+    command: object,
+    *,
+    base_paths: Collection[str] = frozenset(),
+    revisions: Collection[str] = frozenset(),
+) -> str | None:
     """Return why ``command`` is refused, or ``None`` if the reviewer may run it.
 
     Args:
@@ -483,6 +607,8 @@ def check_bash_command(command: object, *, base_paths: Collection[str] = frozens
             payload is refused rather than raising).
         base_paths: The files tracked at the trusted base ref - the only files
             ``git show <rev>:<path>`` may name.
+        revisions: The pinned commits (the resolved base and head ids) - the only
+            commits a revision word may start from. Empty means none is accepted.
 
     Returns:
         ``None`` for ``git diff|log|show ...`` as a single plain command; otherwise a
@@ -506,7 +632,7 @@ def check_bash_command(command: object, *, base_paths: Collection[str] = frozens
     except ValueError as exc:
         return f"The command could not be parsed ({exc})."
     if len(argv) >= 2 and argv[0] == "git":
-        return _check_git(argv, base_paths)
+        return _check_git(argv, base_paths, revisions)
     return _BASH_ALLOWED_SUMMARY
 
 
@@ -526,6 +652,7 @@ async def deny_non_readonly_bash(
     context: Any,
     *,
     base_paths: Collection[str] = frozenset(),
+    revisions: Collection[str] = frozenset(),
 ) -> dict[str, Any]:
     """PreToolUse hook: refuse every Bash call that is not read-only git inspection.
 
@@ -538,6 +665,7 @@ async def deny_non_readonly_bash(
         tool_use_id: The tool call id (unused).
         context: The SDK's hook context (unused).
         base_paths: The files tracked at the trusted base ref (see :class:`BashGuard`).
+        revisions: The pinned commits (see :class:`BashGuard`).
     """
     try:
         if not isinstance(input_data, Mapping) or "tool_name" not in input_data:
@@ -546,7 +674,7 @@ async def deny_non_readonly_bash(
             return {}
         tool_input = input_data.get("tool_input")
         command = tool_input.get("command") if isinstance(tool_input, Mapping) else None
-        reason = check_bash_command(command, base_paths=base_paths)
+        reason = check_bash_command(command, base_paths=base_paths, revisions=revisions)
     except Exception as exc:  # fail closed: a guard that crashes must not wave a call through
         return _deny(f"The read-only Bash guard failed ({type(exc).__name__}); the call is denied.")
     return {} if reason is None else _deny(reason)
@@ -554,25 +682,32 @@ async def deny_non_readonly_bash(
 
 @dataclass(frozen=True)
 class BashGuard:
-    """The PreToolUse hook the reviewer registers: a callable bound to the base ref's files.
+    """The PreToolUse hook the reviewer registers: a callable bound to the base ref's facts.
 
     Attributes:
         base_paths: Every file tracked at the trusted base ref. ``git show <rev>:<path>``
             is accepted only when ``<path>`` is one of them (and is not a secret file).
+        revisions: The pinned commits - the resolved base and head ids. A revision word is
+            accepted only when it is one of them, optionally with ``^`` / ``~N`` suffixes.
     """
 
     base_paths: frozenset[str] = frozenset()
+    revisions: frozenset[str] = frozenset()
 
     def check(self, command: object) -> str | None:
         """Return why ``command`` is refused, or ``None``."""
-        return check_bash_command(command, base_paths=self.base_paths)
+        return check_bash_command(command, base_paths=self.base_paths, revisions=self.revisions)
 
     async def __call__(
         self, input_data: Mapping[str, Any] | None, tool_use_id: str | None, context: Any
     ) -> dict[str, Any]:
         """Hook entry point: ``{}`` to pass, or a deny payload."""
         return await deny_non_readonly_bash(
-            input_data, tool_use_id, context, base_paths=self.base_paths
+            input_data,
+            tool_use_id,
+            context,
+            base_paths=self.base_paths,
+            revisions=self.revisions,
         )
 
 
@@ -597,9 +732,9 @@ def confirm_mcp_declaration(mcp_json: str, source: str) -> None:
     """Confirm that ``mcp_json`` declares the pinned ``mousedroid`` invocation.
 
     The text is read from the trusted base ref and is NOT used to build anything: it is
-    only checked against :data:`MCP_DECLARED_COMMANDS` and :data:`MCP_ARGS`, so that a
-    change to how trunk starts the server is noticed (and the pin updated on purpose)
-    instead of silently followed.
+    only checked against :data:`MCP_DECLARED_COMMANDS` and :data:`MCP_DECLARED_ARGS`, so
+    that a change to how trunk starts the server is noticed (and the pin updated on
+    purpose) instead of silently followed.
 
     Raises:
         PolicyViolationError: The text is not JSON, lacks the server, declares a command
@@ -615,29 +750,55 @@ def confirm_mcp_declaration(mcp_json: str, source: str) -> None:
             f"{sorted(MCP_DECLARED_COMMANDS)}; refusing to start a server the trusted base "
             "ref does not describe"
         )
-    if entry.get("args") != list(MCP_ARGS):
+    if entry.get("args") != list(MCP_DECLARED_ARGS):
         raise PolicyViolationError(
             f"{source}: `{MCP_SERVER}` declares args {entry.get('args')!r}, not the pinned "
-            f"{list(MCP_ARGS)!r}; update policy.MCP_ARGS (and its test) if trunk changed on purpose"
+            f"{list(MCP_DECLARED_ARGS)!r}; update policy.MCP_DECLARED_ARGS (and its test) if "
+            "trunk changed on purpose"
         )
     if entry.get("type", "stdio") != "stdio" or "url" in entry:
         raise PolicyViolationError(f"{source}: `{MCP_SERVER}` is not a stdio server")
 
 
-def build_mcp_servers(mcp_json: str, source: str = ".mcp.json") -> dict[str, dict[str, Any]]:
+def mcp_launch_args(config_path: Path | str) -> list[str]:
+    """Return the interpreter arguments the MCP server is started with.
+
+    ``-I -c <bootstrap> <config>``: isolated mode (neither the working directory nor any
+    ``PYTHON*`` variable reaches the import path, on every supported Python), and the
+    bootstrap runs ``mousedroid`` from the configuration file's own directory.
+
+    Args:
+        config_path: Absolute path of the configuration file the runner materialised from
+            the base ref, inside a directory outside the checkout.
+
+    Raises:
+        PolicyViolationError: ``config_path`` is not absolute.
+    """
+    path = str(config_path)
+    if not os.path.isabs(path):
+        raise PolicyViolationError(f"the MCP configuration path must be absolute, got {path!r}")
+    return ["-I", "-c", MCP_BOOTSTRAP, path]
+
+
+def build_mcp_servers(
+    mcp_json: str, source: str = ".mcp.json", *, config_path: Path | str
+) -> dict[str, dict[str, Any]]:
     """Build the reviewer's ``mcp_servers`` from constants, confirmed by the base ref's file.
 
-    The entry is ``{"type": "stdio", "command": sys.executable, "args": MCP_ARGS, "env":
-    MCP_ENV}`` - nothing is passed through from ``mcp_json``, which (read from the trusted
-    base ref, never the working tree) only has to confirm the pinned invocation.
+    The entry is ``{"type": "stdio", "command": sys.executable, "args":
+    mcp_launch_args(config_path), "env": MCP_ENV}`` - nothing is passed through from
+    ``mcp_json``, which (read from the trusted base ref, never the working tree) only has
+    to confirm the pinned invocation.
 
     Args:
         mcp_json: The text of ``.mcp.json`` at the trusted base ref.
         source: What to call it in error messages (for example ``<sha>:.mcp.json``).
+        config_path: Absolute path of the server's configuration file (a copy of the base
+            ref's, in a temporary directory outside the checkout).
 
     Raises:
-        PolicyViolationError: The file does not confirm the pinned invocation, or there is
-            no interpreter to run it with.
+        PolicyViolationError: The file does not confirm the pinned invocation, the path is
+            not absolute, or there is no interpreter to run the server with.
     """
     confirm_mcp_declaration(mcp_json, source)
     if not sys.executable:
@@ -646,7 +807,7 @@ def build_mcp_servers(mcp_json: str, source: str = ".mcp.json") -> dict[str, dic
         MCP_SERVER: {
             "type": "stdio",
             "command": sys.executable,
-            "args": list(MCP_ARGS),
+            "args": mcp_launch_args(config_path),
             "env": dict(MCP_ENV),
         }
     }
@@ -663,6 +824,7 @@ def reviewer_options(
     system_prompt: str,
     cap_usd: float,
     mcp_json: str,
+    mcp_config_path: Path | str,
     mcp_source: str = ".mcp.json",
     environ: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -670,7 +832,7 @@ def reviewer_options(
 
     The set of keys is closed and pinned by a test: a new option is a deliberate,
     reviewed addition. ``hooks`` is registered separately (it needs the SDK's
-    ``HookMatcher``): ``{"PreToolUse": [HookMatcher("Bash", [BashGuard(base_paths)])]}``.
+    ``HookMatcher``): ``{"PreToolUse": [HookMatcher("Bash", [BashGuard(...)])]}``.
 
     Args:
         cfg: The reviewer's workforce settings (``max_turns`` comes from here).
@@ -680,6 +842,8 @@ def reviewer_options(
         cap_usd: This run's budget; passed to the SDK as ``max_budget_usd`` so the CLI
             itself stops at it.
         mcp_json: ``.mcp.json`` as it is at the TRUSTED BASE REF (not the working tree).
+        mcp_config_path: Absolute path of the MCP server's configuration file (see
+            :func:`build_mcp_servers`).
         mcp_source: What to call it in error messages.
         environ: The parent environment :func:`process_env` allowlists from.
 
@@ -705,7 +869,7 @@ def reviewer_options(
         "max_turns": cfg.max_turns,
         "max_budget_usd": float(cap_usd),
         "cwd": str(repo_root),
-        "mcp_servers": build_mcp_servers(mcp_json, mcp_source),
+        "mcp_servers": build_mcp_servers(mcp_json, mcp_source, config_path=mcp_config_path),
         "strict_mcp_config": True,
         "setting_sources": [],
         "env": process_env(environ),

@@ -41,6 +41,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import types
 import typing
 from collections.abc import Iterator
@@ -62,6 +63,16 @@ _PACKAGE_DIR = _REPO_ROOT / "tools" / "agent_reviewer"
 # Built by concatenation so this file never contains a key-shaped literal (the
 # repo's secret scan reads test files too).
 _FAKE_KEY = "sk-ant-" + "api03-" + "Z" * 40
+
+# The commits the Bash guard pins (the resolved base and head of a review) and one full
+# commit id it does not: 40 hex digits each.
+_BASE_SHA = "a1" * 20
+_HEAD_SHA = "b2" * 20
+_OTHER_SHA = "c3" * 20
+_REVISIONS = frozenset({_BASE_SHA, _HEAD_SHA})
+
+# Where the MCP server's configuration would be materialised: absolute, outside any checkout.
+_CONFIG_PATH = Path(tempfile.gettempdir()) / "agent-reviewer-test" / "mcp-config.yaml"
 
 _WORKFORCE_YAML = """\
 credit:
@@ -109,7 +120,12 @@ def _template_repo(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """
     root = tmp_path_factory.mktemp("template") / "repo"
     root.mkdir()
-    for rel in (".claude/agents/peer-reviewer.md", ".mcp.json", ".gitleaks.toml"):
+    for rel in (
+        ".claude/agents/peer-reviewer.md",
+        ".mcp.json",
+        ".gitleaks.toml",
+        policy.MCP_CONFIG_RELPATH,
+    ):
         dest = root / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(_REPO_ROOT / rel, dest)
@@ -291,6 +307,19 @@ def _live_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", _FAKE_KEY)
 
 
+def _argv_with_base_config(repo: Path, yaml_text: str, *extra: str, cap: str = "10") -> list[str]:
+    """Commit ``yaml_text`` as the workforce config of a NEW base, put a change above it.
+
+    The reviewer reads its configuration from the base ref, so a test that wants a different
+    configuration has to commit it there.
+    """
+    _write(repo, DEFAULT_CONFIG_RELPATH, yaml_text)
+    _commit(repo, "the base's workforce config")
+    _write(repo, "later_change.py", "z = 1\n")
+    _commit(repo, "the change under review")
+    return _argv(repo, *extra, cap=cap)
+
+
 def _ledger_rows(repo: Path) -> list[dict[str, Any]]:
     path = repo / "reports/credit/ledger.jsonl"
     if not path.is_file():
@@ -426,26 +455,57 @@ _BASE_PATHS = frozenset(
 )
 
 
+def _pinned(command: str) -> str:
+    """Spell out the placeholders: BASESHA and HEADSHA are the pinned commits, OTHERSHA is not."""
+    return (
+        command.replace("BASESHA", _BASE_SHA)
+        .replace("HEADSHA", _HEAD_SHA)
+        .replace("OTHERSHA", _OTHER_SHA)
+    )
+
+
 def _check(command: object) -> str | None:
-    return policy.check_bash_command(command, base_paths=_BASE_PATHS)
+    text = _pinned(command) if isinstance(command, str) else command
+    return policy.check_bash_command(text, base_paths=_BASE_PATHS, revisions=_REVISIONS)
 
 
 @pytest.mark.parametrize(
     "command",
     [
-        "git diff HEAD~1",
-        "git diff origin/main...HEAD --stat",
+        "git diff HEADSHA~1",
+        "git diff BASESHA...HEADSHA --stat",
         "git diff -- tools/agent_reviewer/policy.py",
-        "git diff HEAD~1 -- tools/agent_reviewer/policy.py README.md",
-        "git diff --no-ext-diff --no-textconv HEAD",
-        "git log --oneline -n 5",
-        'git log --format="%h %s" -n 3',
-        "git log -p -S needle -- tools",
-        "git log -Sa:b HEAD",
-        "git show HEAD:README.md",
-        "git show abc1234:tools/agent_reviewer/policy.py",
-        "git show --stat abc1234",
-        "git show HEAD~1",
+        "git diff HEADSHA~1 -- tools/agent_reviewer/policy.py README.md",
+        "git diff --no-ext-diff --no-textconv HEADSHA",
+        "git log --oneline -n5",
+        'git log --format="%h %s" -n3',
+        "git log -p -Sneedle -- tools",
+        "git log -Sa:b HEADSHA",
+        "git show HEADSHA:README.md",
+        "git show BASESHA:tools/agent_reviewer/policy.py",
+        "git show --stat BASESHA",
+        "git show HEADSHA~1",
+        # a pinned commit, with ancestry suffixes, alone or in a range
+        "git show HEADSHA",
+        "git show HEADSHA^",
+        "git show HEADSHA^2",
+        "git show HEADSHA~",
+        "git show HEADSHA~3^2~1",
+        "git diff BASESHA HEADSHA -- README.md",
+        "git log --oneline -n5 BASESHA..HEADSHA",
+        'git log --format="%H %s" -n3 BASESHA..HEADSHA',
+        "git log -p -Sneedle BASESHA..HEADSHA -- tools",
+        "git log --abbrev-commit BASESHA..HEADSHA",
+        "git log ^BASESHA HEADSHA",
+        "git log BASESHA..",
+        "git log ..HEADSHA",
+        "git log --stat -n3",
+        "git show BASESHA:README.md",
+        "git show HEADSHA~2:tools/agent_reviewer/policy.py",
+        # no revision at all
+        "git diff",
+        "git diff --cached --stat",
+        "git log -n3",
     ],
 )
 def test_bash_hook_allows_read_only_commands(command: str) -> None:
@@ -516,7 +576,7 @@ def test_bash_hook_allows_read_only_commands(command: str) -> None:
         "git diff --output=out.txt",
         "git diff --output out.txt",
         "git log --output=out.txt",
-        "git show --output=out.txt HEAD",
+        "git show --output=out.txt HEADSHA",
         "git diff --no-index a b",
         "git diff --ext-diff",
         "git diff --textconv",
@@ -542,7 +602,7 @@ def test_bash_hook_allows_read_only_commands(command: str) -> None:
         "git log --remote",
         "git show --all",
         # pathspecs after `--` are literal paths: no globs, no :magic, nothing dash-led
-        "git diff HEAD~1 -- '*.py'",
+        "git diff HEADSHA~1 -- '*.py'",
         'git log -- "tools/**"',
         "git diff -- 'conf*/*.env'",
         "git diff -- ':(glob)**/*.env'",
@@ -560,26 +620,70 @@ def test_bash_hook_allows_read_only_commands(command: str) -> None:
         "git diff -- /abs/path",
         # ... and so are the words before `--` that git might read as paths
         "git diff 'conf*/*.env'",
-        "git diff HEAD '*.py'",
-        "git show 'HEAD@{1}'",
+        "git diff HEADSHA '*.py'",
+        "git show 'HEADSHA@{1}'",
         # <rev>:<path> only names a non-secret file tracked at the base ref
-        "git show HEAD:config/docker.env",
-        "git show HEAD:.env",
-        "git show HEAD:added_by_the_head.py",
-        "git show HEAD:",
-        "git show HEAD:tools/",
-        "git show HEAD:README.md:x",
+        "git show HEADSHA:config/docker.env",
+        "git show HEADSHA:.env",
+        "git show HEADSHA:added_by_the_head.py",
+        "git show HEADSHA:",
+        "git show HEADSHA:tools/",
+        "git show HEADSHA:README.md:x",
         "git show :0:README.md",
         "git show :/fix",
-        "git show HEAD:./README.md",
-        "git show HEAD:../x",
+        "git show HEADSHA:./README.md",
+        "git show HEADSHA:../x",
         "git show C:/Users/x/file",
-        "git show 'HEAD@{1}:README.md'",
-        "git show -- HEAD:README.md",
+        "git show 'HEADSHA@{1}:README.md'",
+        "git show -- HEADSHA:README.md",
         # secret-bearing paths, named any way
         "git diff -- prod.env",
         "git log -p -- docker.env.local",
         "git log --grep=docker.env",
+        # a revision must be a pinned commit: a bare blob or tree id, an abbreviation, a ref
+        # name or a commit the task did not pin could print an object whatever its path
+        "git show OTHERSHA",
+        "git show OTHERSHA:README.md",
+        "git diff OTHERSHA HEADSHA",
+        "git diff BASESHA...OTHERSHA",
+        "git log BASESHA..HEADSHA..OTHERSHA",
+        "git log BASESHA..HEADSHA..BASESHA",
+        "git log BASESHA...HEADSHA...BASESHA",
+        "git show deadbeef",
+        "git show abc1234",
+        "git show abc1234:README.md",
+        f"git show {_BASE_SHA[:7]}",
+        f"git show {_BASE_SHA[:39]}",
+        f"git show {_BASE_SHA.upper()}",
+        f"git show {_HEAD_SHA}0",
+        "git show HEAD",
+        "git show main",
+        "git show v1.0",
+        "git show @",
+        "git log origin/main..HEADSHA",
+        "git diff main HEADSHA",
+        "git show HEADSHA^{tree}",
+        "git show HEADSHA^{blob}",
+        "git show HEADSHA^!",
+        "git log HEADSHA^@",
+        "git log HEADSHA^-1",
+        "git show HEADSHA~x",
+        "git show HEADSHA^^^x",
+        "git log ^^BASESHA HEADSHA",
+        "git log ^ HEADSHA",
+        "git log ....HEADSHA",
+        # an option's value is read as a revision when it is a separate word
+        "git log -n 5",
+        "git log -S needle",
+        "git log --grep needle",
+        "git log --author someone",
+        # options that print blob ids, which a later call could try to use as a revision
+        "git log --raw",
+        "git show --raw HEADSHA",
+        "git diff --raw BASESHA HEADSHA",
+        "git log --abbrev=7",
+        "git log --abbrev",
+        "git diff --abbr BASESHA HEADSHA",
         # unparseable / empty
         "git log --grep='unterminated",
         "",
@@ -611,21 +715,57 @@ def test_refusals_tell_the_model_what_to_do_instead() -> None:
     """A refusal that only says "no" sends the model round in circles; these say what works."""
     assert "option" in str(_check("git diff -- -x"))
     assert "literal" in str(_check("git diff -- '*.py'"))
-    assert "tracked at the base" in str(_check("git show HEAD:added_by_the_head.py"))
-    assert "git diff <base>...<head>" in str(_check("git show HEAD:added_by_the_head.py"))
+    assert "tracked at the base" in str(_check("git show HEADSHA:added_by_the_head.py"))
+    assert "git diff <base>...<head>" in str(_check("git show HEADSHA:added_by_the_head.py"))
     assert "after `--`" in str(_check("git diff '*.py'"))
     assert "git diff" in str(_check("rm -rf build"))
+    # A refused revision names the commits that would have been accepted.
+    reason = str(_check("git show abc1234"))
+    assert _BASE_SHA in reason
+    assert _HEAD_SHA in reason
+    assert "-n5" in reason, "and says how to give an option its value"
 
 
 def test_rev_path_is_refused_when_no_base_files_are_known() -> None:
     """A guard built with no base paths cannot vouch for any ``<rev>:<path>``."""
-    assert policy.check_bash_command("git show HEAD:README.md")
-    assert policy.check_bash_command("git show HEAD:README.md", base_paths={"README.md"}) is None
+    command = _pinned("git show HEADSHA:README.md")
+    assert policy.check_bash_command(command, revisions=_REVISIONS)
+    assert (
+        policy.check_bash_command(command, base_paths={"README.md"}, revisions=_REVISIONS) is None
+    )
+
+
+@pytest.mark.parametrize("word", ["/etc/passwd", "~/notes", "C:/Users/x", "C:\\Users\\x", "a/../b"])
+def test_the_path_screen_stands_behind_the_literal_path_grammar(word: str) -> None:
+    """Defence in depth: should the grammar ever be loosened, an absolute or escaping path
+    is still refused."""
+    assert policy._path_token_reason(word)
+    assert policy._path_token_reason("tools/agent_reviewer/policy.py") is None
+
+
+def test_a_guard_with_no_pinned_commit_accepts_no_revision() -> None:
+    """The default guard knows no commit, so it can only run revision-free commands."""
+    assert policy.check_bash_command(_pinned("git show HEADSHA")) is not None
+    assert "no pinned commit" in str(policy.check_bash_command(_pinned("git show HEADSHA")))
+    assert policy.check_bash_command("git diff --stat") is None
+
+
+def test_only_the_pinned_commits_are_revisions() -> None:
+    revisions = {_BASE_SHA}
+    assert policy.check_bash_command(f"git show {_BASE_SHA}~2", revisions=revisions) is None
+    assert policy.check_bash_command(f"git show {_HEAD_SHA}", revisions=revisions)
+
+
+def test_a_sha256_commit_id_is_accepted_when_it_is_pinned() -> None:
+    pinned = "d4" * 32
+    assert policy.check_bash_command(f"git show {pinned}~1", revisions={pinned}) is None
+    assert policy.check_bash_command(f"git show {pinned[:63]}", revisions={pinned})
 
 
 def test_a_secret_named_file_tracked_at_the_base_is_still_refused() -> None:
     paths = {"config/docker.env.example", "README.md"}
-    assert policy.check_bash_command("git show HEAD:config/docker.env.example", base_paths=paths)
+    command = _pinned("git show HEADSHA:config/docker.env.example")
+    assert policy.check_bash_command(command, base_paths=paths, revisions=_REVISIONS)
 
 
 async def test_bash_hook_returns_a_deny_payload_and_never_an_allow() -> None:
@@ -639,22 +779,28 @@ async def test_bash_hook_returns_a_deny_payload_and_never_an_allow() -> None:
 
     # "Allow is silent": an explicit allow would approve the call on its own.
     allowed = await policy.deny_non_readonly_bash(
-        {"tool_name": "Bash", "tool_input": {"command": "git diff HEAD~1"}}, "tu2", {"signal": None}
+        {"tool_name": "Bash", "tool_input": {"command": f"git diff {_HEAD_SHA}~1"}},
+        "tu2",
+        {"signal": None},
+        revisions=_REVISIONS,
     )
     assert allowed == {}
 
 
-async def test_the_registered_guard_is_bound_to_the_base_refs_files() -> None:
-    guard = policy.BashGuard(base_paths=_BASE_PATHS)
-    call = {"tool_name": "Bash", "tool_input": {"command": "git show HEAD:README.md"}}
+async def test_the_registered_guard_is_bound_to_the_base_refs_facts() -> None:
+    guard = policy.BashGuard(base_paths=_BASE_PATHS, revisions=_REVISIONS)
+    call = {"tool_name": "Bash", "tool_input": {"command": _pinned("git show HEADSHA:README.md")}}
     assert await guard(call, "tu", {"signal": None}) == {}
-    other = {"tool_name": "Bash", "tool_input": {"command": "git show HEAD:added.py"}}
+    other = {"tool_name": "Bash", "tool_input": {"command": _pinned("git show HEADSHA:added.py")}}
     denied = await guard(other, "tu", {"signal": None})
     assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert guard.check("git show HEAD:README.md") is None
-    assert guard.check("git show HEAD:added.py")
-    # The default guard knows no base file at all.
-    assert policy.BashGuard().check("git show HEAD:README.md")
+    unpinned = {"tool_name": "Bash", "tool_input": {"command": "git show abc1234"}}
+    denied = await guard(unpinned, "tu", {"signal": None})
+    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert guard.check(_pinned("git show HEADSHA:README.md")) is None
+    assert guard.check(_pinned("git show HEADSHA:added.py"))
+    # The default guard knows no base file and no commit at all.
+    assert policy.BashGuard().check(_pinned("git show HEADSHA:README.md"))
 
 
 async def test_bash_hook_fails_closed_on_malformed_input() -> None:
@@ -697,7 +843,7 @@ def _mcp_json(**overrides: Any) -> str:
     """A ``.mcp.json`` whose ``mousedroid`` entry is the pinned one, with fields overridden."""
     entry: dict[str, Any] = {
         "command": "python",
-        "args": list(policy.MCP_ARGS),
+        "args": list(policy.MCP_DECLARED_ARGS),
         "env": {"MOUSEDROID_MOCK_HARDWARE": "${MOUSEDROID_MOCK_HARDWARE:-true}"},
     }
     entry.update(overrides)
@@ -708,8 +854,12 @@ def _mcp_json(**overrides: Any) -> str:
 _ABSENT = object()
 
 
+def _build(mcp_json: str | None = None) -> dict[str, dict[str, Any]]:
+    return policy.build_mcp_servers(mcp_json or _mcp_json(), config_path=_CONFIG_PATH)
+
+
 def test_mcp_config_forces_mock_hardware() -> None:
-    servers = policy.build_mcp_servers(_mcp_json())
+    servers = _build()
     assert list(servers) == [policy.MCP_SERVER], "only the mock hardware server, never `github`"
     server = servers[policy.MCP_SERVER]
     assert server["type"] == "stdio"
@@ -720,22 +870,106 @@ def test_mcp_config_forces_mock_hardware() -> None:
 
 
 def test_mcp_entry_is_built_in_code_from_constants() -> None:
-    server = policy.build_mcp_servers(_mcp_json())["mousedroid"]
+    server = _build()["mousedroid"]
     assert server["command"] == sys.executable, (
         "an absolute path: no search of the head's directory"
     )
-    assert server["args"] == list(policy.MCP_ARGS)
+    assert server["args"] == ["-I", "-c", policy.MCP_BOOTSTRAP, str(_CONFIG_PATH)]
     assert server["env"] == dict(policy.MCP_ENV)
+
+
+def test_the_mcp_server_is_started_isolated_from_the_working_directory() -> None:
+    args = _build()["mousedroid"]["args"]
+    assert args[0] == "-I", "isolated: no cwd, no PYTHON* variable, no user site on sys.path"
+    assert "-m" not in args, "`-m` would put the checkout first on sys.path before Python 3.11"
+
+
+def test_the_bootstrap_is_one_inert_line() -> None:
+    """It travels through the CLI's JSON config and a Windows command line."""
+    assert "\n" not in policy.MCP_BOOTSTRAP
+    assert '"' not in policy.MCP_BOOTSTRAP
+    assert policy.MCP_MODULE in policy.MCP_BOOTSTRAP
+
+
+def test_the_bootstrap_runs_the_module_from_the_configs_directory(tmp_path: Path) -> None:
+    """Run the real bootstrap against a stand-in ``mousedroid`` and look at what it saw."""
+    site = tmp_path / "site"
+    package = site / policy.MCP_MODULE
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "__main__.py").write_text(
+        "import json, os, sys\n"
+        "print(json.dumps({'cwd': os.getcwd(), 'argv': sys.argv, 'name': __name__}))\n",
+        encoding="utf-8",
+    )
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    config = scratch / "mcp-config.yaml"
+    config.write_text("{}\n", encoding="utf-8")
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+
+    done = subprocess.run(
+        [sys.executable, "-c", policy.MCP_BOOTSTRAP, str(config)],
+        cwd=checkout,
+        env={**os.environ, "PYTHONPATH": str(site)},  # not -I here: the stand-in must import
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    )
+
+    seen = json.loads(done.stdout)
+    assert Path(seen["cwd"]).resolve() == scratch.resolve(), "outside the checkout"
+    assert seen["argv"][1:] == ["--config", str(config)]
+    assert seen["name"] == "__main__"
+
+
+def test_isolated_mode_keeps_the_working_directory_and_pythonpath_off_the_import_path(
+    tmp_path: Path,
+) -> None:
+    """The property the launch relies on, checked on this interpreter."""
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "colorsys.py").write_text("PLANTED = True\n", encoding="utf-8")
+    probe = "import colorsys; print(getattr(colorsys, 'PLANTED', False))"
+    env = {**os.environ, "PYTHONPATH": str(checkout)}
+
+    plain = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=checkout,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    )
+    isolated = subprocess.run(
+        [sys.executable, "-I", "-c", probe],
+        cwd=checkout,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    )
+
+    assert plain.stdout.strip() == "True", "without -I the checkout shadows the standard library"
+    assert isolated.stdout.strip() == "False", "-I keeps both the cwd and PYTHONPATH out"
+
+
+def test_mcp_launch_args_need_an_absolute_config_path() -> None:
+    with pytest.raises(policy.PolicyViolationError, match="absolute"):
+        policy.mcp_launch_args("config/default.yaml")
+    assert policy.mcp_launch_args(_CONFIG_PATH)[-1] == str(_CONFIG_PATH)
 
 
 def test_mcp_env_carries_no_credential_and_blanks_the_ones_the_cli_inherits() -> None:
     env = policy.MCP_ENV
     for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "MOUSEDROID_LLM__API_KEY"):
         assert env[name] == "", f"{name} must be blanked for the MCP server"
-    assert env["PYTHONSAFEPATH"] == "1", (
-        "the head's directory must not be importable by `python -m`"
-    )
     assert not [name for name, value in env.items() if value and "${" in value]
+    assert not [name for name in env if name.startswith("PYTHON")], "-I ignores them anyway"
 
 
 def test_the_pinned_invocation_matches_the_checked_in_mcp_json() -> None:
@@ -744,7 +978,8 @@ def test_the_pinned_invocation_matches_the_checked_in_mcp_json() -> None:
         "mousedroid"
     ]
     assert declared["command"] in policy.MCP_DECLARED_COMMANDS
-    assert tuple(declared["args"]) == policy.MCP_ARGS
+    assert tuple(declared["args"]) == policy.MCP_DECLARED_ARGS
+    assert declared["args"][-1] == policy.MCP_CONFIG_RELPATH
     for key, value in declared["env"].items():
         if key.startswith("MOUSEDROID_MCP__"):
             assert policy.MCP_ENV[key] == value, key
@@ -759,7 +994,7 @@ def test_nothing_in_the_declaring_file_is_passed_through() -> None:
                 "github": {"command": "npx", "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "x"}},
                 "mousedroid": {
                     "command": "python",
-                    "args": list(policy.MCP_ARGS),
+                    "args": list(policy.MCP_DECLARED_ARGS),
                     "env": {
                         "MOUSEDROID_MOCK_HARDWARE": "false",
                         "MOUSEDROID_MCP__EXPOSE_ACTUATION_TOOLS": "true",
@@ -771,16 +1006,14 @@ def test_nothing_in_the_declaring_file_is_passed_through() -> None:
             }
         }
     )
-    servers = policy.build_mcp_servers(hostile)
+    servers = _build(hostile)
     assert list(servers) == ["mousedroid"]
     assert servers["mousedroid"]["env"] == dict(policy.MCP_ENV)
 
 
 @pytest.mark.parametrize("command", ["python", "python3", sys.executable])
 def test_mcp_declaration_may_name_the_interpreter_three_ways(command: str) -> None:
-    assert policy.build_mcp_servers(_mcp_json(command=command))["mousedroid"]["command"] == (
-        sys.executable
-    )
+    assert _build(_mcp_json(command=command))["mousedroid"]["command"] == sys.executable
 
 
 @pytest.mark.parametrize(
@@ -796,9 +1029,9 @@ def test_mcp_declaration_may_name_the_interpreter_three_ways(command: str) -> No
         {"command": ["python"]},
         {"command": 7},
         {"command": _ABSENT},
-        {"args": [*policy.MCP_ARGS, "--extra"]},
-        {"args": list(policy.MCP_ARGS[:-1])},
-        {"args": list(reversed(policy.MCP_ARGS))},
+        {"args": [*policy.MCP_DECLARED_ARGS, "--extra"]},
+        {"args": list(policy.MCP_DECLARED_ARGS[:-1])},
+        {"args": list(reversed(policy.MCP_DECLARED_ARGS))},
         {"args": ["-c", "import os"]},
         {"args": ["-m", "mousedroid", "--config", "elsewhere.yaml"]},
         {"args": "-m mousedroid"},
@@ -809,7 +1042,7 @@ def test_mcp_declaration_may_name_the_interpreter_three_ways(command: str) -> No
 )
 def test_mcp_declaration_that_does_not_match_the_pin_is_refused(entry: dict[str, Any]) -> None:
     with pytest.raises(policy.PolicyViolationError):
-        policy.build_mcp_servers(_mcp_json(**entry))
+        _build(_mcp_json(**entry))
 
 
 @pytest.mark.parametrize(
@@ -826,13 +1059,13 @@ def test_mcp_declaration_that_does_not_match_the_pin_is_refused(entry: dict[str,
 )
 def test_mcp_declaration_that_is_malformed_or_lacks_the_server_is_refused(body: str) -> None:
     with pytest.raises(policy.PolicyViolationError):
-        policy.build_mcp_servers(body)
+        _build(body)
 
 
 def test_mcp_needs_an_interpreter_to_run_the_server(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(policy.sys, "executable", "")
     with pytest.raises(policy.PolicyViolationError):
-        policy.build_mcp_servers(_mcp_json())
+        _build()
 
 
 def test_process_env_is_an_allowlist_and_never_carries_a_credential(
@@ -870,10 +1103,92 @@ def test_process_env_omits_what_the_parent_does_not_have() -> None:
     assert "ANTHROPIC_API_KEY" not in env
 
 
+def _make_program(directory: Path, name: str) -> Path:
+    """Create an executable file called ``name`` (with the extension Windows needs)."""
+    directory.mkdir(parents=True, exist_ok=True)
+    program = directory / (name + (".exe" if os.name == "nt" else ""))
+    program.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    program.chmod(0o755)
+    return program
+
+
+def test_executables_are_found_on_path_and_never_in_the_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``shutil.which`` and ``CreateProcess`` try the working directory first; this does not."""
+    checkout = tmp_path / "checkout"
+    planted = _make_program(checkout, "reviewer-tool")
+    monkeypatch.chdir(checkout)
+    bin_dir = tmp_path / "bin"
+    env = {"PATH": os.pathsep.join(["", ".", "relative", str(bin_dir)])}
+    assert policy.resolve_executable("reviewer-tool", env) is None, "only the cwd has it"
+    real = _make_program(bin_dir, "reviewer-tool")
+    found = policy.resolve_executable("reviewer-tool", env)
+    assert found is not None
+    assert Path(found) == real
+    assert Path(found) != planted
+
+
+def test_executable_lookup_skips_relative_and_empty_path_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _make_program(tmp_path / "rel", "reviewer-tool")
+    env = {"PATH": os.pathsep.join(["rel", "", "./rel"])}
+    assert policy.resolve_executable("reviewer-tool", env) is None
+    assert policy.resolve_executable("reviewer-tool", {}) is None
+    assert policy.resolve_executable("reviewer-tool", {"PATH": ""}) is None
+
+
+def test_executable_lookup_accepts_only_an_absolute_name_with_a_directory(tmp_path: Path) -> None:
+    program = _make_program(tmp_path, "reviewer-tool")
+    assert policy.resolve_executable(str(program), {"PATH": ""}) == str(program)
+    assert policy.resolve_executable("sub/reviewer-tool", {"PATH": str(tmp_path)}) is None
+    assert policy.resolve_executable(str(tmp_path / "missing"), {"PATH": ""}) is None
+
+
+def test_executable_lookup_ignores_a_file_that_is_not_executable(tmp_path: Path) -> None:
+    if os.name == "nt":
+        pytest.skip("Windows has no execute bit: any file with the right extension counts")
+    plain = tmp_path / "bin" / "reviewer-tool"
+    plain.parent.mkdir()
+    plain.write_text("data\n", encoding="utf-8")
+    plain.chmod(0o644)
+    assert policy.resolve_executable("reviewer-tool", {"PATH": str(plain.parent)}) is None
+
+
+def test_executable_lookup_uses_pathext_on_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    exe = bin_dir / "reviewer-tool.EXE"
+    exe.write_text("MZ\n", encoding="utf-8")
+    exe.chmod(0o755)
+    env = {"PATH": str(bin_dir), "PATHEXT": ".COM;.EXE;.BAT"}
+    with monkeypatch.context() as patch:  # only around the calls: os.name is global
+        patch.setattr(policy.os, "name", "nt")
+        bare = policy.resolve_executable("reviewer-tool", env)
+        spelled = policy.resolve_executable("reviewer-tool.EXE", env)
+        other = policy.resolve_executable("reviewer-tool.txt", env)
+    assert bare is not None
+    assert spelled is not None
+    assert other is None
+
+
 def test_git_runs_with_literal_pathspecs_and_without_index_writes() -> None:
     assert policy.GIT_ENV["GIT_LITERAL_PATHSPECS"] == "1"
     assert policy.GIT_ENV["GIT_OPTIONAL_LOCKS"] == "0"
     assert policy.FORCED_PROCESS_ENV["GIT_LITERAL_PATHSPECS"] == "1"
+
+
+def test_the_cli_is_told_not_to_look_in_the_working_directory_for_programs() -> None:
+    """Windows tries the working directory - the checkout under review - before PATH."""
+    assert policy.process_env({})["NoDefaultCurrentDirectoryInExePath"] == "1"
+    options_env = policy.process_env(
+        {"PATH": "/usr/bin", "NoDefaultCurrentDirectoryInExePath": "0"}
+    )
+    assert options_env["NoDefaultCurrentDirectoryInExePath"] == "1", "forced, not inherited"
 
 
 # --------------------------------------------------------------------------- #
@@ -890,6 +1205,7 @@ def test_reviewer_options_are_closed_and_read_only(
         system_prompt="SYS",
         cap_usd=7.5,
         mcp_json=_mcp_json(),
+        mcp_config_path=_CONFIG_PATH,
     )
     # A closed set: a new SDK option is a deliberate, reviewed addition.
     assert set(options) == {
@@ -942,6 +1258,7 @@ def test_reviewer_options_refuse_an_unbounded_budget(
             system_prompt="s",
             cap_usd=cap,
             mcp_json=_mcp_json(),
+            mcp_config_path=_CONFIG_PATH,
         )
 
 
@@ -956,6 +1273,7 @@ def test_reviewer_options_refuse_an_mcp_declaration_that_does_not_match_the_pin(
             system_prompt="s",
             cap_usd=5.0,
             mcp_json=_mcp_json(command="./evil"),
+            mcp_config_path=_CONFIG_PATH,
         )
 
 
@@ -969,12 +1287,12 @@ def test_options_names_exist_in_the_real_sdk(repo: Path, cfg: WorkforceConfig) -
         system_prompt="s",
         cap_usd=5.0,
         mcp_json=_mcp_json(),
+        mcp_config_path=_CONFIG_PATH,
     )
     fields = {f.name for f in dataclasses.fields(sdk.ClaudeAgentOptions)}
     assert set(options) | {"hooks"} <= fields
-    matcher = sdk.HookMatcher(
-        matcher=policy.BASH_HOOK_MATCHER, hooks=[policy.BashGuard(base_paths=_BASE_PATHS)]
-    )
+    guard = policy.BashGuard(base_paths=_BASE_PATHS, revisions=_REVISIONS)
+    matcher = sdk.HookMatcher(matcher=policy.BASH_HOOK_MATCHER, hooks=[guard])
     built = sdk.ClaudeAgentOptions(**options, hooks={"PreToolUse": [matcher]})
     assert built.permission_mode in typing.get_args(sdk.PermissionMode)
     assert built.permission_mode == policy.PERMISSION_MODE
@@ -1108,28 +1426,59 @@ def test_prompt_builder_refuses_other_credential_shapes(
 def test_prompt_builder_refuses_text_matching_a_gitleaks_toml_regex(
     repo: Path, cfg: WorkforceConfig
 ) -> None:
-    """The regexes in ``.gitleaks.toml`` are read at run time, not copied into code."""
-    patterns = prompt.gitleaks_regexes(repo, cfg)
+    """The regexes in ``.gitleaks.toml`` are the policy's, not copied into code."""
+    toml = (repo / ".gitleaks.toml").read_text(encoding="utf-8")
+    patterns = prompt.gitleaks_regexes(toml)
     assert patterns, "the repo's .gitleaks.toml declares allowlist regexes"
     assert any(p.search("test-api-key-abc123") for p in patterns)
     _write(repo, "notes/fixture.md", "uses test-api-key-abc123 as a bearer\n")
     with pytest.raises(prompt.PromptRefusedError):
-        prompt.build(repo_root=repo, cfg=cfg, extra_files=["notes/fixture.md"], scanner=_no_scanner)
+        prompt.build(
+            repo_root=repo,
+            cfg=cfg,
+            extra_files=["notes/fixture.md"],
+            gitleaks_toml=toml,
+            scanner=_no_scanner,
+        )
 
 
-def test_gitleaks_regexes_tolerate_a_missing_or_odd_config(tmp_path: Path) -> None:
-    cfg = load_config(repo_root=tmp_path)
-    assert prompt.gitleaks_regexes(tmp_path, cfg) == []  # no .gitleaks.toml
-    _write(tmp_path, ".gitleaks.toml", "this is = = not toml")
+def test_the_secret_policy_is_the_text_given_never_the_working_trees_copy(
+    repo: Path, cfg: WorkforceConfig
+) -> None:
+    """A head that can rewrite ``.gitleaks.toml`` must not be able to switch the screen off."""
+    _write(repo, ".gitleaks.toml", '[[rules]]\nid = "x"\nregex = "ZZZ_[0-9]+"\n')
+    _write(repo, "notes/context.md", "carries ZZZ_123 here\n")
+    # The working tree's policy is ignored: nothing is given, so nothing extra is screened ...
+    text = prompt.build(
+        repo_root=repo, cfg=cfg, extra_files=["notes/context.md"], scanner=_no_scanner
+    )
+    assert "ZZZ_123" in text
+    # ... and the policy that IS given (the base ref's) is the one that applies.
     with pytest.raises(prompt.PromptRefusedError):
-        prompt.gitleaks_regexes(tmp_path, cfg)
-    _write(tmp_path, ".gitleaks.toml", '[allowlist]\nregexes = ["(unclosed"]\n')
+        prompt.build(
+            repo_root=repo,
+            cfg=cfg,
+            extra_files=["notes/context.md"],
+            gitleaks_toml='[[rules]]\nid = "x"\nregex = "ZZZ_[0-9]+"\n',
+            scanner=_no_scanner,
+        )
+
+
+def test_gitleaks_regexes_tolerate_a_missing_or_odd_config() -> None:
+    assert prompt.gitleaks_regexes(None) == []  # the base has no .gitleaks.toml
     with pytest.raises(prompt.PromptRefusedError):
-        prompt.gitleaks_regexes(tmp_path, cfg)
-    _write(tmp_path, ".gitleaks.toml", '[[rules]]\nid = "x"\nregex = "tok_[0-9]+"\n')
-    assert [p.pattern for p in prompt.gitleaks_regexes(tmp_path, cfg)] == ["tok_[0-9]+"]
-    _write(tmp_path, ".gitleaks.toml", '[[allowlists]]\nregexes = ["fake_[a-z]+", 3]\n')
-    assert [p.pattern for p in prompt.gitleaks_regexes(tmp_path, cfg)] == ["fake_[a-z]+"]
+        prompt.gitleaks_regexes("this is = = not toml")
+    with pytest.raises(prompt.PromptRefusedError):
+        prompt.gitleaks_regexes('[allowlist]\nregexes = ["(unclosed"]\n')
+    toml = '[[rules]]\nid = "x"\nregex = "tok_[0-9]+"\n'
+    assert [p.pattern for p in prompt.gitleaks_regexes(toml)] == ["tok_[0-9]+"]
+    toml = '[[allowlists]]\nregexes = ["fake_[a-z]+", 3]\n'
+    assert [p.pattern for p in prompt.gitleaks_regexes(toml)] == ["fake_[a-z]+"]
+
+
+def test_a_refusal_names_the_policy_file_it_could_not_read() -> None:
+    with pytest.raises(prompt.PromptRefusedError, match=r"custom/policy\.toml"):
+        prompt.gitleaks_regexes("= not toml", source="custom/policy.toml")
 
 
 def test_prompt_builder_accepts_ordinary_context_files(repo: Path, cfg: WorkforceConfig) -> None:
@@ -1174,20 +1523,79 @@ def test_gitleaks_absent_is_tolerated_unless_strict(repo: Path) -> None:
         prompt.build(repo_root=repo, cfg=strict, scanner=_no_scanner)
 
 
-def test_default_scanner_delegates_to_the_workforce_secret_scan(
-    repo: Path, cfg: WorkforceConfig, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    seen: list[Path] = []
+def _fake_gitleaks(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """Pretend ``gitleaks`` is installed and record what the workforce wrapper is handed."""
+    seen: list[dict[str, Any]] = []
+    program = str(Path(sys.executable))
 
     def fake_scan(
         content: str, config: WorkforceConfig, *, repo_root: Path, target: str | None = None
     ) -> ScanOutcome:
-        seen.append(repo_root)
+        policy_file = repo_root / config.secret_scan.config_file
+        seen.append(
+            {
+                "root": repo_root,
+                "command": config.secret_scan.command,
+                "extra_args": list(config.secret_scan.extra_args),
+                "policy": policy_file.read_text(encoding="utf-8")
+                if policy_file.is_file()
+                else None,
+            }
+        )
         return ScanOutcome(clean=True, available=True)
 
+    real_lookup = policy.resolve_executable
+
+    def lookup(name: str, environ: Any = None) -> str | None:
+        return program if name == "gitleaks" else real_lookup(name, environ)
+
     monkeypatch.setattr("tools.agent_reviewer.prompt.secret_scan.scan_content", fake_scan)
-    assert prompt.build(repo_root=repo, cfg=cfg)
-    assert seen == [repo]
+    monkeypatch.setattr(policy, "resolve_executable", lookup)
+    return seen
+
+
+def test_default_scanner_delegates_to_the_workforce_secret_scan(
+    repo: Path, cfg: WorkforceConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen = _fake_gitleaks(monkeypatch)
+    toml = '[allowlist]\nregexes = ["zzz"]\n'
+    assert prompt.build(repo_root=repo, cfg=cfg, gitleaks_toml=toml)
+    (call,) = seen
+    assert call["command"] == str(Path(sys.executable)), "an absolute path, never a bare name"
+    assert call["policy"] == toml, "the base ref's policy, written to a scratch checkout"
+    assert not Path(call["root"]).is_relative_to(repo), "never the working tree"
+
+
+def test_default_scanner_without_a_policy_file_uses_gitleaks_own_defaults(
+    repo: Path, cfg: WorkforceConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen = _fake_gitleaks(monkeypatch)
+    _write(repo, ".gitleaks.toml", "# the head's copy, which must not be used\n")
+    assert prompt.build(repo_root=repo, cfg=cfg, gitleaks_toml=None)
+    assert [call["policy"] for call in seen] == [None]
+
+
+def test_the_scan_never_runs_a_program_it_could_only_find_in_the_working_directory(
+    repo: Path, cfg: WorkforceConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Windows tries the working directory first; the lookup is absolute PATH entries only."""
+    asked: list[str] = []
+
+    def nothing_on_path(name: str, environ: Any = None) -> None:
+        asked.append(name)
+
+    def must_not_run(*_args: Any, **_kwargs: Any) -> ScanOutcome:
+        raise AssertionError("the wrapper was started without a trusted program")
+
+    monkeypatch.setattr(policy, "resolve_executable", nothing_on_path)
+    monkeypatch.setattr("tools.agent_reviewer.prompt.secret_scan.scan_content", must_not_run)
+    assert prompt.build(repo_root=repo, cfg=cfg), "unavailable and not strict: skipped"
+    assert asked == [cfg.secret_scan.command]
+    strict = cfg.model_copy(
+        update={"secret_scan": cfg.secret_scan.model_copy(update={"strict": True})}
+    )
+    with pytest.raises(prompt.PromptRefusedError, match="strict"):
+        prompt.build(repo_root=repo, cfg=strict)
 
 
 def test_user_prompt_pins_shas_and_lists_the_opening_items() -> None:
@@ -1695,7 +2103,7 @@ def test_a_live_run_never_uses_a_tampered_declaration_from_the_head(
     assert run_review.main(argv) == 0
     server = fake_sdk.queries[0]["options"].mcp_servers["mousedroid"]
     assert server["command"] == sys.executable
-    assert server["args"] == list(policy.MCP_ARGS)
+    assert server["args"][:3] == ["-I", "-c", policy.MCP_BOOTSTRAP]
     assert "HOSTILE" not in json.dumps(server)
 
 
@@ -1760,11 +2168,15 @@ def test_the_registered_guard_knows_exactly_the_files_tracked_at_the_base(
     (matcher,) = fake_sdk.queries[0]["options"].hooks["PreToolUse"]
     (guard,) = matcher.hooks
     tracked = set(_git(repo, "ls-tree", "-r", "--name-only", "HEAD~1").splitlines())
+    base_sha, head_sha = _git(repo, "rev-parse", "HEAD~1"), _git(repo, "rev-parse", "HEAD")
     assert guard.base_paths == tracked
+    assert guard.revisions == {base_sha, head_sha}, "the two commits of the review, resolved"
     assert ".mcp.json" in tracked
     assert "src_change.py" not in tracked, "added by the head: not a base file"
-    assert guard.check("git show HEAD:.mcp.json") is None
-    assert guard.check("git show HEAD:src_change.py"), "read a file the head adds from the diff"
+    assert guard.check(f"git show {head_sha}:.mcp.json") is None
+    assert guard.check(f"git show {head_sha}:src_change.py"), "read it from the diff instead"
+    assert guard.check("git show HEAD:.mcp.json"), "a name is not a pinned commit"
+    assert guard.check(f"git diff {base_sha}...{head_sha} --stat") is None
 
 
 def test_the_reviewer_instructions_come_from_the_base_ref_not_the_head(
@@ -1839,45 +2251,318 @@ def test_a_supplied_agent_text_is_screened_like_a_file(repo: Path, cfg: Workforc
 
 
 # --------------------------------------------------------------------------- #
-# run_review - whose code the MCP server runs
+# run_review - the trust boundary is the BASE ref (Ruling 49, addendum 3)
 # --------------------------------------------------------------------------- #
-def _mcp_package_at(monkeypatch: pytest.MonkeyPatch, origin: Path | None) -> None:
-    """Pretend the reviewer's interpreter finds ``mousedroid`` at ``origin`` (or nowhere)."""
-    monkeypatch.setattr(run_review, "_mcp_package_origin", lambda: origin)
+_HOSTILE_WORKFORCE_YAML = """\
+credit:
+    caps_usd:
+        B: 99999
+    ledger: reports/elsewhere/ledger.jsonl
+agent_reviewer:
+    model: hostile-model
+    max_turns: 999
+    agent_file: config/hostile-agent.md
+    mcp_config: hostile.mcp.json
+    artifact_dir: reports/elsewhere
+secret_scan:
+    command: hostile-gitleaks
+    config_file: hostile.gitleaks.toml
+    extra_args: ["--hostile"]
+"""
 
 
-def _argv_at_the_base(repo: Path, *extra: str) -> list[str]:
-    """Check the repo out AT the base commit and review the commit above it."""
-    _git(repo, "tag", "rbase", "HEAD~1")
-    _git(repo, "tag", "rtip", "HEAD")
-    _git(repo, "checkout", "-q", "rbase")
-    return ["--repo-root", str(repo), "--base", "rbase", "--head", "rtip", "--cap-usd", "5", *extra]
+def _plant_hostile_targets(repo: Path) -> None:
+    for rel in ("config/hostile-agent.md", "hostile.mcp.json", "hostile.gitleaks.toml"):
+        _write(repo, rel, "HOSTILE\n")
 
 
-def test_the_mcp_server_may_not_run_the_branchs_own_package(
+def _spy_on_executable_lookups(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    asked: list[str] = []
+    real = policy.resolve_executable
+
+    def spy(name: str, environ: Any = None) -> str | None:
+        asked.append(name)
+        return real(name, environ)
+
+    monkeypatch.setattr(policy, "resolve_executable", spy)
+    return asked
+
+
+def _assert_the_base_configuration_ruled(repo: Path, sdk: _FakeSdk, asked: list[str]) -> None:
+    options = sdk.queries[0]["options"]
+    assert (options.max_turns, options.model) == (40, "opus")
+    assert "adversarial peer reviewer" in options.system_prompt, "the base's agent file"
+    assert "HOSTILE" not in options.system_prompt
+    assert options.mcp_servers["mousedroid"]["command"] == sys.executable
+    (row,) = _ledger_rows(repo)
+    assert row["cap_usd"] == 60.0, "the base's cap, not the head's 99999"
+    assert re.fullmatch(r"reports/agent_reviewer/[\d-]+/wsb-0001\.md", row["artifact"])
+    assert not (repo / "reports/elsewhere").exists()
+    assert set(asked) <= {"git", "gitleaks"}, f"a program the head named was looked up: {asked}"
+
+
+def test_a_tampered_working_tree_workforce_yaml_changes_nothing_the_reviewer_loads(
+    repo: Path, fake_sdk: _FakeSdk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``.claude/workforce.yaml`` selects the agent file, the MCP declaration, the scanner
+    program and its policy, the caps, and where the review and the ledger row are written."""
+    _plant_hostile_targets(repo)
+    _write(repo, DEFAULT_CONFIG_RELPATH, _HOSTILE_WORKFORCE_YAML)  # uncommitted
+    asked = _spy_on_executable_lookups(monkeypatch)
+    _live_env(monkeypatch)
+
+    assert run_review.main(_argv(repo)) == 0
+
+    _assert_the_base_configuration_ruled(repo, fake_sdk, asked)
+
+
+def test_a_workforce_yaml_the_head_commits_changes_nothing_either(
+    repo: Path, fake_sdk: _FakeSdk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _plant_hostile_targets(repo)
+    _write(repo, DEFAULT_CONFIG_RELPATH, _HOSTILE_WORKFORCE_YAML)
+    _commit(repo, "the head rewrites the reviewer's configuration")
+    asked = _spy_on_executable_lookups(monkeypatch)
+    _live_env(monkeypatch)
+    argv = ["--repo-root", str(repo), "--base", "HEAD~2", "--head", "HEAD", "--cap-usd", "5"]
+
+    assert run_review.main(argv) == 0
+
+    _assert_the_base_configuration_ruled(repo, fake_sdk, asked)
+
+
+def test_the_dry_run_says_where_the_configuration_came_from(
+    repo: Path, fake_sdk: _FakeSdk, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write(repo, DEFAULT_CONFIG_RELPATH, _HOSTILE_WORKFORCE_YAML)
+    assert run_review.main(_argv(repo, "--dry-run")) == 0
+    out = capsys.readouterr().out
+    base_sha = _git(repo, "rev-parse", "HEAD~1")
+    assert f"workforce_config: {base_sha}:{DEFAULT_CONFIG_RELPATH}" in out
+    assert "the working tree's copy is never read" in out
+    assert "hostile-model" not in out
+    assert "model_requested: opus" in out
+
+
+def test_a_base_without_a_workforce_yaml_gets_the_defaults_and_cannot_spend(
     repo: Path,
     fake_sdk: _FakeSdk,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """An editable install makes ``python -m mousedroid`` the CHECKOUT's code - the head's."""
-    _mcp_package_at(monkeypatch, repo / "src/mousedroid/__init__.py")
+    _git(repo, "rm", "-q", DEFAULT_CONFIG_RELPATH)
+    _commit(repo, "a base that has not adopted the workforce config")
+    _write(repo, "later.py", "z = 1\n")
+    _commit(repo, "the change under review")
+    _write(repo, DEFAULT_CONFIG_RELPATH, _WORKFORCE_YAML)  # the head's copy: untracked, ignored
+    _live_env(monkeypatch)
+
+    assert run_review.main(_argv(repo)) == run_review.EXIT_CAP
+
+    fake_sdk.query.assert_not_called()
+    assert "cap" in capsys.readouterr().err.lower()
+    assert _ledger_rows(repo) == []
+
+
+def test_a_base_workforce_yaml_that_does_not_parse_refuses_the_run(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    argv = _argv_with_base_config(repo, "agent_reviewer:\n    nonsense_key: 1\n")
+    assert run_review.main([*argv, "--dry-run"]) == run_review.EXIT_REFUSED
+    err = capsys.readouterr().err
+    assert "nonsense_key" in err
+    assert ":.claude/workforce.yaml" in err, "names the base ref's copy, not a working-tree path"
+
+
+def test_the_secret_policy_comes_from_the_base_ref(
+    repo: Path,
+    fake_sdk: _FakeSdk,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A head that can rewrite ``.gitleaks.toml`` must not be able to switch the screen off,
+    and one that the base declares must really apply."""
+    _live_env(monkeypatch)
+    # The head's working-tree policy matches the agent text; the base's does not: not refused.
+    _write(repo, ".gitleaks.toml", '[[rules]]\nid = "x"\nregex = "adversarial peer reviewer"\n')
+    assert run_review.main(_argv(repo, "--dry-run")) == 0
+    capsys.readouterr()
+    # The base's own policy matches: refused, naming the policy file.
+    _write(repo, ".gitleaks.toml", '[[rules]]\nid = "x"\nregex = "adversarial peer reviewer"\n')
+    _commit(repo, "a base policy that matches the agent text")
+    _write(repo, "later.py", "z = 1\n")
+    _commit(repo, "the change under review")
+    assert run_review.main(_argv(repo, "--dry-run")) == run_review.EXIT_REFUSED
+    assert "gitleaks.toml" in capsys.readouterr().err
+
+
+def test_both_gitleaks_scans_use_the_base_refs_policy(
+    repo: Path, fake_sdk: _FakeSdk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The assembled prompt and the review output are scanned with the base's .gitleaks.toml."""
+    seen = _fake_gitleaks(monkeypatch)
+    base_policy = (repo / ".gitleaks.toml").read_text(encoding="utf-8")
+    _write(repo, ".gitleaks.toml", "# the head's copy, which must not be used\n")  # uncommitted
+    _live_env(monkeypatch)
+
+    assert run_review.main(_argv(repo)) == 0
+
+    assert len(seen) == 2, "the assembled prompt, then the review output"
+    assert [call["policy"] for call in seen] == [base_policy, base_policy]
+
+
+# --- what the MCP server is started with --------------------------------------------------------
+def test_the_mcp_server_gets_the_base_refs_configuration_in_a_scratch_directory(
+    repo: Path, fake_sdk: _FakeSdk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Never the checkout's ``config/default.yaml``, and a directory that is not the checkout."""
+    default = repo / policy.MCP_CONFIG_RELPATH
+    base_text = default.read_text(encoding="utf-8")
+    default.write_text("HOSTILE: true\n", encoding="utf-8")  # the head's copy
+    seen: dict[str, Any] = {}
+    real_query = fake_sdk.query.side_effect
+
+    def spy(**kwargs: Any) -> Any:
+        args = kwargs["options"].mcp_servers["mousedroid"]["args"]
+        config = Path(args[3])
+        seen.update(path=config, text=config.read_text(encoding="utf-8"))
+        return real_query(**kwargs)
+
+    fake_sdk.query.side_effect = spy
+    _live_env(monkeypatch)
+
+    assert run_review.main(_argv(repo)) == 0
+
+    assert seen["text"] == base_text
+    assert "HOSTILE" not in seen["text"]
+    assert seen["path"].is_absolute()
+    assert not run_review._is_within(seen["path"], repo), "outside the checkout"
+    assert not seen["path"].exists(), "the scratch directory is removed after the run"
+
+
+def test_a_dry_run_writes_no_scratch_directory(
+    repo: Path, fake_sdk: _FakeSdk, capsys: pytest.CaptureFixture[str]
+) -> None:
+    scratch = Path(tempfile.gettempdir()) / "agent-reviewer-dry-run"
+    assert run_review.main(_argv(repo, "--dry-run")) == 0
+    out = capsys.readouterr().out
+    assert str(scratch / "mcp-config.yaml") in out, "it names the file a live run would write"
+    assert not scratch.exists()
+    assert "mcp_config: materialised from" in out
+
+
+def test_a_scratch_directory_inside_the_checkout_is_refused(
+    repo: Path,
+    fake_sdk: _FakeSdk,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    inside = repo / "tmp-inside"
+    inside.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(inside))
+    _live_env(monkeypatch)
+    assert run_review.main(_argv(repo)) == run_review.EXIT_REFUSED
+    assert "inside the checkout" in capsys.readouterr().err
+    fake_sdk.query.assert_not_called()
+    assert _ledger_rows(repo) == []
+
+
+def test_a_base_without_the_mcp_server_configuration_refuses_the_run(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _git(repo, "rm", "-q", policy.MCP_CONFIG_RELPATH)
+    _commit(repo, "a base without the server's configuration")
+    _write(repo, "later.py", "z = 1\n")
+    _commit(repo, "the change under review")
+    _write(repo, policy.MCP_CONFIG_RELPATH, "HOSTILE: true\n")  # the head's, untracked
+    assert run_review.main(_argv(repo, "--dry-run")) == run_review.EXIT_REFUSED
+    assert policy.MCP_CONFIG_RELPATH in capsys.readouterr().err
+
+
+# --- whose code runs beside the key ---------------------------------------------------------------
+def _code_at(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    controller: Path | None = None,
+    prefix: Path | None = None,
+    package: Path | str | None = "keep",
+) -> None:
+    """Pretend the reviewer's modules, the interpreter's environment and mousedroid live here."""
+    if controller is not None:
+        monkeypatch.setattr(run_review, "__file__", str(controller / "run_review.py"))
+    if prefix is not None:
+        monkeypatch.setattr(sys, "prefix", str(prefix))
+    if package != "keep":
+        monkeypatch.setattr(run_review, "_mcp_package_origin", lambda: package)
+
+
+def _evaluate(repo: Path, refs: run_review.Refs | None = None, *, trust: bool = False) -> Any:
+    resolved = refs or asyncio.run(run_review._resolve_refs(repo, "HEAD~1", "HEAD"))
+    return asyncio.run(run_review._evaluate_trust(repo, resolved, trust_checkout=trust))
+
+
+def test_code_from_outside_the_checkout_is_trusted(
+    repo: Path, fake_sdk: _FakeSdk, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The safe setup: run from a trusted checkout and point --repo-root at the other."""
+    assert run_review.main(_argv(repo, "--dry-run")) == 0
+    out = capsys.readouterr().out
+    assert "trust_controller: outside the checkout under review" in out
+    assert "trust_interpreter: outside the checkout under review" in out
+    assert "trust_package: installed outside the checkout under review" in out
+
+
+def test_the_reviewers_own_modules_in_the_checkout_are_the_branchs_own_code(
+    repo: Path,
+    fake_sdk: _FakeSdk,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Run from the head's checkout, the head's ``policy.py`` is the containment."""
+    _code_at(monkeypatch, controller=repo / "tools" / "agent_reviewer")
 
     assert run_review.main(_argv(repo, "--dry-run")) == run_review.EXIT_REFUSED
 
     err = capsys.readouterr().err
-    assert "src/mousedroid/__init__.py" in err
-    assert run_review.ALLOW_IN_TREE_MCP_FLAG in err
+    assert "tools/agent_reviewer" in err
+    assert run_review.TRUST_CHECKOUT_FLAG in err
     assert "holds the API key" in err
     fake_sdk.query.assert_not_called()
     assert not (repo / "reports").exists()
+
+
+def test_an_interpreter_environment_inside_the_checkout_is_the_branchs_own_code(
+    repo: Path,
+    fake_sdk: _FakeSdk,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Its ``site-packages`` and ``.pth`` files run at startup, even under ``-I``."""
+    _code_at(monkeypatch, prefix=repo / ".venv")
+    assert run_review.main(_argv(repo, "--dry-run")) == run_review.EXIT_REFUSED
+    err = capsys.readouterr().err
+    assert ".venv" in err
+    assert run_review.TRUST_CHECKOUT_FLAG in err
+
+
+def test_an_editable_mousedroid_in_the_checkout_is_the_branchs_own_code(
+    repo: Path,
+    fake_sdk: _FakeSdk,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _code_at(monkeypatch, package=repo / "src/mousedroid/__init__.py")
+    assert run_review.main(_argv(repo, "--dry-run")) == run_review.EXIT_REFUSED
+    err = capsys.readouterr().err
+    assert "src/mousedroid/__init__.py" in err
+    assert run_review.TRUST_CHECKOUT_FLAG in err
 
 
 def test_a_live_run_is_refused_the_same_way_before_any_spend(
     repo: Path, fake_sdk: _FakeSdk, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _live_env(monkeypatch)
-    _mcp_package_at(monkeypatch, repo / "src/mousedroid/__init__.py")
+    _code_at(monkeypatch, package=repo / "src/mousedroid/__init__.py")
 
     assert run_review.main(_argv(repo)) == run_review.EXIT_REFUSED
 
@@ -1885,23 +2570,51 @@ def test_a_live_run_is_refused_the_same_way_before_any_spend(
     assert _ledger_rows(repo) == [], "nothing was charged"
 
 
-def test_the_flag_accepts_the_branchs_own_package_and_the_plan_says_so(
+def test_every_problem_is_listed_in_one_refusal(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _code_at(
+        monkeypatch,
+        controller=repo / "tools" / "agent_reviewer",
+        prefix=repo / ".venv",
+        package=repo / "src/mousedroid/__init__.py",
+    )
+    with pytest.raises(run_review.RefusalError) as excinfo:
+        _evaluate(repo)
+    message = str(excinfo.value)
+    assert "reviewer's own modules" in message
+    assert "interpreter's environment" in message
+    assert "MCP server would import" in message
+
+
+def test_the_flag_accepts_all_of_it_and_the_plan_says_so(
     repo: Path,
     fake_sdk: _FakeSdk,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    _mcp_package_at(monkeypatch, repo / "src/mousedroid/__init__.py")
+    _code_at(
+        monkeypatch,
+        controller=repo / "tools" / "agent_reviewer",
+        prefix=repo / ".venv",
+        package=repo / "src/mousedroid/__init__.py",
+    )
 
-    code = run_review.main(_argv(repo, "--dry-run", run_review.ALLOW_IN_TREE_MCP_FLAG))
+    code = run_review.main(_argv(repo, "--dry-run", run_review.TRUST_CHECKOUT_FLAG))
 
     assert code == 0
     out = capsys.readouterr().out
-    assert "mcp_package: IN THE CHECKOUT UNDER REVIEW (src/mousedroid/__init__.py)" in out
-    assert run_review.ALLOW_IN_TREE_MCP_FLAG in out
+    here = "IN THE CHECKOUT UNDER REVIEW"
+    accepted = f"; accepted with {run_review.TRUST_CHECKOUT_FLAG}"
+    for line in (
+        f"trust_controller: {here} (tools/agent_reviewer){accepted}",
+        f"trust_interpreter: {here} (.venv){accepted}",
+        f"trust_package: {here} (src/mousedroid/__init__.py){accepted}",
+    ):
+        assert line in out
 
 
-def test_a_checkout_at_the_base_commit_runs_trusted_code(
+def test_a_checkout_at_the_base_commit_holds_trusted_code(
     repo: Path,
     fake_sdk: _FakeSdk,
     monkeypatch: pytest.MonkeyPatch,
@@ -1909,36 +2622,43 @@ def test_a_checkout_at_the_base_commit_runs_trusted_code(
 ) -> None:
     """Reviewing a branch by its git objects from a checkout of the base needs no flag."""
     argv = _argv_at_the_base(repo, "--dry-run")
-    _mcp_package_at(monkeypatch, repo / "src/mousedroid/__init__.py")
+    _code_at(
+        monkeypatch,
+        controller=repo / "tools" / "agent_reviewer",
+        prefix=repo / ".venv",
+        package=repo / "src/mousedroid/__init__.py",
+    )
 
     assert run_review.main(argv) == 0
 
-    assert "which is at the base commit" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "tools/agent_reviewer, in the checkout, which is at the base commit" in out
+    assert ".venv, in the checkout, which is at the base commit" in out
+    assert "src/mousedroid/__init__.py, in the checkout, which is at the base commit" in out
 
 
 def test_an_unresolvable_checkout_is_not_taken_for_the_base(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     refs = run_review.Refs("b", "a" * 40, "h", "c" * 40, "unknown")
-    _mcp_package_at(monkeypatch, repo / "src/mousedroid/__init__.py")
+    _code_at(monkeypatch, package=repo / "src/mousedroid/__init__.py")
     with pytest.raises(run_review.RefusalError, match="not at the base"):
-        run_review._mcp_package_note(repo, refs, allow_in_tree=False)
+        _evaluate(repo, refs)
 
 
-def test_a_copy_installed_in_the_interpreters_own_prefix_is_not_the_branchs(
+def test_a_copy_installed_in_the_interpreters_own_environment_is_not_the_branchs(
     repo: Path,
     fake_sdk: _FakeSdk,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A venv that sits INSIDE the checkout holds an installed copy, not the head's source."""
+    """The interpreter's environment can sit INSIDE the checkout only with the flag; the
+    package installed in it is then covered by that, not by a second refusal."""
     venv = repo / ".venv"
-    monkeypatch.setattr(sys, "prefix", str(venv))
-    _mcp_package_at(monkeypatch, venv / "Lib/site-packages/mousedroid/__init__.py")
-
-    assert run_review.main(_argv(repo, "--dry-run")) == 0
-
-    assert "interpreter's own prefix" in capsys.readouterr().out
+    _code_at(monkeypatch, prefix=venv, package=venv / "Lib/site-packages/mousedroid/__init__.py")
+    code = run_review.main(_argv(repo, "--dry-run", run_review.TRUST_CHECKOUT_FLAG))
+    assert code == 0
+    assert "installed in the interpreter's own environment" in capsys.readouterr().out
 
 
 def test_a_package_installed_outside_the_checkout_is_not_the_branchs(
@@ -1948,10 +2668,8 @@ def test_a_package_installed_outside_the_checkout_is_not_the_branchs(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    _mcp_package_at(monkeypatch, tmp_path / "elsewhere/mousedroid/__init__.py")
-
+    _code_at(monkeypatch, package=tmp_path / "elsewhere/mousedroid/__init__.py")
     assert run_review.main(_argv(repo, "--dry-run")) == 0
-
     assert "installed outside the checkout under review" in capsys.readouterr().out
 
 
@@ -1962,13 +2680,104 @@ def test_a_missing_package_is_said_not_refused(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """With no ``mousedroid`` the server cannot start; the review simply has no MCP evidence."""
-    _mcp_package_at(monkeypatch, None)
-
+    _code_at(monkeypatch, package=None)
     assert run_review.main(_argv(repo, "--dry-run")) == 0
-
     assert "not importable by this interpreter" in capsys.readouterr().out
 
 
+def _venv_tracked_by_the_head(repo: Path) -> None:
+    _write(repo, ".venv/Lib/site-packages/sitecustomize.py", "print('planted')\n")
+    _commit(repo, "the head force-adds a file to the virtualenv")
+
+
+def test_a_head_that_tracks_files_in_the_interpreters_environment_is_refused_outright(
+    repo: Path,
+    fake_sdk: _FakeSdk,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Not the operator's environment: no flag accepts it."""
+    _venv_tracked_by_the_head(repo)
+    _code_at(monkeypatch, prefix=repo / ".venv")
+    argv = ["--repo-root", str(repo), "--base", "HEAD~2", "--head", "HEAD", "--cap-usd", "5"]
+
+    assert run_review.main([*argv, "--dry-run"]) == run_review.EXIT_REFUSED
+    assert run_review.main([*argv, "--dry-run", run_review.TRUST_CHECKOUT_FLAG]) == (
+        run_review.EXIT_REFUSED
+    )
+
+    err = capsys.readouterr().err
+    assert "sitecustomize.py" in err
+    assert "does not accept it" in err
+
+
+def test_files_the_index_tracks_in_the_environment_count_too(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Staged, not yet committed: the checkout would still run them."""
+    _write(repo, ".venv/Lib/site-packages/evil.pth", "import os\n")
+    _git(repo, "add", "-f", ".venv/Lib/site-packages/evil.pth")
+    _code_at(monkeypatch, prefix=repo / ".venv")
+    with pytest.raises(run_review.RefusalError, match=r"evil\.pth"):
+        _evaluate(repo, trust=True)
+
+
+def test_files_the_head_tracks_count_even_when_the_checkout_does_not_have_them_yet(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The index lists what is checked out; the head's own tree lists what the head adds."""
+    _venv_tracked_by_the_head(repo)
+    head, middle, base = (_git(repo, "rev-parse", f"HEAD~{n}") for n in (0, 1, 2))
+    _git(repo, "checkout", "-q", middle)  # a checkout that lacks the head's .venv files
+    refs = run_review.Refs("base", base, "head", head, middle)
+    _code_at(monkeypatch, prefix=repo / ".venv")
+    with pytest.raises(run_review.RefusalError, match=r"sitecustomize\.py"):
+        _evaluate(repo, refs, trust=True)
+
+
+def test_an_untracked_environment_in_the_checkout_needs_the_flag_but_is_not_refused_outright(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write(repo, ".venv/Lib/site-packages/mine.py", "x = 1\n")  # untracked, like a real venv
+    _code_at(monkeypatch, prefix=repo / ".venv")
+    with pytest.raises(run_review.RefusalError, match="inside this checkout"):
+        _evaluate(repo)
+    trust = _evaluate(repo, trust=True)
+    assert trust.interpreter.startswith("IN THE CHECKOUT UNDER REVIEW (.venv)")
+
+
+def test_a_failing_tracked_files_lookup_refuses(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = run_review._git
+
+    async def failing(repo_root: Path, *args: str) -> tuple[int, bytes]:
+        if args and args[0] == "ls-files":
+            return 128, b""
+        return await real(repo_root, *args)
+
+    monkeypatch.setattr(run_review, "_git", failing)
+    _code_at(monkeypatch, prefix=repo / ".venv")
+    with pytest.raises(run_review.RefusalError, match="cannot tell whether the head tracks"):
+        _evaluate(repo, trust=True)
+
+
+def test_the_cli_offers_the_flag_and_defaults_it_off() -> None:
+    parser = run_review.build_parser()
+    required = ["--base", "a", "--head", "b", "--cap-usd", "1"]
+    assert parser.parse_args(required).trust_checkout is False
+    assert parser.parse_args([*required, run_review.TRUST_CHECKOUT_FLAG]).trust_checkout
+
+
+def _argv_at_the_base(repo: Path, *extra: str) -> list[str]:
+    """Check the repo out AT the base commit and review the commit above it."""
+    _git(repo, "tag", "rbase", "HEAD~1")
+    _git(repo, "tag", "rtip", "HEAD")
+    _git(repo, "checkout", "-q", "rbase")
+    return ["--repo-root", str(repo), "--base", "rbase", "--head", "rtip", "--cap-usd", "5", *extra]
+
+
+# --- how the package is located ------------------------------------------------------------
 def test_the_package_origin_is_looked_up_without_importing_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2032,11 +2841,30 @@ def test_a_path_that_cannot_be_resolved_is_not_within_anything(
     assert within is False
 
 
-def test_the_cli_offers_the_flag_and_defaults_it_off() -> None:
-    parser = run_review.build_parser()
-    required = ["--base", "a", "--head", "b", "--cap-usd", "1"]
-    assert parser.parse_args(required).allow_in_tree_mcp is False
-    assert parser.parse_args([*required, run_review.ALLOW_IN_TREE_MCP_FLAG]).allow_in_tree_mcp
+# --- git is found without looking in the working directory ----------------------------------
+def test_git_is_the_program_found_on_path_not_a_bare_name(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    launched: list[str] = []
+    real = asyncio.create_subprocess_exec
+
+    async def spy(*args: Any, **kwargs: Any) -> Any:
+        launched.append(str(args[0]))
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(run_review.asyncio, "create_subprocess_exec", spy)
+    assert run_review.main(_argv(repo, "--dry-run")) == 0
+    assert launched
+    assert all(os.path.isabs(program) for program in launched), launched
+    assert {Path(program).stem.lower() for program in launched} == {"git"}
+
+
+def test_a_missing_git_on_path_is_explained(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(policy, "resolve_executable", lambda name, environ=None: None)
+    assert run_review.main(_argv(repo, "--dry-run")) == run_review.EXIT_REFUSED
+    assert "git is required" in capsys.readouterr().err
 
 
 # --------------------------------------------------------------------------- #
@@ -2076,7 +2904,10 @@ def test_a_live_run_writes_the_artifact_and_one_ledger_row(
     (guard,) = matcher.hooks
     assert isinstance(guard, policy.BashGuard)
     server = options.mcp_servers["mousedroid"]
-    assert (server["command"], server["args"]) == (sys.executable, list(policy.MCP_ARGS))
+    assert server["command"] == sys.executable
+    assert server["args"][:3] == ["-I", "-c", policy.MCP_BOOTSTRAP]
+    pinned = {_git(repo, "rev-parse", "HEAD~1"), _git(repo, "rev-parse", "HEAD")}
+    assert guard.revisions == pinned
     assert options.env["GIT_LITERAL_PATHSPECS"] == "1"
     assert "R3-1" in sdk.queries[0]["prompt"]
     # One ledger row, from ResultMessage.total_cost_usd.
@@ -2271,7 +3102,7 @@ def test_a_stalled_run_times_out_and_is_charged_the_worst_case(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Long enough that the first message always lands before the timeout, even on a slow host.
-    _write(repo, DEFAULT_CONFIG_RELPATH, _WORKFORCE_YAML + "    run_timeout_s: 0.5\n")
+    argv = _argv_with_base_config(repo, _WORKFORCE_YAML + "    run_timeout_s: 0.5\n")
     sdk = _FakeSdk()
 
     def hang(**_kwargs: Any) -> Any:
@@ -2284,7 +3115,7 @@ def test_a_stalled_run_times_out_and_is_charged_the_worst_case(
     sdk.query = MagicMock(side_effect=hang)
     _install_sdk(monkeypatch, sdk)
     _live_env(monkeypatch)
-    assert run_review.main(_argv(repo)) == run_review.EXIT_FAILED
+    assert run_review.main(argv) == run_review.EXIT_FAILED
     (row,) = _ledger_rows(repo)
     assert row["status"] == "timeout"
     assert (row["cost_usd"], row["cost_source"]) == (10.0, "cap_assumed")
@@ -2348,6 +3179,12 @@ def test_output_that_gitleaks_flags_is_withheld(
         return ScanOutcome(clean=len(calls) == 1, available=True, detail="1 leak (redacted)")
 
     monkeypatch.setattr("tools.agent_reviewer.prompt.secret_scan.scan_content", scan)
+    real_lookup = policy.resolve_executable
+
+    def lookup(name: str, environ: Any = None) -> str | None:
+        return sys.executable if name == "gitleaks" else real_lookup(name, environ)
+
+    monkeypatch.setattr(policy, "resolve_executable", lookup)
     _live_env(monkeypatch)
     assert run_review.main(_argv(repo)) == run_review.EXIT_FAILED
     assert len(calls) == 2
@@ -2488,16 +3325,17 @@ async def test_resolve_model_survives_a_client_that_cannot_be_built(
 def test_workforce_caps_are_the_single_source(
     repo: Path, fake_sdk: _FakeSdk, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``max_turns``, the model alias, the caps and the ledger path all come from YAML."""
+    """``max_turns``, the model alias, the caps and the ledger path all come from the YAML
+    that is committed at the BASE ref."""
     # (1) max_turns and the model alias follow workforce.yaml.
-    _write(
+    argv = _argv_with_base_config(
         repo,
-        DEFAULT_CONFIG_RELPATH,
         "credit:\n    caps_usd:\n        B: 4\n    ledger: out/spend.jsonl\n"
         "agent_reviewer:\n    model: sonnet\n    max_turns: 7\n",
+        cap="3",
     )
     _live_env(monkeypatch)
-    assert run_review.main(_argv(repo, cap="3")) == 0
+    assert run_review.main(argv) == 0
     options = fake_sdk.queries[0]["options"]
     assert options.max_turns == 7
     assert options.model == "sonnet"
@@ -2506,7 +3344,7 @@ def test_workforce_caps_are_the_single_source(
     (row,) = [json.loads(line) for line in lines]
     assert row["cap_usd"] == 4.0
     assert not (repo / "reports/credit/ledger.jsonl").exists()
-    assert run_review.main(_argv(repo, cap="3")) == run_review.EXIT_CAP, "1.25 + 3 > 4"
+    assert run_review.main(argv) == run_review.EXIT_CAP, "1.25 + 3 > 4"
 
 
 def test_the_checked_in_workforce_yaml_states_the_planned_values() -> None:
@@ -2554,6 +3392,52 @@ def test_no_cap_turn_count_or_model_literal_lives_in_the_package() -> None:
             if isinstance(value, str) and value in ("opus", "sonnet", "haiku"):
                 offenders.append(f"{path.name}:{node.lineno} model alias {value!r}")
     assert not offenders, offenders
+
+
+def _dotted(node: ast.expr) -> str:
+    """``a.b.c`` for a name or attribute chain, else an empty string."""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+    return ".".join(reversed(parts))
+
+
+def test_the_package_never_loads_the_working_trees_workforce_config() -> None:
+    """The reviewer's configuration is parsed from the base ref's blob, never ``load_config``."""
+    for path in _package_sources():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        called = {_dotted(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)}
+        imported = {
+            a.name for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) for a in n.names
+        }
+        assert "load_config" not in {name.split(".")[-1] for name in called | imported}, path.name
+
+
+def test_the_package_starts_no_program_by_a_bare_name() -> None:
+    """``git.exe`` or ``gitleaks.exe`` in the head would run first on Windows: every program the
+    package starts is an absolute path from ``policy.resolve_executable``."""
+    starters = {"create_subprocess_exec", "run", "Popen", "check_output", "check_call", "call"}
+    for path in _package_sources():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = _dotted(node.func)
+            assert name != "shutil.which", (path.name, node.lineno)
+            if name.split(".")[-1] not in starters or not node.args:
+                continue
+            first = node.args[0]
+            literal = isinstance(first, ast.Constant) and isinstance(first.value, str)
+            listed = (
+                isinstance(first, ast.List)
+                and first.elts
+                and isinstance(first.elts[0], ast.Constant)
+            )
+            assert not literal, (path.name, node.lineno, "a program named by a string literal")
+            assert not listed, (path.name, node.lineno, "a program named by a list literal")
 
 
 def test_the_package_never_imports_the_runtime_or_the_sdk_at_module_scope() -> None:

@@ -3,7 +3,7 @@
     python -m tools.agent_reviewer.run_review \\
         --base origin/<trunk> --head <branch> --cap-usd 10 [--opening R3-1,R3-2] \\
         [--out reports/agent_reviewer/<date>/wsb-NNNN.md] [--dry-run] [--repo-root DIR] \\
-        [--allow-in-tree-mcp]
+        [--trust-checkout]
 
 ``--dry-run`` builds everything a real run would - prompts, policy, SDK options, the
 artifact path, the ledger pre-check - and prints it, WITHOUT constructing a client,
@@ -14,11 +14,16 @@ The key is read from ``ANTHROPIC_API_KEY`` in the environment and from nowhere e
 is no option that takes one, and it is never printed, logged, put in the options or written
 to the artifact or the ledger (the SDK's CLI inherits the environment itself).
 
-The head under review may be hostile, and the MCP server (``sys.executable -m mousedroid``)
-is started by the CLI that holds the key. The plan therefore says where that interpreter
-finds ``mousedroid`` and refuses, before any spend, when it is the checkout's own code
-(an editable install) and the checkout is not at the base commit; ``--allow-in-tree-mcp``
-accepts running it anyway.
+The head under review may be hostile, so the trust boundary is the BASE ref. The reviewer's
+own configuration (``.claude/workforce.yaml``), its agent prompt, the MCP declaration, the MCP
+server's configuration and the secret policy (``.gitleaks.toml``) are all read from the base
+commit with ``git cat-file`` - the working tree is never opened for them - and the files
+``git show <rev>:<path>`` may name are the ones tracked there. The code that would run beside
+the CLI that holds the key is checked too: the reviewer's own modules, the interpreter's
+environment and the ``mousedroid`` package the MCP server imports. When any of them lives inside
+the checkout under review and the checkout is not at the base commit, the run is refused before
+any spend unless ``--trust-checkout`` accepts it; an interpreter environment inside the
+checkout that the head TRACKS files in is refused outright.
 
 A real run, in order:
 
@@ -50,6 +55,7 @@ import math
 import os
 import re
 import sys
+import tempfile
 from collections.abc import Mapping, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass, field
@@ -59,7 +65,13 @@ from typing import Any, Final
 
 from tools import credit_ledger
 from tools.agent_reviewer import ledger, policy, prompt
-from tools.claude_hooks.config import MODEL_ID_PATTERN, ConfigError, WorkforceConfig, load_config
+from tools.claude_hooks.config import (
+    DEFAULT_CONFIG_RELPATH,
+    MODEL_ID_PATTERN,
+    ConfigError,
+    WorkforceConfig,
+    parse_config_text,
+)
 from tools.claude_hooks.logging_setup import get_logger
 from tools.claude_hooks.paths import resolve_repo_root
 
@@ -81,8 +93,13 @@ API_KEY_ENV: Final = "ANTHROPIC_API_KEY"
 #: The ledger's ``artifact`` value when the review file could not be written.
 ARTIFACT_NOT_WRITTEN: Final = "(not written)"
 
-#: The option that accepts running the checkout's own ``mousedroid`` as the MCP server.
-ALLOW_IN_TREE_MCP_FLAG: Final = "--allow-in-tree-mcp"
+#: The option that accepts running code that lives inside the checkout under review.
+TRUST_CHECKOUT_FLAG: Final = "--trust-checkout"
+
+#: The file the MCP server is given (a copy of the base ref's configuration) and, for a dry
+#: run that writes nothing, the directory it would live in.
+_MCP_CONFIG_FILENAME: Final = "mcp-config.yaml"
+_DRY_RUN_SCRATCH: Final = "agent-reviewer-dry-run"
 
 _GIT_TIMEOUT_S: Final = 30.0
 _DEFAULT_RUN_PREFIX: Final = "wsb"
@@ -193,11 +210,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Repository root (default: discovered from the workforce tooling).",
     )
     parser.add_argument(
-        ALLOW_IN_TREE_MCP_FLAG,
+        TRUST_CHECKOUT_FLAG,
         action="store_true",
-        help="Accept that the MCP server imports the checkout's own `mousedroid` (an editable "
-        "install) although the checkout is not at the base commit. That is the reviewed "
-        "branch's code, run beside the CLI that holds the API key. Off by default.",
+        help="Accept running code that lives inside the checkout under review (the reviewer's "
+        "own modules, the interpreter's virtualenv, an editable `mousedroid`) although the "
+        "checkout is not at the base commit: it runs beside the CLI that holds the API key. "
+        "Off by default; a virtualenv the head tracks files in is refused regardless.",
     )
     return parser
 
@@ -217,6 +235,15 @@ class Refs:
 
 
 @dataclass(frozen=True)
+class CodeTrust:
+    """Where the code that runs beside the API key comes from, as the plan prints it."""
+
+    controller: str
+    interpreter: str
+    package: str
+
+
+@dataclass(frozen=True)
 class Plan:
     """Everything a run needs, built (and refused) before any client exists."""
 
@@ -231,7 +258,17 @@ class Plan:
     user_prompt: str
     options: dict[str, Any]
     base_paths: frozenset[str]
-    mcp_package: str
+    config_source: str
+    gitleaks_toml: str | None
+    trust: CodeTrust
+
+    @property
+    def guard(self) -> policy.BashGuard:
+        """The Bash guard bound to this run's base-ref facts: its files and its two commits."""
+        return policy.BashGuard(
+            base_paths=self.base_paths,
+            revisions=frozenset({self.refs.base_sha, self.refs.head_sha}),
+        )
 
     @property
     def target(self) -> str:
@@ -251,12 +288,19 @@ async def _git(repo_root: Path, *args: str) -> tuple[int, bytes]:
     same environment the model's own git gets. A git that does not finish in time is
     killed and reported as a failure (``-1``).
 
+    ``git`` is found in the absolute directories of ``PATH`` only: Windows tries the
+    working directory first, and a ``git.exe`` committed to the head would run here, in the
+    process that holds the API key.
+
     Raises:
-        RefusalError: ``git`` cannot be started.
+        RefusalError: ``git`` cannot be found or started.
     """
+    git = policy.resolve_executable("git")
+    if git is None:
+        raise RefusalError("git is required to resolve refs (it was not found on PATH)")
     try:
         proc = await asyncio.create_subprocess_exec(
-            "git",
+            git,
             "-C",
             str(repo_root),
             *args,
@@ -315,30 +359,68 @@ async def _resolve_refs(repo_root: Path, base: str, head: str) -> Refs:
 
 @dataclass(frozen=True)
 class BaseMaterial:
-    """What the run takes from the TRUSTED base ref instead of from the head."""
+    """What the run takes from the TRUSTED base ref instead of from the head.
+
+    The reviewer's own configuration is on this list: ``.claude/workforce.yaml`` selects the
+    agent file, the MCP declaration, the secret-scan program and its policy file, the caps and
+    where the review and the ledger row are written, so a working-tree copy would let a hostile
+    head redirect every one of them.
+    """
 
     refs: Refs
+    cfg: WorkforceConfig
+    config_source: str
     paths: frozenset[str]
     mcp_json: str
+    mcp_config: str
     agent_text: str
+    gitleaks_toml: str | None
 
 
-async def _load_base_material(
-    repo_root: Path, base: str, head: str, cfg: WorkforceConfig
-) -> BaseMaterial:
+async def _base_blob_if_tracked(
+    repo_root: Path, refs: Refs, paths: frozenset[str], relpath: str
+) -> str | None:
+    """Return ``relpath`` as it is at the base, or ``None`` when the base does not track it."""
+    if relpath not in paths:
+        return None
+    return await _base_blob(repo_root, refs.base_sha, relpath)
+
+
+async def _load_base_material(repo_root: Path, base: str, head: str) -> BaseMaterial:
     refs = await _resolve_refs(repo_root, base, head)
     paths = await _tracked_paths(repo_root, refs.base_sha)
+    config_source = f"{refs.base_sha}:{DEFAULT_CONFIG_RELPATH}"
+    config_text = await _base_blob_if_tracked(repo_root, refs, paths, DEFAULT_CONFIG_RELPATH)
+    # A base without the file gets the schema defaults, as load_config gives a repository that
+    # has not adopted it - and an empty credit block cannot spend.
+    cfg = (
+        WorkforceConfig()
+        if config_text is None
+        else parse_config_text(config_text, source=config_source)
+    )
     mcp_json = await _base_blob(repo_root, refs.base_sha, cfg.agent_reviewer.mcp_config)
     agent_text = await _base_blob(repo_root, refs.base_sha, cfg.agent_reviewer.agent_file)
-    return BaseMaterial(refs=refs, paths=paths, mcp_json=mcp_json, agent_text=agent_text)
+    mcp_config = await _base_blob(repo_root, refs.base_sha, policy.MCP_CONFIG_RELPATH)
+    gitleaks_toml = await _base_blob_if_tracked(repo_root, refs, paths, cfg.secret_scan.config_file)
+    return BaseMaterial(
+        refs=refs,
+        cfg=cfg,
+        config_source=config_source,
+        paths=paths,
+        mcp_json=mcp_json,
+        mcp_config=mcp_config,
+        agent_text=agent_text,
+        gitleaks_toml=gitleaks_toml,
+    )
 
 
 def _mcp_package_origin() -> Path | None:
     """Return where this interpreter would import the MCP server's package from, or ``None``.
 
-    The server is ``sys.executable -m mousedroid`` (:data:`policy.MCP_ARGS`), so what
-    matters is where THIS interpreter finds ``mousedroid``, not where the repository keeps
-    it. ``find_spec`` locates a top-level package without importing it.
+    The server is ``sys.executable -I -c <bootstrap>`` running ``mousedroid``
+    (:data:`policy.MCP_BOOTSTRAP`), so what matters is where THIS interpreter finds
+    ``mousedroid``, not where the repository keeps it. ``find_spec`` locates a top-level
+    package without importing it.
     """
     try:
         spec = importlib.util.find_spec(policy.MCP_MODULE)
@@ -360,50 +442,122 @@ def _is_within(path: Path, root: Path) -> bool:
     return True
 
 
-def _mcp_package_note(repo_root: Path, refs: Refs, *, allow_in_tree: bool) -> str:
-    """Say where the MCP server would import ``mousedroid`` from; refuse the branch's own code.
+def _relative(path: Path, root: Path) -> str:
+    return path.resolve().relative_to(root.resolve()).as_posix()
 
-    The server is started by the CLI - the process that holds the API key - and it is the
-    one place the reviewed repository's own Python could run: under an editable install
-    ``python -m mousedroid`` imports the CHECKOUT's ``src/mousedroid``, which is the head's
-    code whenever the checkout is not at the base commit. A copy installed into the
-    interpreter's own prefix (the venv, even one that sits inside the checkout) is not the
-    head's, and neither is a checkout that is at the base commit.
+
+async def _tracked_under(repo_root: Path, refs: Refs, directory: Path) -> list[str]:
+    """Return the files the head (or the checkout's index) tracks under ``directory``."""
+    where = _relative(directory, repo_root)
+    names: set[str] = set()
+    for args in (
+        ("ls-tree", "-r", "-z", "--name-only", refs.head_sha, "--", where),
+        ("ls-files", "-z", "--", where),
+    ):
+        code, out = await _git(repo_root, *args)
+        if code != 0:
+            raise RefusalError(f"cannot tell whether the head tracks files under {where}")
+        names.update(name for name in out.decode("utf-8", "replace").split(chr(0)) if name)
+    return sorted(names)
+
+
+async def _evaluate_trust(repo_root: Path, refs: Refs, *, trust_checkout: bool) -> CodeTrust:
+    """Say where the code that runs beside the API key comes from; refuse the branch's own.
+
+    Three pieces of code run in, or beside, the process that holds the key: the reviewer's
+    own modules (this package), the interpreter's environment (its ``site-packages`` and
+    ``.pth`` files run at startup, even under ``-I``) and the ``mousedroid`` package the MCP
+    server imports. Each is the head's whenever it lives inside the checkout under review and
+    the checkout is not at the base commit: the head controls every tracked file, and
+    ``mousedroid`` is the checkout's own source under an editable install. A checkout that is
+    at the base commit holds trusted code, and so does anything outside the checkout.
+
+    An interpreter environment inside the checkout in which the head TRACKS files (a
+    force-added ``.venv/...``) is refused whatever the operator says: it is demonstrably not
+    the operator's.
 
     Args:
         repo_root: The resolved checkout the review runs in.
         refs: The resolved commits; ``worktree_sha`` is what the checkout holds.
-        allow_in_tree: The operator accepted running the checkout's own package.
+        trust_checkout: The operator accepted running code from inside the checkout.
 
     Returns:
-        A line for the plan describing where the package comes from.
+        The three lines the plan prints.
 
     Raises:
-        RefusalError: It resolves inside a checkout that is not at the base commit and
-            ``allow_in_tree`` is false.
+        RefusalError: Any piece is the branch's own and ``trust_checkout`` is false, or the
+            head tracks files under the interpreter's environment.
     """
+    at_base = refs.worktree_sha == refs.base_sha
+    problems: list[str] = []
+
+    controller = Path(__file__).resolve().parent
+    if not _is_within(controller, repo_root):
+        controller_note = "outside the checkout under review"
+    else:
+        where = _relative(controller, repo_root)
+        if at_base:
+            controller_note = f"{where}, in the checkout, which is at the base commit"
+        else:
+            controller_note = f"IN THE CHECKOUT UNDER REVIEW ({where})"
+            problems.append(f"the reviewer's own modules ({where}) are in this checkout")
+
+    prefix = Path(sys.prefix)
+    if not _is_within(prefix, repo_root):
+        interpreter_note = "outside the checkout under review"
+    else:
+        where = _relative(prefix, repo_root)
+        if at_base:
+            interpreter_note = f"{where}, in the checkout, which is at the base commit"
+        else:
+            tracked = await _tracked_under(repo_root, refs, prefix)
+            if tracked:
+                raise RefusalError(
+                    f"the head tracks {len(tracked)} file(s) under the interpreter's own "
+                    f"environment {where} (for example {tracked[0]}): that environment belongs "
+                    f"to the head, not to you, and {TRUST_CHECKOUT_FLAG} does not accept it. "
+                    "Create the virtualenv outside the checkout."
+                )
+            interpreter_note = f"IN THE CHECKOUT UNDER REVIEW ({where})"
+            problems.append(f"the interpreter's environment ({where}) is inside this checkout")
+
     origin = _mcp_package_origin()
     if origin is None:
-        return (
+        package_note = (
             f"{policy.MCP_MODULE} is not importable by this interpreter "
             "(the MCP server will not start; the review runs without it)"
         )
-    if _is_within(origin, Path(sys.prefix)):
-        return "installed in the interpreter's own prefix, not in the checkout under review"
-    if not _is_within(origin, repo_root):
-        return "installed outside the checkout under review"
-    where = origin.resolve().relative_to(repo_root.resolve()).as_posix()
-    if refs.worktree_sha == refs.base_sha:
-        return f"in the checkout ({where}), which is at the base commit"
-    if allow_in_tree:
-        return f"IN THE CHECKOUT UNDER REVIEW ({where}); accepted with {ALLOW_IN_TREE_MCP_FLAG}"
-    raise RefusalError(
-        f"the MCP server would import `{policy.MCP_MODULE}` from {where}, inside this checkout, "
-        f"which is at {refs.worktree_sha[:12]}, not at the base {refs.base_sha[:12]}: the "
-        "reviewed branch's own code would run beside the CLI that holds the API key. Use an "
-        "interpreter with a non-editable install of the base ref, run from a checkout at the "
-        f"base commit, or pass {ALLOW_IN_TREE_MCP_FLAG} if you would run this branch's code anyway."
-    )
+    elif _is_within(origin, prefix):
+        package_note = "installed in the interpreter's own environment"
+    elif not _is_within(origin, repo_root):
+        package_note = "installed outside the checkout under review"
+    else:
+        where = _relative(origin, repo_root)
+        if at_base:
+            package_note = f"{where}, in the checkout, which is at the base commit"
+        else:
+            package_note = f"IN THE CHECKOUT UNDER REVIEW ({where})"
+            problems.append(
+                f"the MCP server would import `{policy.MCP_MODULE}` from {where}, "
+                "inside this checkout"
+            )
+
+    notes = [controller_note, interpreter_note, package_note]
+    if problems:
+        if not trust_checkout:
+            raise RefusalError(
+                "code inside this checkout would run beside the CLI that holds the API key, "
+                f"and the checkout is at {refs.worktree_sha[:12]}, not at the base "
+                f"{refs.base_sha[:12]}: {'; '.join(problems)}. Run the reviewer from a trusted "
+                "checkout and point --repo-root at the one under review (virtualenv outside it, "
+                f"`{policy.MCP_MODULE}` installed from the base ref without -e), or pass "
+                f"{TRUST_CHECKOUT_FLAG} if you would run this branch's code anyway."
+            )
+        notes = [
+            f"{note}; accepted with {TRUST_CHECKOUT_FLAG}" if note.startswith("IN THE") else note
+            for note in notes
+        ]
+    return CodeTrust(controller=notes[0], interpreter=notes[1], package=notes[2])
 
 
 def next_run_id(artifact_root: Path, *, prefix: str = _DEFAULT_RUN_PREFIX) -> str:
@@ -437,14 +591,39 @@ def _artifact_path(
     return resolved
 
 
-def _build_plan(args: argparse.Namespace) -> Plan:
+def _mcp_config_path(text: str, work_dir: Path | None, repo_root: Path) -> Path:
+    """Return the file the MCP server reads: the base ref's copy, outside the checkout.
+
+    A dry run writes nothing, so it only names the file a live run would write.
+
+    Raises:
+        RefusalError: The scratch directory is inside the checkout.
+    """
+    if work_dir is None:
+        return Path(tempfile.gettempdir()) / _DRY_RUN_SCRATCH / _MCP_CONFIG_FILENAME
+    if _is_within(work_dir, repo_root):
+        raise RefusalError(
+            f"the scratch directory {work_dir} is inside the checkout; point TMPDIR (TEMP on "
+            "Windows) outside it"
+        )
+    path = work_dir / _MCP_CONFIG_FILENAME
+    path.write_text(text, encoding="utf-8", newline="\n")
+    return path
+
+
+async def _plan(args: argparse.Namespace, work_dir: Path | None) -> Plan:
     repo_root = (resolve_repo_root() if args.repo_root is None else args.repo_root).resolve()
-    cfg = load_config(repo_root=repo_root)
+    material = await _load_base_material(repo_root, args.base, args.head)
+    cfg = material.cfg
     reviewer = cfg.agent_reviewer
-    material = asyncio.run(_load_base_material(repo_root, args.base, args.head, cfg))
     refs = material.refs
-    mcp_package = _mcp_package_note(repo_root, refs, allow_in_tree=args.allow_in_tree_mcp)
-    system_prompt = prompt.build(repo_root=repo_root, cfg=cfg, agent_text=material.agent_text)
+    trust = await _evaluate_trust(repo_root, refs, trust_checkout=args.trust_checkout)
+    system_prompt = prompt.build(
+        repo_root=repo_root,
+        cfg=cfg,
+        agent_text=material.agent_text,
+        gitleaks_toml=material.gitleaks_toml,
+    )
     user_prompt = prompt.build_user_prompt(
         base_ref=refs.base_ref,
         base_sha=refs.base_sha,
@@ -460,6 +639,7 @@ def _build_plan(args: argparse.Namespace) -> Plan:
         system_prompt=system_prompt,
         cap_usd=args.cap_usd,
         mcp_json=material.mcp_json,
+        mcp_config_path=_mcp_config_path(material.mcp_config, work_dir, repo_root),
         mcp_source=f"{refs.base_sha}:{reviewer.mcp_config}",
     )
     run_id = next_run_id(repo_root / reviewer.artifact_dir, prefix=f"ws{reviewer.ws.lower()}")
@@ -476,8 +656,15 @@ def _build_plan(args: argparse.Namespace) -> Plan:
         user_prompt=user_prompt,
         options=options,
         base_paths=material.paths,
-        mcp_package=mcp_package,
+        config_source=material.config_source,
+        gitleaks_toml=material.gitleaks_toml,
+        trust=trust,
     )
+
+
+def _build_plan(args: argparse.Namespace, work_dir: Path | None = None) -> Plan:
+    """Build the whole plan, or raise a refusal. ``work_dir`` is None for a dry run."""
+    return asyncio.run(_plan(args, work_dir))
 
 
 # --------------------------------------------------------------------------- #
@@ -496,15 +683,13 @@ def _sdk_version(sdk: Any) -> str:
     return str(getattr(sdk, "__version__", "unknown"))
 
 
-def _sdk_options(sdk: Any, kwargs: Mapping[str, Any], base_paths: frozenset[str]) -> Any:
+def _sdk_options(sdk: Any, kwargs: Mapping[str, Any], guard: policy.BashGuard) -> Any:
     """Build ``ClaudeAgentOptions`` from the policy kwargs plus the Bash-guard hook.
 
     Raises:
         SdkRejectedError: The installed SDK does not know one of the option names.
     """
-    matcher = sdk.HookMatcher(
-        matcher=policy.BASH_HOOK_MATCHER, hooks=[policy.BashGuard(base_paths=base_paths)]
-    )
+    matcher = sdk.HookMatcher(matcher=policy.BASH_HOOK_MATCHER, hooks=[guard])
     try:
         return sdk.ClaudeAgentOptions(**kwargs, hooks={"PreToolUse": [matcher]})
     except TypeError as exc:
@@ -625,7 +810,7 @@ async def _drive(plan: Plan, sdk: Any, state: _RunState) -> None:
             reviewer.model, timeout_s=reviewer.resolve_timeout_s
         )
         _log.info("agent_reviewer_model_resolved", via=state.resolved_via)
-        options = _sdk_options(sdk, {**plan.options, "model": state.model}, plan.base_paths)
+        options = _sdk_options(sdk, {**plan.options, "model": state.model}, plan.guard)
         await asyncio.wait_for(
             _consume(sdk, options, plan.user_prompt, state), timeout=reviewer.run_timeout_s
         )
@@ -646,7 +831,7 @@ def _output_refusal(text: str, plan: Plan) -> str | None:
         return reason
     try:
         prompt.scan_with_gitleaks(
-            text, repo_root=plan.repo_root, cfg=plan.cfg, label="the review output"
+            text, cfg=plan.cfg, label="the review output", gitleaks_toml=plan.gitleaks_toml
         )
     except prompt.PromptRefusedError as exc:
         return str(exc)
@@ -790,6 +975,7 @@ def _print_plan(plan: Plan, headroom: credit_ledger.Headroom, sdk_line: str) -> 
     print(f"base: {plan.refs.base_ref} = {plan.refs.base_sha}")
     print(f"head: {plan.refs.head_ref} = {plan.refs.head_sha}")
     print(f"working_tree: {plan.refs.worktree_sha}")
+    print(f"workforce_config: {plan.config_source} (the working tree's copy is never read)")
     print(f"base_tracked_files: {len(plan.base_paths)} (what `git show <rev>:<path>` may name)")
     print(f"opening: {', '.join(plan.opening) or '(none)'}")
     print(f"model_requested: {reviewer.model}")
@@ -810,7 +996,13 @@ def _print_plan(plan: Plan, headroom: credit_ledger.Headroom, sdk_line: str) -> 
         for rule in rules:
             print(f"  - {rule}")
     print(f"mcp_servers: {policy.MCP_SERVER} ({server['command']} {' '.join(server['args'])})")
-    print(f"mcp_package: {plan.mcp_package}")
+    print(
+        f"mcp_config: materialised from {plan.refs.base_sha}:{policy.MCP_CONFIG_RELPATH} into a "
+        "scratch directory outside the checkout; the server runs isolated (-I) from there"
+    )
+    print(f"trust_controller: {plan.trust.controller}")
+    print(f"trust_interpreter: {plan.trust.interpreter}")
+    print(f"trust_package: {plan.trust.package}")
     print(
         f"mcp_json: {plan.refs.base_sha}:{reviewer.mcp_config} confirms the pinned invocation "
         "(built from constants; the working tree's copy is never read)"
@@ -837,7 +1029,7 @@ def _dry_run(plan: Plan) -> int:
                 "not installed (options not validated against it; install the agent_reviewer extra)"
             )
         else:
-            _sdk_options(sdk, plan.options, plan.base_paths)
+            _sdk_options(sdk, plan.options, plan.guard)
             sdk_line = f"claude-agent-sdk {_sdk_version(sdk)} (options accepted)"
     except credit_ledger.CapExceeded as exc:
         print(f"refused: {exc}", file=sys.stderr)
@@ -866,7 +1058,7 @@ def _live(plan: Plan) -> int:
         )
         return EXIT_REFUSED
     try:
-        _sdk_options(sdk, plan.options, plan.base_paths)  # the names are real, before any spend
+        _sdk_options(sdk, plan.options, plan.guard)  # the names are real, before any spend
         headroom = ledger.precheck(plan.cfg, plan.cap_usd, repo_root=plan.repo_root)
     except credit_ledger.CapExceeded as exc:
         print(f"refused: {exc}", file=sys.stderr)
@@ -893,15 +1085,26 @@ def _live(plan: Plan) -> int:
     return _settle(plan, state, interrupted=interrupted)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    """CLI entry point; returns the process exit code."""
-    args = build_parser().parse_args(argv)
+def _execute(args: argparse.Namespace, work_dir: Path | None) -> int:
     try:
-        plan = _build_plan(args)
+        plan = _build_plan(args, work_dir)
     except _REFUSALS as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return EXIT_REFUSED
     return _dry_run(plan) if args.dry_run else _live(plan)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """CLI entry point; returns the process exit code."""
+    args = build_parser().parse_args(argv)
+    if args.dry_run:
+        return _execute(args, None)
+    # The MCP server's configuration lives in a scratch directory outside the checkout for the
+    # length of the run. The CLI may outlive the run on Windows and keep it as a working
+    # directory, so a failed cleanup is not an error.
+    scratch = tempfile.TemporaryDirectory(prefix="agent-reviewer-", ignore_cleanup_errors=True)
+    with scratch as directory:
+        return _execute(args, Path(directory).resolve())
 
 
 if __name__ == "__main__":

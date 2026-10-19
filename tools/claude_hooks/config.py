@@ -577,20 +577,41 @@ def load_config(
     except OSError as exc:
         raise ConfigError(f"cannot read workforce config {config_path}: {exc}") from exc
 
+    return parse_config_text(raw_text, source=str(config_path))
+
+
+def parse_config_text(raw_text: str, *, source: str) -> WorkforceConfig:
+    """Parse and validate workforce configuration from its YAML text.
+
+    :func:`load_config` is this plus reading the file. It is separate so a caller that
+    must not trust the working tree (the Agent-SDK reviewer reads the config from the
+    BASE ref, ``git cat-file blob <base>:.claude/workforce.yaml``) validates the text it
+    was given with exactly the same schema and messages.
+
+    Args:
+        raw_text: The YAML document.
+        source: What to call it in error messages (a path, or ``<sha>:<path>``).
+
+    Returns:
+        The validated configuration; an empty document yields schema defaults.
+
+    Raises:
+        ConfigError: The text is not YAML, is not a mapping, or fails schema validation
+            (including unknown keys).
+    """
     try:
         parsed: Any = yaml.safe_load(raw_text)
     except yaml.YAMLError as exc:
-        raise ConfigError(f"invalid YAML in workforce config {config_path}: {exc}") from exc
+        raise ConfigError(f"invalid YAML in workforce config {source}: {exc}") from exc
 
     if parsed is None:
         return WorkforceConfig()
     if not isinstance(parsed, dict):
         raise ConfigError(
-            f"workforce config {config_path} must contain a YAML mapping, "
-            f"got {type(parsed).__name__}"
+            f"workforce config {source} must contain a YAML mapping, got {type(parsed).__name__}"
         )
 
     try:
         return WorkforceConfig.model_validate(parsed)
     except ValidationError as exc:
-        raise ConfigError(f"invalid workforce config {config_path}: {exc}") from exc
+        raise ConfigError(f"invalid workforce config {source}: {exc}") from exc
