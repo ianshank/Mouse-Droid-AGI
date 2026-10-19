@@ -23,6 +23,9 @@ from mousedroid.config.schema import WAVESHARE_STOCK_BAUD, ESP32Config, Settings
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
+#: Shipped overlays that declare ``command_set: waveshare_stock`` themselves (F-059 2.1).
+_STOCK_OVERLAYS = {"jetson_production.yaml"}
+
 
 def test_command_set_default_is_legacy() -> None:
     """``ESP32Config.command_set`` defaults to ``"legacy"``.
@@ -77,7 +80,12 @@ esp32:
     sorted(p.name for p in (_REPO_ROOT / "config").glob("*.yaml")),
 )
 def test_shipped_overlays_load_unchanged(overlay: str) -> None:
-    """Every shipped config overlay still validates against the new schema."""
+    """Every shipped config overlay still validates against the new schema.
+
+    REVERSAL (F-059 2.1): jetson_production.yaml opts into waveshare_stock; the
+    config-compat pin at 032942b ignores unknown keys (R-9), so the env-only
+    clause no longer holds.
+    """
     path = _REPO_ROOT / "config" / overlay
     if not path.exists():  # pragma: no cover - repo layout guard
         pytest.skip(f"shipped overlay is missing: {path}")
@@ -90,19 +98,23 @@ def test_shipped_overlays_load_unchanged(overlay: str) -> None:
         return
     cfg = Settings.model_validate({**raw, "mock_hardware": True})
     assert isinstance(cfg, Settings)
-    # No shipped overlay opts into the stock selector in this PR (the
-    # config-compat gate validates overlay edits against the DEPLOYED
-    # image's schema, which predates the field — env override is the lever).
-    assert cfg.esp32.command_set == "legacy"
+    # Only the overlays in ``_STOCK_OVERLAYS`` opt into the stock selector; every
+    # other shipped overlay keeps the legacy default.
+    assert cfg.esp32.command_set == ("waveshare_stock" if overlay in _STOCK_OVERLAYS else "legacy")
 
 
 def test_command_set_settable_via_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """``MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock`` reaches the field.
 
     This is the documented CLAUDE.md path (``MOUSEDROID_`` prefix + ``__``
-    nested delimiter) and the ONLY sanctioned lever for the live rover
-    until ``deployments/jetson-image.json`` is re-pinned to a schema that
-    knows the field.
+    nested delimiter) and the per-host override.
+
+    REVERSAL (F-059 2.1): it is no longer the ONLY lever. Of the shipped
+    overlays only ``jetson_production.yaml`` (``_STOCK_OVERLAYS``) declares
+    ``command_set: waveshare_stock``, with its own 115200 baud; every other
+    one, ``default.yaml`` included, loads on the schema default ``legacy``.
+    The env var is how a config that does not declare the stock set opts in,
+    and how a host overrides one that does.
     """
     monkeypatch.setenv("MOUSEDROID_ESP32__COMMAND_SET", "waveshare_stock")
     cfg = Settings(mock_hardware=True)
@@ -171,17 +183,31 @@ def test_env_lever_derives_stock_baud_through_the_real_loader(
     assert cfg.esp32.serial_baud == WAVESHARE_STOCK_BAUD
 
 
-@pytest.mark.parametrize("overlay", ["default.yaml", "jetson_production.yaml"])
-def test_shipped_overlays_keep_legacy_baud_without_the_env_lever(overlay: str) -> None:
-    """The derivation is opt-in: an untouched load still gets 1 Mbaud."""
+@pytest.mark.parametrize(
+    ("overlay", "command_set", "baud"),
+    [
+        ("default.yaml", "legacy", 1_000_000),
+        ("jetson_production.yaml", "waveshare_stock", WAVESHARE_STOCK_BAUD),
+    ],
+)
+def test_shipped_overlays_baud_tracks_their_declared_command_set(
+    overlay: str, command_set: str, baud: int
+) -> None:
+    """Without the env lever, each shipped overlay's baud follows the command set it declares.
+
+    The derivation is opt-in, so an untouched ``default.yaml`` load still gets 1 Mbaud.
+
+    REVERSAL (F-059 2.1): ``jetson_production.yaml`` now declares ``waveshare_stock``
+    and its own 115200 baud, so it loads at the stock speed without the env lever.
+    """
     from mousedroid.config.loader import load_settings
 
     path = _REPO_ROOT / "config" / overlay
     if not path.exists():  # pragma: no cover - repo layout guard
         pytest.skip(f"shipped overlay is missing: {path}")
     cfg = load_settings(path)
-    assert cfg.esp32.command_set == "legacy"
-    assert cfg.esp32.serial_baud == 1_000_000
+    assert cfg.esp32.command_set == command_set
+    assert cfg.esp32.serial_baud == baud
 
 
 def test_explicit_non_default_baud_survives_the_env_lever(

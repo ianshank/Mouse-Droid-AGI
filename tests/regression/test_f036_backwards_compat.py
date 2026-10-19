@@ -18,6 +18,9 @@ from mousedroid.config.schema import Settings
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
+#: Shipped overlays that declare ``command_set: waveshare_stock`` themselves (F-059 2.1).
+_STOCK_OVERLAYS = {"jetson_production.yaml"}
+
 
 def test_command_set_default_still_legacy() -> None:
     cfg = Settings.model_validate({"mock_hardware": True})
@@ -56,6 +59,12 @@ def test_stock_wrong_frame_type_does_not_mark_imu_valid() -> None:
     sorted(p.name for p in (_REPO_ROOT / "config").glob("*.yaml")),
 )
 def test_shipped_overlays_still_load(overlay: str) -> None:
+    """Every shipped overlay loads; only the stock overlays leave the legacy command set.
+
+    REVERSAL (F-059 2.1): jetson_production.yaml opts into waveshare_stock; the
+    config-compat pin at 032942b ignores unknown keys (R-9), so the env-only
+    clause no longer holds.
+    """
     path = _REPO_ROOT / "config" / overlay
     text = path.read_text(encoding="utf-8")
     if "# config-validator: skip" in text:
@@ -64,4 +73,4 @@ def test_shipped_overlays_still_load(overlay: str) -> None:
     if not isinstance(raw, dict):
         return
     cfg = Settings.model_validate({**raw, "mock_hardware": True})
-    assert cfg.esp32.command_set == "legacy"
+    assert cfg.esp32.command_set == ("waveshare_stock" if overlay in _STOCK_OVERLAYS else "legacy")

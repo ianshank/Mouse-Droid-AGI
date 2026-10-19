@@ -41,6 +41,29 @@ so does `motor` behind `MOUSEDROID_SMOKE_ALLOW_MOTION=1`. `scripts/jetson_full_v
 motion off, so there `motor` SKIPs and `power` is the stage that measures the board; its failure is
 recorded as a non-blocking warning.
 
+### Fixed — the production overlay speaks stock firmware, reads the battery and latches an emergency stop
+
+Three F-059 operator decisions land on `config/jetson_production.yaml`. It now declares
+`esp32.command_set: waveshare_stock`, `serial_baud: 115200` and `chassis_has_wheel_encoders: false`
+(D-2): the rover runs stock Waveshare firmware, whose frames the legacy private protocol parsed as
+zeros — which is how a live board read as dead — on an encoder-less WAVE ROVER chassis.
+`esp32.enabled` stays `false`; only the bench overlay flips it. The battery thresholds are re-armed
+at `battery_warn_v: 10.5` / `battery_critical_v: 9.5` (CF-1), where both had been zeroed because the
+legacy protocol gave no reliable voltage; the runtime floor `battery_implausible_below_v` (1.0 V) is
+unchanged, so a board answering without a voltage reads 0.0 V and is screened to log-only rather than
+an emergency stop, while the power smoke gate is deliberately stricter and fails on it (R-6). And
+`safety.emergency_latch` is armed (CF-2): an emergency stop holds across ticks and restarts until an
+operator runs
+`python -m mousedroid.cli.rearm --config /etc/mousedroid/jetson_production.yaml --operator <you> --confirm-area-clear`
+(`docs/runbooks/emergency-stop-rearm.md`; without `--config` the CLI reads `default.yaml`, finds no
+latch and exits `0`). `config/jetson_lidar_only.yaml` sets it `false`
+explicitly (R-7), because that stack's `emergency` LiDAR policy would latch on one lost acquisition
+and it is the default stack of `scripts/jetson_validate.sh`. **Operator-visible:** after any
+emergency stop the rover now boots but will not move (`estop_latch_active_at_boot` in the log) until
+it is re-armed. The image pinned in `deployments/jetson-image.json` (032942b) ignores
+`command_set`, `chassis_has_wheel_encoders` and `emergency_latch` and has no 1.0 V floor, so the
+config-compat gate passes but the rover should run code that carries them before it takes this file.
+
 ### Fixed — the nightly Spec Harness, red every night since 2026-09-08
 
 `validate-slow` runs `--strict-git`, which needs every `done` feature's `implemented_in` to resolve.

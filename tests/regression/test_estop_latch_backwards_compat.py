@@ -7,6 +7,10 @@ the first transient sensor dropout into a rover that will not move and an
 operator with no documented way to fix it. The ratchet to on is a separate
 change, the same shape as the #135 soak gate.
 
+REVERSAL (F-059 CF-2): the re-arm CLI and runbook now ship, so
+``jetson_production.yaml`` arms the latch; every other overlay still ships it
+off.
+
 This file pins that "off" is genuinely inert, not merely defaulted — without
 it, a future flip of the default would be invisible.
 """
@@ -23,6 +27,8 @@ from mousedroid.config.schema import EmergencyLatchConfig, SafetyConfig, Setting
 
 _CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
 _NOT_AN_OVERLAY = {"baselines.yaml"}
+#: Overlays that arm the latch by operator decision (F-059 CF-2).
+_LATCH_ARMED_OVERLAYS = {"jetson_production.yaml"}
 
 
 def test_absent_key_resolves_to_the_pre_latch_default() -> None:
@@ -44,14 +50,35 @@ def test_legacy_safety_block_loads_unchanged() -> None:
 
 @pytest.mark.parametrize(
     "overlay",
-    sorted(p.name for p in _CONFIG_DIR.glob("*.yaml") if p.name not in _NOT_AN_OVERLAY),
+    sorted(
+        p.name
+        for p in _CONFIG_DIR.glob("*.yaml")
+        if p.name not in _NOT_AN_OVERLAY | _LATCH_ARMED_OVERLAYS
+    ),
 )
 def test_every_shipped_overlay_still_loads_with_the_latch_off(overlay: str) -> None:
-    """Fleet-scale: no shipped config gains the latch by accident."""
+    """Fleet-scale: no shipped config gains the latch by accident.
+
+    REVERSAL (F-059 CF-2): ``jetson_production.yaml`` is excluded here and pinned
+    ON by name in :func:`test_production_overlay_arms_the_latch_by_decision`.
+    """
     raw = yaml.safe_load((_CONFIG_DIR / overlay).read_text(encoding="utf-8")) or {}
     raw["mock_hardware"] = True
     cfg = Settings.model_validate(raw)
     assert cfg.safety.emergency_latch.enabled is False
+
+
+def test_production_overlay_arms_the_latch_by_decision() -> None:
+    """REVERSAL (F-059 CF-2): the production overlay arms the latch, deliberately.
+
+    The re-arm CLI and runbook ship, so the operational reason for shipping the
+    latch off no longer applies there. Read raw rather than stacked, so no later
+    overlay can mask the declaration this file is about.
+    """
+    raw = yaml.safe_load((_CONFIG_DIR / "jetson_production.yaml").read_text(encoding="utf-8"))
+    raw["mock_hardware"] = True
+    cfg = Settings.model_validate(raw)
+    assert cfg.safety.emergency_latch.enabled is True
 
 
 def test_the_toggle_round_trips_when_present() -> None:
