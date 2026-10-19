@@ -175,6 +175,33 @@ def test_harness_arms_the_restart_trap_before_it_stops_the_container(harness_tex
     assert "SIGKILL" in harness_text, "the header owns up to what no trap can catch"
 
 
+def test_harness_restores_the_container_before_it_logs(harness_text: str) -> None:
+    """Whatever undoes the stop restores first and logs best effort; the stop logs before its trap.
+
+    A dead stdout (a dropped non-tty ssh session) turns a log line into a failed write, and under
+    ``set -e`` that ends the function: a restore queued behind it is lost and the brain stays
+    stopped. The behavioural rows drive the exits a dead stdout can reach; the trap is the net under
+    ``esp32_cold_end`` and the failed-stop branch, so they cannot see the ordering there, and this
+    text pin holds it.
+    """
+    helper = next(
+        (line for line in harness_text.splitlines() if line.startswith("log_best_effort() ")), ""
+    )
+    assert helper, "the best-effort log helper is missing"
+    assert "2>/dev/null" in helper
+    assert helper.endswith("|| true; }"), helper
+    for name in ("restart_container_on_exit", "esp32_cold_end"):
+        body = _bash_function(harness_text, name)
+        assert "log_best_effort" in body, name
+        assert body.index("restore_container") < body.index("log_best_effort"), name
+        assert not re.search(r"(^|\s)log ", body), f"{name} logs without the best-effort guard"
+    begin = _bash_function(harness_text, "esp32_cold_begin")
+    armed = begin.index("trap restart_container_on_exit EXIT")
+    stop = begin.index('docker stop "${CONTAINER}"')
+    assert not re.search(r"\blog", begin[armed:stop]), "nothing that can die sits between them"
+    assert begin.index("esp32_cold_end") < begin.index('log_best_effort "cold smoke: docker stop')
+
+
 def test_harness_cold_wrapper_runs_the_compose_service_without_its_entrypoint(
     harness_text: str,
 ) -> None:
@@ -316,9 +343,12 @@ case "$1" in
         ;;
     stop)
         event "docker $*"
-        if [[ "${SHIM_STOP_RC:-0}" != "0" ]]; then exit "${SHIM_STOP_RC}"; fi
         touch "${SMOKE_STATE}/stopping"
         sleep "${SHIM_STOP_SECONDS:-0}"
+        if [[ "${SHIM_STOP_RC:-0}" != "0" ]]; then
+            rm -f "${SMOKE_STATE}/stopping"
+            exit "${SHIM_STOP_RC}"
+        fi
         rm -f "${SMOKE_STATE}/running" "${SMOKE_STATE}/stopping"
         ;;
     start)
@@ -784,6 +814,54 @@ def test_cold_mode_restart_wins_over_a_docker_stop_still_in_flight(tmp_path: Pat
     assert "docker restart mousedroid" in events, events
     assert "docker start mousedroid" not in events, events
     assert (state / "running").exists(), "the brain was left down by a start during a stop"
+
+
+@_WRAPPER_NEEDS
+@pytest.mark.parametrize("way", ["sigpipe", "write-error", "failed-stop"])
+def test_cold_mode_restores_the_container_before_it_writes_when_stdout_dies(
+    tmp_path: Path, way: str
+) -> None:
+    """A dropped non-tty ssh session leaves the wrapper writing to a dead pipe, mid-window.
+
+    Whichever write comes first, the container must be restored before anything is logged: a
+    restore queued behind a log line dies with the failed write and the brain stays down. Each way
+    reaches a different restore. ``sigpipe``: the shell is killed mid-window and the EXIT trap puts
+    the container back. ``write-error`` (SIGPIPE ignored by the caller, so the write fails instead):
+    ``esp32_cold_end`` closes the window. ``failed-stop`` (``docker stop`` fails): the failed-stop
+    branch does. The last two run without the trap, which is the net under them and would hide a
+    regression there.
+    """
+    script, _, env = _fake_repo(tmp_path)
+    env.update(MOUSEDROID_SMOKE_ESP32_MODE="cold", SHIM_STOP_SECONDS="1")
+    if way == "failed-stop":
+        env["SHIM_STOP_RC"] = "1"
+    if way != "sigpipe":
+        _patch_wrapper(
+            script,
+            "    trap restart_container_on_exit EXIT\n    CONTAINER_STOPPED_FOR_COLD=1\n",
+            "    CONTAINER_STOPPED_FOR_COLD=1\n",
+        )
+    argv = ["bash", str(script)]
+    if way == "write-error":
+        # A signal ignored on entry stays ignored, so the writes fail instead of killing the shell.
+        argv = ["bash", "-c", 'trap "" PIPE; exec "$0" "$@"', *argv]
+    proc = subprocess.Popen(
+        argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True
+    )
+    events_file = Path(env["SMOKE_EVENTS"])
+    try:
+        _wait_for_event(events_file, "docker stop mousedroid")
+        assert proc.stdout is not None
+        proc.stdout.close()  # the reader goes away while `docker stop` is still running
+        proc.wait(timeout=60)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    events = events_file.read_text(encoding="utf-8").splitlines()
+    assert "docker restart mousedroid" in events, events
+    assert "docker start mousedroid" not in events, events
+    assert (tmp_path / "state" / "running").exists(), "the brain was left stopped"
 
 
 @_WRAPPER_NEEDS

@@ -46,10 +46,11 @@
 #         read); if it cannot, the stages are refused with compose's message and nothing is
 #         stopped. The restore is `docker restart`, never `docker start` (a start while a stop
 #         is still in flight does nothing), and an EXIT trap repeats it on every exit the shell
-#         can catch. SIGKILL cannot be trapped: a `kill -9` of this script inside a cold window
-#         leaves the container stopped (`docker start` it). If `docker stop` fails the stage is
-#         not run. mcp_motor_smoke opens no window of its own while nothing owns a port: it
-#         measures the mock then, and its row says so.
+#         can catch, restoring before it logs so a dead stdout (a dropped ssh session) cannot
+#         keep it from the restart. SIGKILL cannot be trapped: a `kill -9` of this script inside
+#         a cold window leaves the container stopped (`docker start` it). If `docker stop` fails
+#         the stage is not run. mcp_motor_smoke opens no window of its own while nothing owns a
+#         port: it measures the mock then, and its row says so.
 # An ESP32 stage whose log shows only skips (pyserial missing, bench overlay opted out) records
 # SKIPPED, never PASS.
 
@@ -79,6 +80,10 @@ STAGE_NOTE=""  # words added to the row of the stage being run (run_esp32_stage 
 
 ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 log() { printf '[%s] %s\n' "$(ts)" "$*"; }
+# A log line that cannot fail, for the code that puts the container back. stdout may be a dead pipe
+# (a dropped non-tty ssh session): the write is then an error, and under `set -e` a failed write
+# ends the function that made it.
+log_best_effort() { { log "$@"; } 2>/dev/null || true; }
 
 # Warm or cold for the ESP32 stages (see the header). An unknown value is fatal rather than
 # quietly warm: the operator asked for something this run cannot honour.
@@ -351,14 +356,21 @@ restore_container() {
 }
 
 # EXIT trap for cold mode: never leave the rover brain down. It runs on every exit the shell can
-# catch (a failed run, a `set -e` abort, SIGINT/SIGTERM/SIGHUP); SIGKILL cannot be trapped.
+# catch (a failed run, a `set -e` abort, SIGINT/SIGTERM/SIGHUP, a dropped ssh session); SIGKILL
+# cannot be trapped. The restore comes FIRST and every line logged after it is best effort: on a
+# dropped non-tty ssh session stdout is a dead pipe, and a restore queued behind a log line dies
+# with the failed write (under `set -e`) and leaves the brain stopped.
 restart_container_on_exit() {
     local rc=$?
     if [[ "${CONTAINER_STOPPED_FOR_COLD}" == "1" ]]; then
-        log "trap: restarting ${CONTAINER} after a cold ESP32 stage (rc=${rc})"
-        restore_container \
-            || log "trap: docker restart ${CONTAINER} failed -- the rover brain may be down"
+        local restored=0
+        restore_container || restored=1
         CONTAINER_STOPPED_FOR_COLD=0
+        if ((restored)); then
+            log_best_effort "trap: docker restart ${CONTAINER} failed -- the rover brain may be down"
+        else
+            log_best_effort "trap: restarted ${CONTAINER} after a cold ESP32 stage (rc=${rc})"
+        fi
     fi
 }
 
@@ -394,9 +406,10 @@ cold_dry_run() {
 
 # Begin a cold window: prove the transient container can be created (cold_dry_run), then stop the
 # container so the ESP32 stages can open the port. Idempotent until esp32_cold_end. The trap is
-# armed BEFORE the stop, so an abort between the two cannot leave the container down. A refusal
-# leaves the container running and sets COLD_REFUSAL_REASON; if the stop fails the container may
-# still own the port, so the stage must not run on a guess: put it back and tell the caller.
+# armed BEFORE the stop and nothing that can die sits between the two (the log line goes ahead of
+# the arming), so an abort cannot leave the container down. A refusal leaves the container running
+# and sets COLD_REFUSAL_REASON; if the stop fails the container may still own the port, so the
+# stage must not run on a guess: put it back (before logging) and tell the caller.
 esp32_cold_begin() {
     if [[ "${CONTAINER_STOPPED_FOR_COLD}" == "1" ]]; then
         return 0
@@ -405,33 +418,33 @@ esp32_cold_begin() {
         log "cold smoke: ${COLD_REFUSAL_REASON}"
         return 1
     fi
+    log "cold smoke: stopping ${CONTAINER} so the ESP32 stages can open the port"
     trap restart_container_on_exit EXIT
     CONTAINER_STOPPED_FOR_COLD=1
-    log "cold smoke: stopping ${CONTAINER} so the ESP32 stages can open the port"
     if docker stop "${CONTAINER}" >/dev/null 2>&1; then
         return 0
     fi
     COLD_REFUSAL_REASON="cold smoke aborted: docker stop ${CONTAINER} failed, so it may still own the ESP32 port"
-    log "cold smoke: docker stop ${CONTAINER} failed"
     esp32_cold_end
+    log_best_effort "cold smoke: docker stop ${CONTAINER} failed"
     return 1
 }
 
 # End a cold window: put the container back (restore_container), disarm the trap. A no-op unless a
-# cold stage stopped the container. A failed restart is a FAIL and leaves the trap armed, which
-# retries it at exit.
+# cold stage stopped the container. The restore comes before any log line. A failed restart is a
+# FAIL and leaves the trap armed, which retries it at exit.
 esp32_cold_end() {
     if [[ "${CONTAINER_STOPPED_FOR_COLD}" != "1" ]]; then
         return 0
     fi
-    log "cold smoke: restarting ${CONTAINER}"
     if restore_container; then
         CONTAINER_STOPPED_FOR_COLD=0
         CONTAINER_RESTARTED_BY_COLD=1
         trap - EXIT
+        log_best_effort "cold smoke: restarted ${CONTAINER}"
         return 0
     fi
-    log "cold smoke: docker restart ${CONTAINER} failed -- the rover brain may be down"
+    log_best_effort "cold smoke: docker restart ${CONTAINER} failed -- the rover brain may be down"
     if [[ "${COLD_RESTART_FAILED}" != "1" ]]; then
         COLD_RESTART_FAILED=1
         record "container_restart" "FAIL" "docker restart ${CONTAINER} failed; the EXIT trap retries it"

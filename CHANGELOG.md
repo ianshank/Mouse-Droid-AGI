@@ -60,8 +60,10 @@ wrapper cannot tell. `cold` first dry-runs the transient container, so a `docker
 cannot read refuses the run with compose's own message while the orchestrator is still up, then stops
 the container, runs the stages in a `docker compose run` container under the same inner `timeout` as the
 warm wrapper, and restarts it with `docker restart`. An EXIT trap restarts it on any catchable exit
-(SIGKILL cannot be trapped), and the wrapper waits, bounded, for the container's healthcheck before
-`llm_probe`. `mcp_motor_smoke` stacks no bench overlay, so with `esp32.enabled: false` it measures
+(SIGKILL cannot be trapped), restoring before it logs so that the dead stdout of a dropped ssh
+session cannot keep it from the restart, and the wrapper waits, bounded, for the container's
+healthcheck before `llm_probe`. `mcp_motor_smoke` stacks no bench overlay, so with
+`esp32.enabled: false` it measures
 `MockESP32Driver`: it opens no window of its own and its row says so. An ESP32 stage that only skipped
 (pyserial missing, bench overlay opted out) records SKIPPED, never PASS.
 
