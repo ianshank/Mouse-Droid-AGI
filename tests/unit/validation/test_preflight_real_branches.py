@@ -1,8 +1,8 @@
 """Unit tests for the non-mock branches of the preflight checks.
 
-These branches lazily import :mod:`mousedroid.validation.runtime` /
-:mod:`mousedroid.factory` at call time, so monkeypatching the module
-attributes exercises the real-hardware code paths without any device.
+These branches lazily import :mod:`mousedroid.validation.runtime` at call
+time, so monkeypatching the module attributes exercises the real-hardware
+code paths without any device.
 Added alongside F-017 so the whole preflight module sits under the
 changed-file coverage gate, not just the new ``host_env_keys`` check.
 """
@@ -13,7 +13,6 @@ from types import SimpleNamespace
 
 import pytest
 
-import mousedroid.factory as factory
 import mousedroid.validation.preflight as preflight
 import mousedroid.validation.runtime as runtime
 from mousedroid.config.schema import LidarConfig, Settings
@@ -27,7 +26,9 @@ from mousedroid.validation.preflight import (
     _check_speaker,
     _list_video_device_nodes,
     _load_proc_modules,
+    run_preflight,
 )
+from mousedroid.validation.runtime import Esp32ProbeResult
 
 
 @pytest.fixture
@@ -174,17 +175,73 @@ class TestLidarRealBranch:
 
 
 class TestEsp32RealBranch:
-    async def test_none_driver_fails(
+    """The ``esp32`` check probes the board instead of naming the driver type.
+
+    F-059 D-3 REVERSAL: `test_none_driver_fails`/`test_driver_ok` pinned the non-probe
+    (S-4) behaviour — a `SimpleNamespace()` driver was OK — and are replaced.
+    ``real_cfg`` leaves ``esp32.enabled`` at its schema default (``True``) and
+    ``command_set`` at ``legacy``; each test moves only what it is about.
+    """
+
+    @staticmethod
+    def _stock(cfg: Settings) -> Settings:
+        cfg.esp32 = cfg.esp32.model_copy(update={"command_set": "waveshare_stock"})
+        return cfg
+
+    async def test_disabled_board_warns_never_ok(self, real_cfg: Settings) -> None:
+        real_cfg.esp32 = real_cfg.esp32.model_copy(update={"enabled": False})
+        result = await _check_esp32(real_cfg)
+        assert result.status is PreflightStatus.WARN
+        assert "esp32.enabled=false" in result.detail
+
+    async def test_legacy_warns_without_probing(
         self, real_cfg: Settings, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(factory, "build_esp32_driver", lambda cfg: None)
-        result = await _check_esp32(real_cfg)
-        assert result.status is PreflightStatus.FAIL
+        async def never(cfg: Settings) -> None:
+            raise RuntimeError("probe must not run under legacy")
 
-    async def test_driver_ok(self, real_cfg: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(factory, "build_esp32_driver", lambda cfg: SimpleNamespace())
+        monkeypatch.setattr(runtime, "collect_esp32_probe", never)
         result = await _check_esp32(real_cfg)
+        assert result.status is PreflightStatus.WARN
+        assert "no probe" in result.detail
+
+    async def test_silent_board_fails(
+        self, real_cfg: Settings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def silent(cfg: Settings) -> Esp32ProbeResult:
+            return Esp32ProbeResult(False, None, None, 0.1, "no FEEDBACK_BASE_INFO frame")
+
+        monkeypatch.setattr(runtime, "collect_esp32_probe", silent)
+        assert (await _check_esp32(self._stock(real_cfg))).status is PreflightStatus.FAIL
+
+    async def test_answering_board_ok(
+        self, real_cfg: Settings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def alive(cfg: Settings) -> Esp32ProbeResult:
+            return Esp32ProbeResult(True, 1001, 11.9, 0.1, "FEEDBACK_BASE_INFO after 1 poll(s)")
+
+        monkeypatch.setattr(runtime, "collect_esp32_probe", alive)
+        result = await _check_esp32(self._stock(real_cfg))
         assert result.status is PreflightStatus.OK
+        assert "FEEDBACK_BASE_INFO" in result.detail
+
+    async def test_a_port_held_elsewhere_fails_fast_with_the_reason(
+        self, real_cfg: Settings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Review focus 4: a port locked by the running container is a FAIL with the reason.
+
+        The probe's connect error propagates out of ``_check_esp32``; ``run_preflight``
+        records it as a FAIL carrying the message, rather than hanging or crashing.
+        """
+
+        async def busy(cfg: Settings) -> Esp32ProbeResult:
+            raise OSError("Could not exclusively lock port /dev/ttyUSB0")
+
+        monkeypatch.setattr(runtime, "collect_esp32_probe", busy)
+        report = await run_preflight(self._stock(real_cfg), check_names={"esp32"})
+        esp = next(c for c in report.checks if c.name == "esp32")
+        assert esp.status is PreflightStatus.FAIL
+        assert "exclusively lock" in esp.detail
 
 
 class TestConfigCheckIssueBranch:

@@ -134,6 +134,7 @@ bench experiments.
 | `lidar` FAIL | `udevadm info /dev/serial/by-id/usb-Silicon_Labs_CP2102_*` to confirm the LD19 sits on the lidar bridge, not the rover bridge. |
 | `e2e` FAIL with camera reason | See `verify_sensors.py`'s `_diagnose_camera_host` output — surfaced in `e2e.log`. |
 | `voice` FAIL | `SUMMARY.md` emits a "Rocky voice prerequisites" remediation section listing the specific Piper / model-path / device issue. |
+| `preflight (real)` FAIL `exit=1` once after upgrading to F-059, with `overall status downgraded ok -> degraded` under `Trend:` in `phase2_preflight.log` | Expected, not a rover fault: the `esp32` check went `ok -> warn` (it used to report a vacuous OK; it now reports WARN while `esp32.enabled=false` or under the legacy command set) and `cli.preflight --trend` counts an aggregate downgrade as a regression. Re-run once to re-baseline the journal. A second consecutive downgrade, or any `newly FAILing` line, is a real finding. |
 
 ## Reading the logs
 

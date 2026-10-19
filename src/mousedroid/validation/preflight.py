@@ -318,17 +318,37 @@ async def _check_lidar(cfg: Settings) -> PreflightCheckResult:
 
 
 async def _check_esp32(cfg: Settings) -> PreflightCheckResult:
-    """Probe the ESP32 motor driver (mock_hardware short-circuits to OK)."""
+    """Probe the ESP32 (F-059 D-3): OK only when a FEEDBACK_BASE_INFO frame came back.
+
+    WARN, never OK, when nothing can be probed: ``esp32.enabled=false`` (the
+    factory returns MockESP32Driver — reporting OK there was S-4) or a legacy
+    command set (no polled frame exists). FAIL when the board stays silent.
+    Connect/lock errors propagate; ``run_preflight`` records them as FAIL.
+    """
     t0 = time.monotonic()
     if cfg.mock_hardware:
         return _ok("esp32", "mock_hardware=true", time.monotonic() - t0)
+    esp32 = cfg.esp32
+    if not esp32.enabled:
+        return _warn(
+            "esp32",
+            "esp32.enabled=false: driver is mocked, board not probed; stack "
+            "config/jetson_bench_esp32.yaml or set MOUSEDROID_ESP32__ENABLED=true",
+            time.monotonic() - t0,
+        )
+    if esp32.command_set != "waveshare_stock":
+        return _warn(
+            "esp32",
+            f"command_set={esp32.command_set!r} has no probe "
+            "(legacy firmware pushes frames unsolicited); not reported OK",
+            time.monotonic() - t0,
+        )
+    from mousedroid.validation.runtime import collect_esp32_probe
 
-    from mousedroid.factory import build_esp32_driver
-
-    driver = build_esp32_driver(cfg)
-    if driver is None:
-        return _fail("esp32", "build_esp32_driver returned None", time.monotonic() - t0)
-    return _ok("esp32", f"driver={type(driver).__name__}", time.monotonic() - t0)
+    probe = await collect_esp32_probe(cfg)
+    if not probe.responded:
+        return _fail("esp32", probe.detail, time.monotonic() - t0)
+    return _ok("esp32", probe.detail, time.monotonic() - t0)
 
 
 async def _check_esp32_failsafe(cfg: Settings) -> PreflightCheckResult:
