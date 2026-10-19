@@ -41,9 +41,11 @@ class TestServiceUnit:
 
     def test_default_checks_are_a_safe_subset(self) -> None:
         text = _service_text()
-        match = re.search(r"Environment=MOUSEDROID_TREND_CHECKS=(\S+)", text)
-        assert match, "the default check list must be declared as an Environment= line"
-        declared = set(match.group(1).split(","))
+        # systemd honours the LAST assignment of a variable, so the effective default is the
+        # last Environment= line, not the first.
+        assignments = re.findall(r"^Environment=MOUSEDROID_TREND_CHECKS=(\S+)$", text, re.M)
+        assert assignments, "the default check list must be declared as an Environment= line"
+        declared = set(assignments[-1].split(","))
         assert declared <= _SAFE_CHECKS, (
             f"timer default checks {declared} exceed the non-exclusive set "
             f"{_SAFE_CHECKS} - see the unit header contract"
