@@ -17,6 +17,24 @@
 #   MOUSEDROID_SMOKE_BUS          -- I2C bus for OLED stage (default 7)
 #   MOUSEDROID_SMOKE_CONTAINER    -- container name (default mousedroid)
 #   MOUSEDROID_JETSON_CONFIGS     -- forwarded to jetson_smoke_test.sh + container
+#   MOUSEDROID_SMOKE_ESP32_MODE   -- warm (default) | cold; see "ESP32 stages" below
+#   MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION
+#                                 -- the Pydantic motion gate. Forwarded into the container by
+#                                    name, so it arrives only when it is exported here
+#
+# ESP32 stages (serial, motor, power, mcp_motor_smoke) and the port. SerialESP32Driver and the
+# serial stage open the ESP32 UART exclusively, so these stages cannot share it with a running
+# orchestrator. MOUSEDROID_SMOKE_ESP32_MODE says how they get it:
+#   warm  run them through `docker exec` in the running container. Right while the container's
+#         own esp32 is the mock (the shipped jetson_production.yaml has esp32.enabled: false),
+#         because its orchestrator then holds no port. When it does own the port (esp32.enabled
+#         and not mock_hardware) every ESP32 stage is REFUSED: recorded as FAIL with "warm smoke
+#         refused" (EXPECTED-FAIL when demoted to non-blocking) and not run. So is a stage when
+#         the wrapper cannot tell who owns the port.
+#   cold  stop the container, run the ESP32 stages in a transient container from the same
+#         compose service (`docker compose run`: same image and device passthrough, the
+#         orchestrator not started), then start the container again. An EXIT trap restarts it on
+#         any exit, a signal included. If `docker stop` fails the stage is not run.
 
 # ``-e`` (errexit) catches harness-logic bugs early (a failed cd / mkdir /
 # heredoc), aligning with scripts/jetson_smoke_test.sh. STAGE failures are NOT
@@ -43,6 +61,17 @@ OVERALL_FAIL=0
 
 ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 log() { printf '[%s] %s\n' "$(ts)" "$*"; }
+
+# Warm or cold for the ESP32 stages (see the header). An unknown value is fatal rather than
+# quietly warm: the operator asked for something this run cannot honour.
+ESP32_MODE="${MOUSEDROID_SMOKE_ESP32_MODE:-warm}"
+case "${ESP32_MODE}" in
+    warm|cold) ;;
+    *)
+        log "FATAL: MOUSEDROID_SMOKE_ESP32_MODE='${ESP32_MODE}' is invalid; expected warm or cold."
+        exit 2
+        ;;
+esac
 
 record() {
     local name="$1" status="$2" note="${3:-}"
@@ -116,7 +145,10 @@ container_running() {
 # --- Container python wrapper --------------------------------------------
 # jetson_smoke_test.sh resolves "${PYTHON}" from MOUSEDROID_SMOKE_PYTHON
 # (must be executable). We point it at this shim that proxies into the
-# running container with relevant MOUSEDROID_* env vars forwarded.
+# running container with relevant MOUSEDROID_* env vars forwarded. `-e NAME` (no value) hands
+# the container this process's NAME only when NAME is set here, and nothing when it is not;
+# that is what lets MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION open the Pydantic motion gate from
+# the host without an unset variable arriving as an empty string.
 PY_WRAPPER="${RUN_DIR}/python3-in-container"
 cat > "${PY_WRAPPER}" <<EOF
 #!/bin/bash
@@ -133,6 +165,7 @@ docker_args=(
     -w ${REPO_DIR}
     -e MOUSEDROID_MOCK_HARDWARE=false
     -e MOUSEDROID_JETSON_CONFIGS
+    -e MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION
     -e MOUSEDROID_FACE_DISPLAY_SMOKE
     -e MOUSEDROID_FACE_DISPLAY_BUS
     -e MOUSEDROID_LLM__N_GPU_LAYERS
@@ -150,6 +183,184 @@ exec "\${docker_args[@]}"
 EOF
 chmod +x "${PY_WRAPPER}"
 export MOUSEDROID_SMOKE_PYTHON="${PY_WRAPPER}"
+
+# --- ESP32 stages: warm or cold ------------------------------------------
+# See the header. In cold mode the ESP32 stages use a second wrapper that runs python in a
+# transient container (the compose service `mousedroid`, its entrypoint replaced so the
+# orchestrator is not started) instead of `docker exec`-ing into the running one. --name
+# overrides the service's container_name, so a leftover can be found and removed by name. There
+# is no inner `timeout` here, as in the warm wrapper: the entrypoint is python itself, so the
+# stage's host-side timeout reaches `docker compose run` and a CLI killed before its container
+# exits is cleaned up by name (esp32_cold_end, restart_container_on_exit).
+COLD_CONTAINER="${CONTAINER}-cold-smoke"
+CONTAINER_STOPPED_FOR_COLD=0
+ESP32_OWNER_STATE=""
+ESP32_PY_WRAPPER="${PY_WRAPPER}"
+
+if [[ "${ESP32_MODE}" == "cold" ]]; then
+    COLD_PY_WRAPPER="${RUN_DIR}/python3-in-cold-container"
+    cat > "${COLD_PY_WRAPPER}" <<EOF
+#!/bin/bash
+set -uo pipefail
+
+docker_args=(
+    docker compose --env-file /dev/null -f "${REPO_DIR}/docker-compose.jetson.yml"
+    run -T --rm --no-deps --name ${COLD_CONTAINER}
+    -e MOUSEDROID_MOCK_HARDWARE=false
+    -e MOUSEDROID_JETSON_CONFIGS
+    -e MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION
+    -w "${REPO_DIR}"
+    --entrypoint python3
+    mousedroid
+)
+
+exec "\${docker_args[@]}" "\$@"
+EOF
+    chmod +x "${COLD_PY_WRAPPER}"
+    ESP32_PY_WRAPPER="${COLD_PY_WRAPPER}"
+fi
+
+# Does the orchestrator in ${CONTAINER} own the ESP32 port? It does when its own settings build a
+# real driver (esp32.enabled and not mock_hardware, the test build_esp32_driver applies), loaded
+# the way the stages load them from the container's own environment, which the exec inherits.
+# Returns 0 = it does, 1 = it does not, 2 = could not tell (the exec failed or the settings did not
+# load). The probe prints its sentinel only once it has decided, so a crash cannot read as "no".
+container_esp32_enabled() {
+    local out
+    out="$(docker exec "${CONTAINER}" python3 -c '
+try:
+    from mousedroid.validation.runtime import load_runtime_settings
+
+    cfg = load_runtime_settings()
+    print("esp32_owned=%d" % bool(cfg.esp32.enabled and not cfg.mock_hardware))
+except Exception:
+    raise SystemExit(2)
+' 2>/dev/null)" || true
+    case "${out}" in
+        *esp32_owned=1*) return 0 ;;
+        *esp32_owned=0*) return 1 ;;
+        *) return 2 ;;
+    esac
+}
+
+# Probe once per run and keep the answer in ESP32_OWNER_STATE: owned | free | unknown.
+probe_esp32_owner() {
+    if [[ -n "${ESP32_OWNER_STATE}" ]]; then
+        return 0
+    fi
+    local rc=0
+    container_esp32_enabled || rc=$?
+    case "${rc}" in
+        0) ESP32_OWNER_STATE="owned" ;;
+        1) ESP32_OWNER_STATE="free" ;;
+        *) ESP32_OWNER_STATE="unknown" ;;
+    esac
+}
+
+# Record an ESP32 stage that was not run, with the bookkeeping of a failed run_stage: a blocking
+# stage is a FAIL and stops the run, a non-blocking one is EXPECTED-FAIL. The reason is also the
+# stage log, so SUMMARY.md and the per-stage log say the same thing.
+refuse_esp32_stage() {
+    local label="$1" default_blocking="$2" why="$3"
+    local blocking
+    blocking="$(resolve_blocking "${label}" "${default_blocking}")"
+    log "=== STAGE ${label} (blocking=${blocking}) NOT RUN ==="
+    log "    ${why}"
+    printf '%s\n' "${why}" > "${RUN_DIR}/${label}.log"
+    if [[ "${blocking}" == "no" ]]; then
+        record "${label}" "EXPECTED-FAIL" "${why} (non-blocking)"
+        return 0
+    fi
+    record "${label}" "FAIL" "${why}"
+    OVERALL_FAIL=1
+    return 1
+}
+
+# EXIT trap for cold mode: never leave the rover brain down. It runs on any exit, a signal
+# included, and removes the transient container first, since a CLI killed mid-stage can leave that
+# container running and holding the port.
+restart_container_on_exit() {
+    local rc=$?
+    if [[ "${CONTAINER_STOPPED_FOR_COLD}" == "1" ]]; then
+        log "trap: restarting ${CONTAINER} after a cold ESP32 stage (rc=${rc})"
+        docker rm -f "${COLD_CONTAINER}" >/dev/null 2>&1 || true
+        docker start "${CONTAINER}" >/dev/null 2>&1 \
+            || log "trap: docker start ${CONTAINER} failed -- the rover brain may be down"
+        CONTAINER_STOPPED_FOR_COLD=0
+    fi
+}
+
+# Begin a cold window: stop the container so the ESP32 stages can open the port. Idempotent until
+# esp32_cold_end. The trap is armed BEFORE the stop, so an abort between the two cannot leave the
+# container down. If the stop fails the container may still own the port, so the stage must not
+# run on a guess: put it back as it was and tell the caller.
+esp32_cold_begin() {
+    if [[ "${CONTAINER_STOPPED_FOR_COLD}" == "1" ]]; then
+        return 0
+    fi
+    trap restart_container_on_exit EXIT
+    CONTAINER_STOPPED_FOR_COLD=1
+    log "cold smoke: stopping ${CONTAINER} so the ESP32 stages can open the port"
+    if docker stop "${CONTAINER}" >/dev/null 2>&1; then
+        return 0
+    fi
+    log "cold smoke: docker stop ${CONTAINER} failed"
+    esp32_cold_end
+    return 1
+}
+
+# End a cold window: remove a leftover transient container, start the container again, disarm the
+# trap. A no-op unless a cold stage stopped the container. A failed start is a FAIL and leaves the
+# trap armed, which retries it at exit.
+esp32_cold_end() {
+    if [[ "${CONTAINER_STOPPED_FOR_COLD}" != "1" ]]; then
+        return 0
+    fi
+    docker rm -f "${COLD_CONTAINER}" >/dev/null 2>&1 || true
+    log "cold smoke: starting ${CONTAINER} again"
+    if docker start "${CONTAINER}" >/dev/null 2>&1; then
+        CONTAINER_STOPPED_FOR_COLD=0
+        trap - EXIT
+        return 0
+    fi
+    log "cold smoke: docker start ${CONTAINER} failed -- the rover brain may be down"
+    record "container_restart" "FAIL" "docker start ${CONTAINER} failed; the EXIT trap retries it"
+    OVERALL_FAIL=1
+    return 0
+}
+
+# Run an ESP32-owned stage (serial, motor, power, mcp_motor_smoke). Same arguments as run_stage:
+# $1 = stage label, $2 = blocking? (yes|no), $3 = timeout seconds, $4.. = command. The command
+# reaches python through ${ESP32_PY_WRAPPER}: the running container in warm mode, a transient
+# container in cold mode. Warm mode refuses the stage while the orchestrator owns the port (or
+# when that cannot be told); cold mode stops the container first and leaves it stopped until
+# esp32_cold_end, so consecutive ESP32 stages share one window.
+run_esp32_stage() {
+    local label="$1" default_blocking="$2" tmo="$3"
+    shift 3
+    local why=""
+    if [[ "${ESP32_MODE}" == "cold" ]]; then
+        if ! esp32_cold_begin; then
+            why="cold smoke aborted: docker stop ${CONTAINER} failed, so it may still own the ESP32 port"
+        fi
+    else
+        probe_esp32_owner
+        case "${ESP32_OWNER_STATE}" in
+            owned)
+                why="warm smoke refused: the orchestrator in ${CONTAINER} owns the ESP32 port; re-run with MOUSEDROID_SMOKE_ESP32_MODE=cold"
+                ;;
+            unknown)
+                why="warm smoke refused: could not tell whether the orchestrator in ${CONTAINER} owns the ESP32 port (the settings probe failed); fix the container or re-run with MOUSEDROID_SMOKE_ESP32_MODE=cold"
+                ;;
+        esac
+    fi
+    if [[ -n "${why}" ]]; then
+        refuse_esp32_stage "${label}" "${default_blocking}" "${why}" || return 1
+        return 0
+    fi
+    run_stage "${label}" "${default_blocking}" "${tmo}" \
+        env MOUSEDROID_SMOKE_PYTHON="${ESP32_PY_WRAPPER}" "$@"
+}
 
 if ! container_running; then
     log "FATAL: container ${CONTAINER} is not running. Start it before running smoke."
@@ -173,15 +384,20 @@ record "container_health" "INFO" "see container_health.log"
 # --- Stages 1-8: delegated to jetson_smoke_test.sh via PY_WRAPPER --------
 # Bench-debug sensors (camera/audio/lidar/speaker/voice) are non-blocking until the
 # physical wiring/overlays land; system/usbc/gpio/serial and the bounded motor smoke are hard gates.
-for stage in system usbc gpio serial; do
+# serial, motor and power own the ESP32 port, so they go through run_esp32_stage (warm or cold).
+for stage in system usbc gpio; do
     run_stage "${stage}" "yes" 60 bash scripts/jetson_smoke_test.sh "${stage}" || break
 done
+
+if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
+    run_esp32_stage "serial" "yes" 60 bash scripts/jetson_smoke_test.sh serial || true
+fi
 
 if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
     # Motor remains soft until M4 (rover power + encoder wiring + speaker
     # write timeout). Promote with MOUSEDROID_SMOKE_BLOCKING_MOTOR=yes once
     # encoder loopback consistently passes on the bench.
-    run_stage "motor" "no" 120 \
+    run_esp32_stage "motor" "no" 120 \
         env \
             MOUSEDROID_SMOKE_ALLOW_MOTION=1 \
             bash scripts/jetson_smoke_test.sh motor || true
@@ -191,8 +407,12 @@ if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
     # Power chain (battery + zero-vel + e-stop). Blocking by default once
     # USB-C wiring is verified; operators can demote at runtime with
     # MOUSEDROID_SMOKE_BLOCKING_POWER=no.
-    run_stage "power" "yes" 120 bash scripts/jetson_smoke_test.sh power || true
+    run_esp32_stage "power" "yes" 120 bash scripts/jetson_smoke_test.sh power || true
 fi
+
+# Cold mode keeps the container stopped across serial -> motor -> power; bring it back before the
+# stages that exec into it. A no-op in warm mode, and when no ESP32 stage stopped it.
+esp32_cold_end
 
 if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
     # M1: lidar is now a hard gate by default (re-blocked after LD19 hardening).
@@ -238,23 +458,31 @@ fi
 # Runs the rover motor smoke (velocity round-trip, e-stop latency, MCP
 # resource polling under load) with the optional MCP server enabled.
 #
-# SAFETY: motion is disabled by default via the smoke_test_allow_motion=False
-# default in ESP32Config — the velocity round-trip sends a zero command so
-# the rover does not roll while running unattended (e.g. on a table).
-# Override with MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION=true ONLY when
+# MOTION: the velocity round-trip commands zero velocity unless the Pydantic gate
+# ESP32Config.smoke_test_allow_motion is true. That gate, not this script, is what keeps an
+# unattended rover (e.g. on a table) still. The stage exports the host's
+# MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION (false when the host leaves it unset) to the python
+# wrapper, and the wrapper forwards the name into the container (warm: docker exec; cold: the
+# transient container), so exporting it on the host reaches the gate. Set it to true ONLY when
 # the rover is on rollers / tethered / under direct supervision.
+#
+# ESP32 stage: it goes through run_esp32_stage like serial/motor/power, so warm mode refuses it
+# while the orchestrator owns the port. Unlike motor and power it does not stack the bench
+# overlay, so with the shipped esp32.enabled: false its driver is the mock; it measures the board
+# only when the container's own environment enables it.
 #
 # Non-blocking so an MCP/motor failure does not mask later stages but
 # still surfaces in SUMMARY.md.
 if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
-    run_stage "mcp_motor_smoke" "no" 300 \
+    run_esp32_stage "mcp_motor_smoke" "no" 300 \
         env \
             MOUSEDROID_MCP__ENABLED=true \
             MOUSEDROID_MCP__BIND_TRANSPORT=false \
             MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION="${MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION:-false}" \
-            "${PY_WRAPPER}" -m pytest tests/hardware/test_motor_smoke.py \
-                -v -m hardware --tb=short --no-cov
+            "${ESP32_PY_WRAPPER}" -m pytest tests/hardware/test_motor_smoke.py \
+                -v -m hardware --tb=short --no-cov || true  # blocking if promoted; OVERALL_FAIL set in run_stage
 fi
+esp32_cold_end
 
 # --- Stage 14: LLM live probe ---------------------------------------------
 if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
@@ -370,6 +598,7 @@ fi
         echo "- Container: ${CONTAINER} (not running at summary time)"
     fi
     echo "- Run dir: ${RUN_DIR}"
+    echo "- ESP32 stages: ${ESP32_MODE}"
     echo
     echo "| Stage | Status | Note |"
     echo "|-------|--------|------|"
