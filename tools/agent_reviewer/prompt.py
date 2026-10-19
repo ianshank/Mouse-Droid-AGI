@@ -60,10 +60,13 @@ This is a non-interactive run: nobody can answer a question, and your final mess
 saved verbatim as the review. If the context you need is missing, say what is missing and
 end with NEEDS_CONTEXT instead of guessing.
 
-You can read files and run `git diff`, `git log`, `git show` and
-`python -m pytest ... --collect-only`; you cannot write, edit, run tests, or reach the
-network. A refused tool call is the harness doing its job, not a defect in the code under
-review: do not report it, and do not retry it in another form."""
+You can read files and run `git diff`, `git log` and `git show`; you cannot write, edit, run
+tests or any other program, or reach the network. Pathspecs go after `--` and are literal (a
+glob matches nothing), `--all` and the other whole-history options are refused, and
+`git show <rev>:<path>` works only for a file that exists at the base - read a file the change
+adds from `git diff <base>...<head> -- <path>`. A refused tool call is the harness doing its
+job, not a defect in the code under review: do not report it, and do not retry it in another
+form."""
 
 DIAGNOSTICS_EVIDENCE_RULE: Final = """\
 ## When an MCP diagnostic is evidence
@@ -223,6 +226,22 @@ def read_includable(path: str | Path, *, repo_root: Path, cfg: WorkforceConfig) 
     return text
 
 
+def screen_included_text(text: str, *, label: str, repo_root: Path, cfg: WorkforceConfig) -> None:
+    """Refuse ``text`` (supplied by the caller, not read from the working tree) as a prompt part.
+
+    The same screens :func:`read_includable` applies to a file: the name ``label`` is checked
+    against the secret-file patterns, the text against the credential shapes and the
+    ``.gitleaks.toml`` regexes.
+
+    Raises:
+        PromptRefusedError: The name or the text is refused.
+    """
+    reason = policy.secret_path_reason(label)
+    if reason:
+        raise PromptRefusedError(f"refusing to include {label}: {reason}")
+    _screen_content(text, label=label, patterns=gitleaks_regexes(repo_root, cfg))
+
+
 def scan_with_gitleaks(
     text: str,
     *,
@@ -268,6 +287,7 @@ def build(
     repo_root: Path,
     cfg: WorkforceConfig,
     extra_files: Sequence[str | Path] = (),
+    agent_text: str | None = None,
     scanner: Scanner | None = None,
 ) -> str:
     """Assemble the reviewer's system prompt.
@@ -277,6 +297,10 @@ def build(
         cfg: Workforce config (names the agent file).
         extra_files: Further repository files to append as context. Each goes through
             :func:`read_includable`.
+        agent_text: The agent file's text. The CLI passes it as read from the TRUSTED base
+            ref: the working tree belongs to the head under review, and a head that can
+            rewrite the reviewer's own instructions can neutralise its review. When omitted
+            the file is read from the working tree (callers that trust it).
         scanner: Replaces the ``gitleaks`` scan of the assembled prompt (tests).
 
     Returns:
@@ -286,7 +310,13 @@ def build(
     Raises:
         PromptRefusedError: Any included file, or the assembled prompt, was refused.
     """
-    agent = read_includable(cfg.agent_reviewer.agent_file, repo_root=repo_root, cfg=cfg)
+    if agent_text is None:
+        agent = read_includable(cfg.agent_reviewer.agent_file, repo_root=repo_root, cfg=cfg)
+    else:
+        screen_included_text(
+            agent_text, label=cfg.agent_reviewer.agent_file, repo_root=repo_root, cfg=cfg
+        )
+        agent = agent_text
     sections = [strip_front_matter(agent), OPERATING_CONSTRAINTS, DIAGNOSTICS_EVIDENCE_RULE]
     for extra in extra_files:
         text = read_includable(extra, repo_root=repo_root, cfg=cfg)
@@ -316,8 +346,8 @@ def build_user_prompt(
         head_ref: The head as the operator named it.
         head_sha: The head commit.
         worktree_sha: The commit the working tree is at. When it is not the head, the
-            reviewer is told to read the head's files with ``git show`` rather than
-            ``Read``, which would show a different version.
+            reviewer is told not to trust ``Read`` for the head's files, and to use
+            ``git show`` (for a file that exists at the base) or the diff instead.
         opening: Finding ids from earlier review rounds to report on (may be empty).
     """
     lines = [
@@ -326,7 +356,7 @@ def build_user_prompt(
         f"- base: {base_ref} = {base_sha}",
         f"- head: {head_ref} = {head_sha}",
         f"- start with `git diff --stat {base_sha}...{head_sha}`, then read each changed "
-        f"file's diff with `git diff {base_sha}...{head_sha} -- <path>`.",
+        f"file's diff with `git diff {base_sha}...{head_sha} -- <path>` (a literal path).",
     ]
     if worktree_sha == head_sha:
         lines.append(
@@ -335,8 +365,9 @@ def build_user_prompt(
         )
     else:
         lines.append(
-            f"- the working tree is at {worktree_sha}, NOT the head: read the head's file "
-            f"content with `git show {head_sha}:<path>`, never with Read."
+            f"- the working tree is at {worktree_sha}, NOT the head: do not use Read for the "
+            f"head's files. For a file that exists at the base use "
+            f"`git show {head_sha}:<path>`; for a file the change adds, read it from the diff."
         )
     if opening:
         lines += [

@@ -5,12 +5,17 @@ so what is pinned here is the *containment*, not the review quality:
 
 * the tool allowlist / denylist, checked against ``MCPConfig`` and the literal
   actuation names - no actuation tool, no write tool, no web tool, ever;
-* the PreToolUse Bash guard - only ``git diff|log|show`` and
-  ``python -m pytest ... --collect-only`` get through, and the options that make
-  those read-only commands write or read outside the repo do not;
-* the MCP config - built from ``.mcp.json``, mock hardware forced, nothing else
-  of the file (the ``github`` server, any rover host, any ``${...}`` pull from the
-  parent environment) carried over;
+* the PreToolUse Bash guard - only ``git diff|log|show`` as one plain command gets
+  through (no interpreter, no pytest), pathspecs are literal, ``git show <rev>:<path>``
+  names only a file tracked at the base ref, and the options that make those
+  read-only commands write, run a program, read outside the repo or search every
+  ref do not;
+* the MCP entry - built in code from constants (``sys.executable -m mousedroid``, a
+  fixed minimal environment, mock hardware forced), with ``.mcp.json`` read from the
+  BASE ref only to confirm it; the reviewer's instructions and the files ``git show``
+  may name come from the base ref too, the environment added for the CLI is an
+  allowlist that never carries a credential, and the run is refused when the server
+  would import the reviewed branch's own ``mousedroid``;
 * the prompt builder - front-matter stripped, house output shape appended, and a
   refusal for ``*.env`` / ``docker.env*`` files or key-shaped text;
 * the ledger - the cap is checked BEFORE the SDK is touched, the cost comes from
@@ -31,6 +36,7 @@ import ast
 import asyncio
 import dataclasses
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -304,7 +310,6 @@ def test_allowlist_is_the_planned_set() -> None:
         "Bash(git diff *)",
         "Bash(git log *)",
         "Bash(git show *)",
-        "Bash(python -m pytest * --collect-only*)",
         "mcp__mousedroid__system_info",
         "mcp__mousedroid__lidar_diagnostics",
         "mcp__mousedroid__esp32_diagnostics",
@@ -414,31 +419,37 @@ def test_credential_shape_reason_leaves_documented_placeholders_alone(text: str)
 # --------------------------------------------------------------------------- #
 # policy - the Bash guard
 # --------------------------------------------------------------------------- #
+# Files "tracked at the base ref" for the guard tests: the only files `git show
+# <rev>:<path>` may name.
+_BASE_PATHS = frozenset(
+    {"README.md", ".mcp.json", "tools/agent_reviewer/policy.py", "src/mousedroid/__init__.py"}
+)
+
+
+def _check(command: object) -> str | None:
+    return policy.check_bash_command(command, base_paths=_BASE_PATHS)
+
+
 @pytest.mark.parametrize(
     "command",
     [
         "git diff HEAD~1",
         "git diff origin/main...HEAD --stat",
         "git diff -- tools/agent_reviewer/policy.py",
+        "git diff HEAD~1 -- tools/agent_reviewer/policy.py README.md",
         "git diff --no-ext-diff --no-textconv HEAD",
         "git log --oneline -n 5",
         'git log --format="%h %s" -n 3',
         "git log -p -S needle -- tools",
+        "git log -Sa:b HEAD",
         "git show HEAD:README.md",
+        "git show abc1234:tools/agent_reviewer/policy.py",
         "git show --stat abc1234",
-        # glob and brace characters are fine when quoted: they are literal then
-        "git diff HEAD~1 -- '*.py'",
-        'git log -- "tools/**"',
-        "git show 'HEAD@{1}'",
-        "python -m pytest tests --collect-only -q",
-        "python -m pytest tests/unit/tools/test_x.py::test_y --collect-only",
-        'python -m pytest tests -k "not slow" --collect-only -q',
-        'python -m pytest -m "not hardware" --collect-only tests',
-        "python -m pytest tests/unit --co -qq --no-header",
+        "git show HEAD~1",
     ],
 )
 def test_bash_hook_allows_read_only_commands(command: str) -> None:
-    assert policy.check_bash_command(command) is None
+    assert _check(command) is None
 
 
 @pytest.mark.parametrize(
@@ -464,7 +475,18 @@ def test_bash_hook_allows_read_only_commands(command: str) -> None:
         "python -c 'print(1)'",
         "python script.py",
         "python -m pip install requests",
+        # pytest in every form: collection imports the head's conftest.py and test modules,
+        # so no interpreter is on the list at all (Ruling 49)
+        "python -m pytest tests --collect-only -q",
+        "python -m pytest tests --collect-only",
         "python3 -m pytest tests --collect-only",
+        "python -m pytest @argfile --collect-only",
+        "python -m pytest @/etc/hosts --collect-only",
+        "python -m pytest -c x.ini --collect-only",
+        "python -m pytest -p plugin --collect-only",
+        "python -m pytest --rootdir=/ --confcutdir=/ --collect-only",
+        "python -m pytest --noconftest tests --collect-only",
+        "python -m pytest -o addopts= --collect-only",
         # chaining, redirection, substitution
         "git diff >> f",
         "git diff 2>&1",
@@ -490,7 +512,6 @@ def test_bash_hook_allows_read_only_commands(command: str) -> None:
         "git diff --{output,stat}=x",
         "git diff [a-z]*",
         "git diff ?",
-        "python -m pytest tests/*.py --collect-only",
         # git options that write, run programs, or read outside the repo
         "git diff --output=out.txt",
         "git diff --output out.txt",
@@ -505,28 +526,60 @@ def test_bash_hook_allows_read_only_commands(command: str) -> None:
         "git -c core.pager=x diff",
         "git diff ~/notes",
         "git diff /etc/passwd",
-        "git show C:/Users/x/file",
-        # pytest options that load code, write files or leave the repo
-        "python -m pytest tests",
-        "python -m pytest tests -q",
-        "python -m pytest -p plugin --collect-only",
-        "python -m pytest --junitxml=r.xml --collect-only",
-        "python -m pytest --basetemp=x --collect-only",
-        "python -m pytest -c cfg.ini --collect-only",
-        "python -m pytest -o addopts= --collect-only",
-        "python -m pytest tests -k --collect-only",
-        "python -m pytest tests --collect-only -k",
-        "python -m pytest tests -k -p --collect-only",
-        "python -m pytest tests -m --junitxml=r.xml --collect-only",
-        "python -m pytest --rootdir=/ --collect-only",
-        "python -m pytest ../elsewhere --collect-only",
-        "python -m pytest /abs/tests --collect-only",
-        "python -m pytest tests/../../x --collect-only",
-        # secret-bearing paths
+        # history-wide forms: every ref, every reflog entry, every glob
+        "git log --all",
+        "git log --all -p",
+        "git log --reflog",
+        "git log --branches",
+        "git log --remotes",
+        "git log --tags",
+        "git log --glob=refs/heads/x",
+        "git log --walk-reflogs",
+        "git log -g",
+        "git log --alternate-refs",
+        "git log --indexed-objects",
+        "git log --refl",
+        "git log --remote",
+        "git show --all",
+        # pathspecs after `--` are literal paths: no globs, no :magic, nothing dash-led
+        "git diff HEAD~1 -- '*.py'",
+        'git log -- "tools/**"',
+        "git diff -- 'conf*/*.env'",
+        "git diff -- ':(glob)**/*.env'",
+        "git diff -- ':!docs'",
+        "git diff -- :/",
+        "git diff -- :",
+        "git diff -- -x",
+        "git diff -- --output=x",
+        "git diff -- '[a-z]*'",
+        "git diff -- 'a?c'",
+        "git diff -- ~",
+        "git diff -- ..",
+        "git diff -- ../x",
+        "git diff -- a -- b",
+        "git diff -- /abs/path",
+        # ... and so are the words before `--` that git might read as paths
+        "git diff 'conf*/*.env'",
+        "git diff HEAD '*.py'",
+        "git show 'HEAD@{1}'",
+        # <rev>:<path> only names a non-secret file tracked at the base ref
         "git show HEAD:config/docker.env",
         "git show HEAD:.env",
+        "git show HEAD:added_by_the_head.py",
+        "git show HEAD:",
+        "git show HEAD:tools/",
+        "git show HEAD:README.md:x",
+        "git show :0:README.md",
+        "git show :/fix",
+        "git show HEAD:./README.md",
+        "git show HEAD:../x",
+        "git show C:/Users/x/file",
+        "git show 'HEAD@{1}:README.md'",
+        "git show -- HEAD:README.md",
+        # secret-bearing paths, named any way
         "git diff -- prod.env",
         "git log -p -- docker.env.local",
+        "git log --grep=docker.env",
         # unparseable / empty
         "git log --grep='unterminated",
         "",
@@ -534,8 +587,15 @@ def test_bash_hook_allows_read_only_commands(command: str) -> None:
     ],
 )
 def test_bash_hook_denies_non_readonly(command: str) -> None:
-    reason = policy.check_bash_command(command)
+    reason = _check(command)
     assert reason, f"{command!r} must be denied"
+
+
+def test_pytest_is_not_on_the_allowlist_and_not_in_the_guard() -> None:
+    """Ruling 49: ``--collect-only`` still imports the head's conftest.py with the key in reach."""
+    assert not [rule for rule in policy.ALLOWED if "pytest" in rule or "python" in rule]
+    for argfile in ("@args.txt", "@/abs/args.txt", "@-"):
+        assert _check(f"python -m pytest {argfile} --collect-only")
 
 
 @pytest.mark.parametrize("command", [None, 123, ["git", "diff"], {"command": "git diff"}])
@@ -547,6 +607,27 @@ def test_bash_guard_denies_an_oversized_command() -> None:
     assert policy.check_bash_command("git log " + "a" * 100_000)
 
 
+def test_refusals_tell_the_model_what_to_do_instead() -> None:
+    """A refusal that only says "no" sends the model round in circles; these say what works."""
+    assert "option" in str(_check("git diff -- -x"))
+    assert "literal" in str(_check("git diff -- '*.py'"))
+    assert "tracked at the base" in str(_check("git show HEAD:added_by_the_head.py"))
+    assert "git diff <base>...<head>" in str(_check("git show HEAD:added_by_the_head.py"))
+    assert "after `--`" in str(_check("git diff '*.py'"))
+    assert "git diff" in str(_check("rm -rf build"))
+
+
+def test_rev_path_is_refused_when_no_base_files_are_known() -> None:
+    """A guard built with no base paths cannot vouch for any ``<rev>:<path>``."""
+    assert policy.check_bash_command("git show HEAD:README.md")
+    assert policy.check_bash_command("git show HEAD:README.md", base_paths={"README.md"}) is None
+
+
+def test_a_secret_named_file_tracked_at_the_base_is_still_refused() -> None:
+    paths = {"config/docker.env.example", "README.md"}
+    assert policy.check_bash_command("git show HEAD:config/docker.env.example", base_paths=paths)
+
+
 async def test_bash_hook_returns_a_deny_payload_and_never_an_allow() -> None:
     denied = await policy.deny_non_readonly_bash(
         {"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}}, "tu1", {"signal": None}
@@ -556,11 +637,24 @@ async def test_bash_hook_returns_a_deny_payload_and_never_an_allow() -> None:
     assert output["permissionDecision"] == "deny"
     assert output["permissionDecisionReason"]
 
-    # "Allow is silent": an explicit allow would bypass the permission rules.
+    # "Allow is silent": an explicit allow would approve the call on its own.
     allowed = await policy.deny_non_readonly_bash(
         {"tool_name": "Bash", "tool_input": {"command": "git diff HEAD~1"}}, "tu2", {"signal": None}
     )
     assert allowed == {}
+
+
+async def test_the_registered_guard_is_bound_to_the_base_refs_files() -> None:
+    guard = policy.BashGuard(base_paths=_BASE_PATHS)
+    call = {"tool_name": "Bash", "tool_input": {"command": "git show HEAD:README.md"}}
+    assert await guard(call, "tu", {"signal": None}) == {}
+    other = {"tool_name": "Bash", "tool_input": {"command": "git show HEAD:added.py"}}
+    denied = await guard(other, "tu", {"signal": None})
+    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert guard.check("git show HEAD:README.md") is None
+    assert guard.check("git show HEAD:added.py")
+    # The default guard knows no base file at all.
+    assert policy.BashGuard().check("git show HEAD:README.md")
 
 
 async def test_bash_hook_fails_closed_on_malformed_input() -> None:
@@ -597,10 +691,25 @@ async def test_bash_hook_leaves_other_tools_to_the_permission_rules() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# policy - the MCP server config
+# policy - the MCP server config, the process environment and the git environment
 # --------------------------------------------------------------------------- #
-def test_mcp_config_forces_mock_hardware(repo: Path, cfg: WorkforceConfig) -> None:
-    servers = policy.build_mcp_servers(repo, cfg.agent_reviewer)
+def _mcp_json(**overrides: Any) -> str:
+    """A ``.mcp.json`` whose ``mousedroid`` entry is the pinned one, with fields overridden."""
+    entry: dict[str, Any] = {
+        "command": "python",
+        "args": list(policy.MCP_ARGS),
+        "env": {"MOUSEDROID_MOCK_HARDWARE": "${MOUSEDROID_MOCK_HARDWARE:-true}"},
+    }
+    entry.update(overrides)
+    entry = {key: value for key, value in entry.items() if value is not _ABSENT}
+    return json.dumps({"mcpServers": {"mousedroid": entry}})
+
+
+_ABSENT = object()
+
+
+def test_mcp_config_forces_mock_hardware() -> None:
+    servers = policy.build_mcp_servers(_mcp_json())
     assert list(servers) == [policy.MCP_SERVER], "only the mock hardware server, never `github`"
     server = servers[policy.MCP_SERVER]
     assert server["type"] == "stdio"
@@ -610,58 +719,97 @@ def test_mcp_config_forces_mock_hardware(repo: Path, cfg: WorkforceConfig) -> No
     json.dumps(servers)  # the SDK passes it to the CLI as JSON
 
 
-def test_mcp_config_matches_the_checked_in_mcp_json(repo: Path, cfg: WorkforceConfig) -> None:
-    declared = json.loads((repo / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"][
+def test_mcp_entry_is_built_in_code_from_constants() -> None:
+    server = policy.build_mcp_servers(_mcp_json())["mousedroid"]
+    assert server["command"] == sys.executable, (
+        "an absolute path: no search of the head's directory"
+    )
+    assert server["args"] == list(policy.MCP_ARGS)
+    assert server["env"] == dict(policy.MCP_ENV)
+
+
+def test_mcp_env_carries_no_credential_and_blanks_the_ones_the_cli_inherits() -> None:
+    env = policy.MCP_ENV
+    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "MOUSEDROID_LLM__API_KEY"):
+        assert env[name] == "", f"{name} must be blanked for the MCP server"
+    assert env["PYTHONSAFEPATH"] == "1", (
+        "the head's directory must not be importable by `python -m`"
+    )
+    assert not [name for name, value in env.items() if value and "${" in value]
+
+
+def test_the_pinned_invocation_matches_the_checked_in_mcp_json() -> None:
+    """The constants are a copy of trunk's ``.mcp.json``; this fails the day the two drift."""
+    declared = json.loads((_REPO_ROOT / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"][
         "mousedroid"
     ]
-    server = policy.build_mcp_servers(repo, cfg.agent_reviewer)["mousedroid"]
-    assert server["command"] == declared["command"]
-    assert server["args"] == declared["args"]
+    assert declared["command"] in policy.MCP_DECLARED_COMMANDS
+    assert tuple(declared["args"]) == policy.MCP_ARGS
     for key, value in declared["env"].items():
-        if key.startswith("MOUSEDROID_MCP__") and key not in policy.FORCED_MCP_ENV:
-            assert server["env"][key] == value
+        if key.startswith("MOUSEDROID_MCP__"):
+            assert policy.MCP_ENV[key] == value, key
+    policy.confirm_mcp_declaration((_REPO_ROOT / ".mcp.json").read_text(encoding="utf-8"), "real")
 
 
-def test_mcp_config_overrides_a_hostile_mcp_json(tmp_path: Path) -> None:
-    root = tmp_path / "r"
-    cfg = load_config(repo_root=root)  # no workforce.yaml -> defaults
-    body = {
-        "mcpServers": {
-            "github": {"command": "npx", "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "x"}},
-            "mousedroid": {
-                "command": "python",
-                "args": ["-m", "mousedroid", "--config", "config/default.yaml"],
-                "env": {
-                    "MOUSEDROID_MOCK_HARDWARE": "false",
-                    "MOUSEDROID_MCP__EXPOSE_ACTUATION_TOOLS": "true",
-                    "MOUSEDROID_MCP__TRANSPORT": "stdio",
-                    "MOUSEDROID_ESP32__WIFI_HOST": "192.0.2.10",
-                    "GITHUB_TOKEN": "t",
+def test_nothing_in_the_declaring_file_is_passed_through() -> None:
+    """Whatever the file says about env, extra servers or hosts, the entry is the same."""
+    hostile = json.dumps(
+        {
+            "mcpServers": {
+                "github": {"command": "npx", "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "x"}},
+                "mousedroid": {
+                    "command": "python",
+                    "args": list(policy.MCP_ARGS),
+                    "env": {
+                        "MOUSEDROID_MOCK_HARDWARE": "false",
+                        "MOUSEDROID_MCP__EXPOSE_ACTUATION_TOOLS": "true",
+                        "MOUSEDROID_ESP32__WIFI_HOST": "192.0.2.10",
+                        "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}",
+                        "GITHUB_TOKEN": "t",
+                    },
                 },
-            },
+            }
         }
-    }
-    _write(root, ".mcp.json", json.dumps(body))
-    server = policy.build_mcp_servers(root, cfg.agent_reviewer)["mousedroid"]
-    assert server["env"] == {
-        "MOUSEDROID_MCP__TRANSPORT": "stdio",
-        "MOUSEDROID_MOCK_HARDWARE": "true",
-        "MOUSEDROID_MCP__EXPOSE_ACTUATION_TOOLS": "false",
-    }
+    )
+    servers = policy.build_mcp_servers(hostile)
+    assert list(servers) == ["mousedroid"]
+    assert servers["mousedroid"]["env"] == dict(policy.MCP_ENV)
 
 
-@pytest.mark.parametrize("value", ["${ANTHROPIC_API_KEY}", "${HOME:-/tmp}", "x${Y}z"])
-def test_mcp_config_refuses_a_value_that_pulls_from_the_parent_environment(
-    tmp_path: Path, value: str
-) -> None:
-    root = tmp_path / "r"
-    cfg = load_config(repo_root=root)
-    body = {
-        "mcpServers": {"mousedroid": {"command": "python", "env": {"MOUSEDROID_MCP__X": value}}}
-    }
-    _write(root, ".mcp.json", json.dumps(body))
+@pytest.mark.parametrize("command", ["python", "python3", sys.executable])
+def test_mcp_declaration_may_name_the_interpreter_three_ways(command: str) -> None:
+    assert policy.build_mcp_servers(_mcp_json(command=command))["mousedroid"]["command"] == (
+        sys.executable
+    )
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"command": "./python"},
+        {"command": "evil.exe"},
+        {"command": "C:\\Users\\x\\python.exe"},
+        {"command": "/usr/bin/python"},
+        {"command": "npx"},
+        {"command": "python "},
+        {"command": "PYTHON"},
+        {"command": ["python"]},
+        {"command": 7},
+        {"command": _ABSENT},
+        {"args": [*policy.MCP_ARGS, "--extra"]},
+        {"args": list(policy.MCP_ARGS[:-1])},
+        {"args": list(reversed(policy.MCP_ARGS))},
+        {"args": ["-c", "import os"]},
+        {"args": ["-m", "mousedroid", "--config", "elsewhere.yaml"]},
+        {"args": "-m mousedroid"},
+        {"args": _ABSENT},
+        {"type": "http"},
+        {"url": "https://example.invalid/mcp"},
+    ],
+)
+def test_mcp_declaration_that_does_not_match_the_pin_is_refused(entry: dict[str, Any]) -> None:
     with pytest.raises(policy.PolicyViolationError):
-        policy.build_mcp_servers(root, cfg.agent_reviewer)
+        policy.build_mcp_servers(_mcp_json(**entry))
 
 
 @pytest.mark.parametrize(
@@ -671,38 +819,77 @@ def test_mcp_config_refuses_a_value_that_pulls_from_the_parent_environment(
         "[]",
         json.dumps({}),
         json.dumps({"mcpServers": {}}),
+        json.dumps({"mcpServers": []}),
         json.dumps({"mcpServers": {"mousedroid": "nope"}}),
-        json.dumps({"mcpServers": {"mousedroid": {"args": []}}}),
-        json.dumps({"mcpServers": {"mousedroid": {"command": "python", "args": "x"}}}),
-        json.dumps({"mcpServers": {"mousedroid": {"command": "python", "args": [1]}}}),
-        json.dumps({"mcpServers": {"mousedroid": {"command": "python", "env": {"A": 1}}}}),
-        json.dumps({"mcpServers": {"mousedroid": {"command": "python", "env": []}}}),
+        json.dumps({"mcpServers": {"github": {"command": "npx"}}}),
     ],
 )
-def test_mcp_config_rejects_a_malformed_mcp_json(tmp_path: Path, body: str) -> None:
-    root = tmp_path / "r"
-    cfg = load_config(repo_root=root)
-    _write(root, ".mcp.json", body)
+def test_mcp_declaration_that_is_malformed_or_lacks_the_server_is_refused(body: str) -> None:
     with pytest.raises(policy.PolicyViolationError):
-        policy.build_mcp_servers(root, cfg.agent_reviewer)
+        policy.build_mcp_servers(body)
 
 
-def test_mcp_config_rejects_a_missing_mcp_json(tmp_path: Path) -> None:
-    cfg = load_config(repo_root=tmp_path)
+def test_mcp_needs_an_interpreter_to_run_the_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(policy.sys, "executable", "")
     with pytest.raises(policy.PolicyViolationError):
-        policy.build_mcp_servers(tmp_path, cfg.agent_reviewer)
+        policy.build_mcp_servers(_mcp_json())
+
+
+def test_process_env_is_an_allowlist_and_never_carries_a_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ruling 49: no credential is ever copied into the environment the reviewer adds."""
+    secrets = {
+        "ANTHROPIC_API_KEY": _FAKE_KEY,
+        "ANTHROPIC_AUTH_TOKEN": "t1",
+        "MOUSEDROID_LLM__API_KEY": "t2",
+        "GITHUB_TOKEN": "t3",
+        "HF_TOKEN": "t4",
+        "AWS_SECRET_ACCESS_KEY": "t5",
+        "PYTHONPATH": "/hostile",
+        "GIT_EXTERNAL_DIFF": "/hostile/diff",
+    }
+    for name, value in secrets.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("HOME", "/home/me")
+    monkeypatch.setenv("LANG", "C.UTF-8")
+
+    for env in (policy.process_env(os.environ), policy.process_env()):
+        assert set(env) == {*policy.PROCESS_ENV_PASSTHROUGH, *policy.FORCED_PROCESS_ENV}
+        assert not set(secrets) & set(env)
+        assert _FAKE_KEY not in json.dumps(env)
+        assert (env["PATH"], env["HOME"], env["LANG"]) == ("/usr/bin", "/home/me", "C.UTF-8")
+        assert env["GIT_LITERAL_PATHSPECS"] == "1"
+        assert env["MOUSEDROID_MOCK_HARDWARE"] == "true"
+
+
+def test_process_env_omits_what_the_parent_does_not_have() -> None:
+    env = policy.process_env({"ANTHROPIC_API_KEY": _FAKE_KEY})
+    assert env == dict(policy.FORCED_PROCESS_ENV)
+    assert "ANTHROPIC_API_KEY" not in env
+
+
+def test_git_runs_with_literal_pathspecs_and_without_index_writes() -> None:
+    assert policy.GIT_ENV["GIT_LITERAL_PATHSPECS"] == "1"
+    assert policy.GIT_ENV["GIT_OPTIONAL_LOCKS"] == "0"
+    assert policy.FORCED_PROCESS_ENV["GIT_LITERAL_PATHSPECS"] == "1"
 
 
 # --------------------------------------------------------------------------- #
 # policy - the SDK options
 # --------------------------------------------------------------------------- #
-def test_reviewer_options_are_closed_and_read_only(repo: Path, cfg: WorkforceConfig) -> None:
+def test_reviewer_options_are_closed_and_read_only(
+    repo: Path, cfg: WorkforceConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", _FAKE_KEY)
     options = policy.reviewer_options(
         cfg=cfg.agent_reviewer,
         repo_root=repo,
         model="opus",
         system_prompt="SYS",
         cap_usd=7.5,
+        mcp_json=_mcp_json(),
     )
     # A closed set: a new SDK option is a deliberate, reviewed addition.
     assert set(options) == {
@@ -733,10 +920,14 @@ def test_reviewer_options_are_closed_and_read_only(repo: Path, cfg: WorkforceCon
     assert options["verbatim_prompts"] is True
     assert options["system_prompt"] == "SYS"
     assert options["model"] == "opus"
-    assert options["env"]["MOUSEDROID_MOCK_HARDWARE"] == "true"
-    assert options["env"]["PYTEST_ADDOPTS"] == "-p no:cacheprovider"
-    assert options["env"]["PYTHONDONTWRITEBYTECODE"] == "1"
     assert list(options["mcp_servers"]) == [policy.MCP_SERVER]
+    # The CLI process: literal pathspecs, mock hardware, no pytest knobs, no credential.
+    env = options["env"]
+    assert env == policy.process_env()
+    assert env["GIT_LITERAL_PATHSPECS"] == "1"
+    assert env["MOUSEDROID_MOCK_HARDWARE"] == "true"
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "PYTEST_ADDOPTS" not in env
 
 
 @pytest.mark.parametrize("cap", [0, -1, float("nan"), float("inf")])
@@ -745,7 +936,26 @@ def test_reviewer_options_refuse_an_unbounded_budget(
 ) -> None:
     with pytest.raises(policy.PolicyViolationError):
         policy.reviewer_options(
-            cfg=cfg.agent_reviewer, repo_root=repo, model="opus", system_prompt="s", cap_usd=cap
+            cfg=cfg.agent_reviewer,
+            repo_root=repo,
+            model="opus",
+            system_prompt="s",
+            cap_usd=cap,
+            mcp_json=_mcp_json(),
+        )
+
+
+def test_reviewer_options_refuse_an_mcp_declaration_that_does_not_match_the_pin(
+    repo: Path, cfg: WorkforceConfig
+) -> None:
+    with pytest.raises(policy.PolicyViolationError):
+        policy.reviewer_options(
+            cfg=cfg.agent_reviewer,
+            repo_root=repo,
+            model="opus",
+            system_prompt="s",
+            cap_usd=5.0,
+            mcp_json=_mcp_json(command="./evil"),
         )
 
 
@@ -753,12 +963,17 @@ def test_options_names_exist_in_the_real_sdk(repo: Path, cfg: WorkforceConfig) -
     """The pin that every option name used here is a real ``ClaudeAgentOptions`` field."""
     sdk = pytest.importorskip("claude_agent_sdk")
     options = policy.reviewer_options(
-        cfg=cfg.agent_reviewer, repo_root=repo, model="opus", system_prompt="s", cap_usd=5.0
+        cfg=cfg.agent_reviewer,
+        repo_root=repo,
+        model="opus",
+        system_prompt="s",
+        cap_usd=5.0,
+        mcp_json=_mcp_json(),
     )
     fields = {f.name for f in dataclasses.fields(sdk.ClaudeAgentOptions)}
     assert set(options) | {"hooks"} <= fields
     matcher = sdk.HookMatcher(
-        matcher=policy.BASH_HOOK_MATCHER, hooks=[policy.deny_non_readonly_bash]
+        matcher=policy.BASH_HOOK_MATCHER, hooks=[policy.BashGuard(base_paths=_BASE_PATHS)]
     )
     built = sdk.ClaudeAgentOptions(**options, hooks={"PreToolUse": [matcher]})
     assert built.permission_mode in typing.get_args(sdk.PermissionMode)
@@ -1227,6 +1442,10 @@ def test_dry_run_constructs_no_client(
     assert "max_turns: 40" in text
     assert "permission_mode: dontAsk" in text
     assert "cap_usd: 10.0" in text
+    assert re.search(r"base_tracked_files: \d+", text)
+    assert "GIT_LITERAL_PATHSPECS=1" in text
+    assert "confirms the pinned invocation" in text
+    assert "pytest" not in text, "no pytest rule, no pytest in the plan"
     for rule in policy.ALLOWED:
         assert rule in text
     for tool in policy.DENIED:
@@ -1434,6 +1653,393 @@ def test_run_ids_continue_from_the_artifacts_already_written(tmp_path: Path) -> 
 
 
 # --------------------------------------------------------------------------- #
+# run_review - what is taken from the trusted base ref, not from the head
+# --------------------------------------------------------------------------- #
+_HOSTILE_MCP_JSON = json.dumps(
+    {
+        "mcpServers": {
+            "mousedroid": {
+                "command": "./HOSTILE-MCP-COMMAND",
+                "args": ["-c", "import os"],
+                "env": {"X": "1"},
+            }
+        }
+    }
+)
+
+
+def test_the_mcp_declaration_is_read_from_the_base_ref_not_the_head_or_the_working_tree(
+    repo: Path, fake_sdk: _FakeSdk, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The head controls the working tree; its ``.mcp.json`` is an exec sink and is never read."""
+    _write(repo, ".mcp.json", _HOSTILE_MCP_JSON)
+    _commit(repo, "the head rewrites .mcp.json")
+    _write(repo, ".mcp.json", _HOSTILE_MCP_JSON.replace("HOSTILE", "WORSE"))  # uncommitted too
+    argv = ["--repo-root", str(repo), "--base", "HEAD~2", "--head", "HEAD", "--cap-usd", "5"]
+
+    assert run_review.main([*argv, "--dry-run"]) == 0
+
+    out = capsys.readouterr().out
+    assert sys.executable in out
+    assert "HOSTILE" not in out
+    assert "WORSE" not in out
+
+
+def test_a_live_run_never_uses_a_tampered_declaration_from_the_head(
+    repo: Path, fake_sdk: _FakeSdk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write(repo, ".mcp.json", _HOSTILE_MCP_JSON)
+    _commit(repo, "the head rewrites .mcp.json")
+    _live_env(monkeypatch)
+    argv = ["--repo-root", str(repo), "--base", "HEAD~2", "--head", "HEAD", "--cap-usd", "5"]
+    assert run_review.main(argv) == 0
+    server = fake_sdk.queries[0]["options"].mcp_servers["mousedroid"]
+    assert server["command"] == sys.executable
+    assert server["args"] == list(policy.MCP_ARGS)
+    assert "HOSTILE" not in json.dumps(server)
+
+
+def test_a_tampered_declaration_at_the_base_ref_refuses_the_run(
+    repo: Path,
+    fake_sdk: _FakeSdk,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write(repo, ".mcp.json", _HOSTILE_MCP_JSON)
+    _commit(repo, "tampered base")
+    _write(repo, "later.py", "z = 1\n")
+    _commit(repo, "the change under review")
+    _live_env(monkeypatch)
+    argv = ["--repo-root", str(repo), "--base", "HEAD~1", "--head", "HEAD", "--cap-usd", "5"]
+
+    assert run_review.main(argv) == run_review.EXIT_REFUSED
+
+    assert "HOSTILE-MCP-COMMAND" in capsys.readouterr().err
+    fake_sdk.query.assert_not_called()
+    assert _ledger_rows(repo) == []
+
+
+def test_a_base_ref_without_the_declaration_refuses_the_run_and_does_not_fall_back(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _git(repo, "rm", "-q", ".mcp.json")
+    _commit(repo, "base without .mcp.json")
+    _write(repo, "later.py", "z = 1\n")
+    _commit(repo, "the change under review")
+    shutil.copyfile(_REPO_ROOT / ".mcp.json", repo / ".mcp.json")  # a clean copy, untracked
+    argv = ["--repo-root", str(repo), "--base", "HEAD~1", "--head", "HEAD", "--cap-usd", "5"]
+
+    assert run_review.main([*argv, "--dry-run"]) == run_review.EXIT_REFUSED
+
+    assert "no .mcp.json" in capsys.readouterr().err
+
+
+def test_every_git_call_runs_with_literal_pathspecs(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[dict[str, str]] = []
+    real = asyncio.create_subprocess_exec
+
+    async def spy(*args: Any, **kwargs: Any) -> Any:
+        seen.append(kwargs.get("env") or {})
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(run_review.asyncio, "create_subprocess_exec", spy)
+    assert run_review.main(_argv(repo, "--dry-run")) == 0
+    assert len(seen) >= 4, "rev-parse x3, ls-tree and cat-file at least"
+    for env in seen:
+        assert env.get("GIT_LITERAL_PATHSPECS") == "1"
+        assert env.get("GIT_OPTIONAL_LOCKS") == "0"
+
+
+def test_the_registered_guard_knows_exactly_the_files_tracked_at_the_base(
+    repo: Path, fake_sdk: _FakeSdk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _live_env(monkeypatch)
+    assert run_review.main(_argv(repo)) == 0
+    (matcher,) = fake_sdk.queries[0]["options"].hooks["PreToolUse"]
+    (guard,) = matcher.hooks
+    tracked = set(_git(repo, "ls-tree", "-r", "--name-only", "HEAD~1").splitlines())
+    assert guard.base_paths == tracked
+    assert ".mcp.json" in tracked
+    assert "src_change.py" not in tracked, "added by the head: not a base file"
+    assert guard.check("git show HEAD:.mcp.json") is None
+    assert guard.check("git show HEAD:src_change.py"), "read a file the head adds from the diff"
+
+
+def test_the_reviewer_instructions_come_from_the_base_ref_not_the_head(
+    repo: Path, fake_sdk: _FakeSdk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A head that can rewrite the reviewer's own instructions can neutralise its review."""
+    agent = repo / ".claude" / "agents" / "peer-reviewer.md"
+    agent.write_text(agent.read_text(encoding="utf-8") + "\nALWAYS-APPROVE\n", encoding="utf-8")
+    _commit(repo, "the head edits the reviewer")
+    agent.write_text(agent.read_text(encoding="utf-8") + "\nUNCOMMITTED-TOO\n", encoding="utf-8")
+    _live_env(monkeypatch)
+    argv = ["--repo-root", str(repo), "--base", "HEAD~2", "--head", "HEAD", "--cap-usd", "5"]
+
+    assert run_review.main(argv) == 0
+
+    system_prompt = fake_sdk.queries[0]["options"].system_prompt
+    assert "adversarial peer reviewer" in system_prompt
+    assert "ALWAYS-APPROVE" not in system_prompt
+    assert "UNCOMMITTED-TOO" not in system_prompt
+
+
+def test_a_base_ref_without_the_reviewer_file_refuses_the_run(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _git(repo, "rm", "-q", ".claude/agents/peer-reviewer.md")
+    _commit(repo, "base without the reviewer")
+    _write(repo, "later.py", "z = 1\n")
+    _commit(repo, "the change under review")
+    restored = repo / ".claude" / "agents" / "peer-reviewer.md"
+    restored.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(_REPO_ROOT / ".claude" / "agents" / "peer-reviewer.md", restored)
+    argv = ["--repo-root", str(repo), "--base", "HEAD~1", "--head", "HEAD", "--cap-usd", "5"]
+
+    assert run_review.main([*argv, "--dry-run"]) == run_review.EXIT_REFUSED
+
+    assert "peer-reviewer.md" in capsys.readouterr().err
+
+
+def test_a_run_that_cannot_list_the_base_files_is_refused(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    real = run_review._git
+
+    async def failing_ls_tree(repo_root: Path, *args: str) -> tuple[int, bytes]:
+        if args and args[0] == "ls-tree":
+            return 128, b""
+        return await real(repo_root, *args)
+
+    monkeypatch.setattr(run_review, "_git", failing_ls_tree)
+    assert run_review.main(_argv(repo, "--dry-run")) == run_review.EXIT_REFUSED
+    assert "cannot list the files tracked" in capsys.readouterr().err
+
+
+def test_a_supplied_agent_text_named_like_a_secret_file_is_refused(repo: Path) -> None:
+    _write(repo, DEFAULT_CONFIG_RELPATH, _WORKFORCE_YAML + "    agent_file: config/docker.env\n")
+    bad = load_config(repo_root=repo)
+    with pytest.raises(prompt.PromptRefusedError, match="secret"):
+        prompt.build(repo_root=repo, cfg=bad, agent_text="harmless", scanner=_no_scanner)
+
+
+def test_a_supplied_agent_text_is_screened_like_a_file(repo: Path, cfg: WorkforceConfig) -> None:
+    with pytest.raises(prompt.PromptRefusedError):
+        prompt.build(repo_root=repo, cfg=cfg, agent_text=f"key {_FAKE_KEY}", scanner=_no_scanner)
+    text = prompt.build(
+        repo_root=repo,
+        cfg=cfg,
+        agent_text="---\nname: x\n---\nCUSTOM BODY\n",
+        scanner=_no_scanner,
+    )
+    assert "CUSTOM BODY" in text
+    assert "name: x" not in text
+
+
+# --------------------------------------------------------------------------- #
+# run_review - whose code the MCP server runs
+# --------------------------------------------------------------------------- #
+def _mcp_package_at(monkeypatch: pytest.MonkeyPatch, origin: Path | None) -> None:
+    """Pretend the reviewer's interpreter finds ``mousedroid`` at ``origin`` (or nowhere)."""
+    monkeypatch.setattr(run_review, "_mcp_package_origin", lambda: origin)
+
+
+def _argv_at_the_base(repo: Path, *extra: str) -> list[str]:
+    """Check the repo out AT the base commit and review the commit above it."""
+    _git(repo, "tag", "rbase", "HEAD~1")
+    _git(repo, "tag", "rtip", "HEAD")
+    _git(repo, "checkout", "-q", "rbase")
+    return ["--repo-root", str(repo), "--base", "rbase", "--head", "rtip", "--cap-usd", "5", *extra]
+
+
+def test_the_mcp_server_may_not_run_the_branchs_own_package(
+    repo: Path,
+    fake_sdk: _FakeSdk,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An editable install makes ``python -m mousedroid`` the CHECKOUT's code - the head's."""
+    _mcp_package_at(monkeypatch, repo / "src/mousedroid/__init__.py")
+
+    assert run_review.main(_argv(repo, "--dry-run")) == run_review.EXIT_REFUSED
+
+    err = capsys.readouterr().err
+    assert "src/mousedroid/__init__.py" in err
+    assert run_review.ALLOW_IN_TREE_MCP_FLAG in err
+    assert "holds the API key" in err
+    fake_sdk.query.assert_not_called()
+    assert not (repo / "reports").exists()
+
+
+def test_a_live_run_is_refused_the_same_way_before_any_spend(
+    repo: Path, fake_sdk: _FakeSdk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _live_env(monkeypatch)
+    _mcp_package_at(monkeypatch, repo / "src/mousedroid/__init__.py")
+
+    assert run_review.main(_argv(repo)) == run_review.EXIT_REFUSED
+
+    fake_sdk.query.assert_not_called()
+    assert _ledger_rows(repo) == [], "nothing was charged"
+
+
+def test_the_flag_accepts_the_branchs_own_package_and_the_plan_says_so(
+    repo: Path,
+    fake_sdk: _FakeSdk,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _mcp_package_at(monkeypatch, repo / "src/mousedroid/__init__.py")
+
+    code = run_review.main(_argv(repo, "--dry-run", run_review.ALLOW_IN_TREE_MCP_FLAG))
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "mcp_package: IN THE CHECKOUT UNDER REVIEW (src/mousedroid/__init__.py)" in out
+    assert run_review.ALLOW_IN_TREE_MCP_FLAG in out
+
+
+def test_a_checkout_at_the_base_commit_runs_trusted_code(
+    repo: Path,
+    fake_sdk: _FakeSdk,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Reviewing a branch by its git objects from a checkout of the base needs no flag."""
+    argv = _argv_at_the_base(repo, "--dry-run")
+    _mcp_package_at(monkeypatch, repo / "src/mousedroid/__init__.py")
+
+    assert run_review.main(argv) == 0
+
+    assert "which is at the base commit" in capsys.readouterr().out
+
+
+def test_an_unresolvable_checkout_is_not_taken_for_the_base(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    refs = run_review.Refs("b", "a" * 40, "h", "c" * 40, "unknown")
+    _mcp_package_at(monkeypatch, repo / "src/mousedroid/__init__.py")
+    with pytest.raises(run_review.RefusalError, match="not at the base"):
+        run_review._mcp_package_note(repo, refs, allow_in_tree=False)
+
+
+def test_a_copy_installed_in_the_interpreters_own_prefix_is_not_the_branchs(
+    repo: Path,
+    fake_sdk: _FakeSdk,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A venv that sits INSIDE the checkout holds an installed copy, not the head's source."""
+    venv = repo / ".venv"
+    monkeypatch.setattr(sys, "prefix", str(venv))
+    _mcp_package_at(monkeypatch, venv / "Lib/site-packages/mousedroid/__init__.py")
+
+    assert run_review.main(_argv(repo, "--dry-run")) == 0
+
+    assert "interpreter's own prefix" in capsys.readouterr().out
+
+
+def test_a_package_installed_outside_the_checkout_is_not_the_branchs(
+    repo: Path,
+    tmp_path: Path,
+    fake_sdk: _FakeSdk,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _mcp_package_at(monkeypatch, tmp_path / "elsewhere/mousedroid/__init__.py")
+
+    assert run_review.main(_argv(repo, "--dry-run")) == 0
+
+    assert "installed outside the checkout under review" in capsys.readouterr().out
+
+
+def test_a_missing_package_is_said_not_refused(
+    repo: Path,
+    fake_sdk: _FakeSdk,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """With no ``mousedroid`` the server cannot start; the review simply has no MCP evidence."""
+    _mcp_package_at(monkeypatch, None)
+
+    assert run_review.main(_argv(repo, "--dry-run")) == 0
+
+    assert "not importable by this interpreter" in capsys.readouterr().out
+
+
+def test_the_package_origin_is_looked_up_without_importing_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asked: list[str] = []
+    package = tmp_path / "pkg" / "__init__.py"
+
+    def find_spec(name: str) -> Any:
+        asked.append(name)
+        where = [str(package.parent)]
+        return SimpleNamespace(origin=str(package), submodule_search_locations=where)
+
+    monkeypatch.setattr(run_review.importlib.util, "find_spec", find_spec)
+    assert run_review._mcp_package_origin() == package
+    assert asked == [policy.MCP_MODULE]
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        None,
+        SimpleNamespace(origin=None, submodule_search_locations=None),
+        SimpleNamespace(origin="built-in", submodule_search_locations=None),
+        SimpleNamespace(origin=None, submodule_search_locations=[]),
+    ],
+)
+def test_the_package_origin_is_none_when_the_spec_names_no_directory(
+    spec: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(run_review.importlib.util, "find_spec", lambda _name: spec)
+    assert run_review._mcp_package_origin() is None
+
+
+def test_a_namespace_package_reports_its_first_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = SimpleNamespace(origin=None, submodule_search_locations=[str(tmp_path / "ns")])
+    monkeypatch.setattr(run_review.importlib.util, "find_spec", lambda _name: spec)
+    assert run_review._mcp_package_origin() == tmp_path / "ns"
+
+
+@pytest.mark.parametrize("error", [ImportError("x"), ValueError("y")])
+def test_a_lookup_that_raises_means_the_package_is_not_importable(
+    error: Exception, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def find_spec(_name: str) -> Any:
+        raise error
+
+    monkeypatch.setattr(run_review.importlib.util, "find_spec", find_spec)
+    assert run_review._mcp_package_origin() is None
+
+
+def test_a_path_that_cannot_be_resolved_is_not_within_anything(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(_self: Path, strict: bool = False) -> Path:
+        raise OSError("loop")
+
+    with monkeypatch.context() as patch:  # only around the call: pytest resolves paths too
+        patch.setattr(Path, "resolve", broken)
+        within = run_review._is_within(tmp_path / "a", tmp_path)
+    assert within is False
+
+
+def test_the_cli_offers_the_flag_and_defaults_it_off() -> None:
+    parser = run_review.build_parser()
+    required = ["--base", "a", "--head", "b", "--cap-usd", "1"]
+    assert parser.parse_args(required).allow_in_tree_mcp is False
+    assert parser.parse_args([*required, run_review.ALLOW_IN_TREE_MCP_FLAG]).allow_in_tree_mcp
+
+
+# --------------------------------------------------------------------------- #
 # run_review - the live path (fake SDK)
 # --------------------------------------------------------------------------- #
 def test_a_live_run_writes_the_artifact_and_one_ledger_row(
@@ -1467,7 +2073,11 @@ def test_a_live_run_writes_the_artifact_and_one_ledger_row(
     assert options.setting_sources == []
     (matcher,) = options.hooks["PreToolUse"]
     assert matcher.matcher == "Bash"
-    assert matcher.hooks == [policy.deny_non_readonly_bash]
+    (guard,) = matcher.hooks
+    assert isinstance(guard, policy.BashGuard)
+    server = options.mcp_servers["mousedroid"]
+    assert (server["command"], server["args"]) == (sys.executable, list(policy.MCP_ARGS))
+    assert options.env["GIT_LITERAL_PATHSPECS"] == "1"
     assert "R3-1" in sdk.queries[0]["prompt"]
     # One ledger row, from ResultMessage.total_cost_usd.
     (row,) = _ledger_rows(repo)
