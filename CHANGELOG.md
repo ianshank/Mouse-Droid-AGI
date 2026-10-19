@@ -8,6 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — the re-arm CLI read `default.yaml` on the production container and called a latched rover clear (F-059 task 4.7)
+
+`python -m mousedroid.cli.rearm` with no `--config` called `load_settings()` with no overlay. On the
+production container that loads `default.yaml`, where the emergency-stop latch is off, so it printed
+"no latch is in use, so there is nothing to clear" and exited `0` — indistinguishable from a rover with
+nothing latched — although compose sets `MOUSEDROID_CONFIG` and nothing in the CLI read it. It now
+resolves the overlay stack through `validation.runtime.resolve_runtime_config`, the resolver the other
+operator tools already use (`--config`, else the `MOUSEDROID_CONFIGS` / `MOUSEDROID_JETSON_CONFIGS` lists,
+else `MOUSEDROID_CONFIG` / `MOUSEDROID_JETSON_CONFIG`), logs the choice as `rearm_config_resolved`, and,
+when nothing at all names an overlay, keeps its stdout message and exit code and adds one line on stderr.
+`--config` now takes several files (list them after one flag or repeat it; a plain `nargs` would have
+kept only the last). The documented form is still an explicit `--config`; the fallback is a safety net.
+The boot hint had the same hole: `estop_latch_active_at_boot`'s `rearm_cmd` was the bare command.
+`Settings.overlay_paths` — a private attribute behind a read-only property, not a schema field, set by
+`load_settings` — now records which overlay files a process was started with, and the hint carries one
+shell-quoted `--config` per overlay; settings built directly still log the exact old string.
+
 ### Fixed — the nightly Spec Harness, red every night since 2026-09-08
 
 `validate-slow` runs `--strict-git`, which needs every `done` feature's `implemented_in` to resolve.

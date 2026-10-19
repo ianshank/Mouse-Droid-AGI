@@ -7,8 +7,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import shlex
 import time
-from typing import Any
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Any, Final
 
 from mousedroid.common.async_utils import cancel_and_drain, spawn_tracked
 from mousedroid.common.signals import install_shutdown_handlers
@@ -17,6 +20,30 @@ from mousedroid.orchestrator._state import _OrchestratorState
 from mousedroid.world_model.protocol import WarmableProtocol
 
 _log = get_logger(__name__)
+
+_REARM_COMMAND: Final[str] = "python -m mousedroid.cli.rearm"
+_REARM_GATE_FLAGS: Final[str] = "--operator <you> --confirm-area-clear"
+
+
+def _rearm_command(overlay_paths: Sequence[Path]) -> str:
+    """The re-arm command an operator should paste, naming this process's overlays.
+
+    The CLI finds the latch under ``experience.path``, which the deployed overlay sets, so
+    a command that omits the overlay can read a clear rover where there is a latched one.
+    This names every overlay ``load_settings`` merged -- from ``Settings.overlay_paths``,
+    not the environment, which can disagree with what the process was started with.
+    Paths are shell-quoted because the string is meant to be pasted into a shell.
+
+    Args:
+        overlay_paths: ``Settings.overlay_paths``; empty for settings that were built
+            directly rather than loaded.
+
+    Returns:
+        The command with one ``--config`` per overlay, or the bare command (exactly the
+        text this hint had before overlays were recorded) when there are none.
+    """
+    config_flags = [f"--config {shlex.quote(str(path))}" for path in overlay_paths]
+    return " ".join([_REARM_COMMAND, *config_flags, _REARM_GATE_FLAGS])
 
 
 class _LifecycleMixin(_OrchestratorState):
@@ -482,6 +509,11 @@ class _LifecycleMixin(_OrchestratorState):
         path is the no-motion mode**, so no new branch is needed. This is
         consistent with CHARTER section 3: a latched rover holds the
         default no-motion posture rather than leaving it.
+
+        The logged ``rearm_cmd`` names every overlay this process was started with
+        (:func:`_rearm_command`), so pasting it inspects the latch this rover is
+        holding. A bare command would load ``default.yaml`` and read "nothing to
+        clear" -- the hint reproducing the defect it exists to fix.
         """
         if self._emergency_latch is None:
             return
@@ -493,7 +525,7 @@ class _LifecycleMixin(_OrchestratorState):
             reason=record.reason,
             causes=list(record.causes),
             tripped_at_iso=record.tripped_at_iso,
-            rearm_cmd=("python -m mousedroid.cli.rearm --operator <you> --confirm-area-clear"),
+            rearm_cmd=_rearm_command(self._cfg.overlay_paths),
         )
 
     async def _persist_emergency_latch(self) -> None:

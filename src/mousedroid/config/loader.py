@@ -144,7 +144,11 @@ def load_settings(
         if k.upper().startswith(env_prefix) and "__" in k[len(env_prefix) :] and not v.strip()
     ]
     with _ScopedEnvUnset(empty_nested):
-        return Settings(**merged)
+        settings = Settings(**merged)
+    # Provenance for the operator-facing hints (e.g. the e-stop latch's re-arm command):
+    # only after construction succeeded, so a failed load never records a stack.
+    settings.record_overlay_paths(overlay_paths)
+    return settings
 
 
 class _ScopedEnvUnset:
