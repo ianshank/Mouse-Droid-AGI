@@ -52,7 +52,9 @@ records the audit JSON's sha256 and the vulture version. It deletes nothing and 
 `--cap-usd` or the workstream's cap, counting batches already submitted but not yet collected, and it
 creates the batch once with the SDK's automatic retry off, because a retried create would be a second
 batch. A file name matching `credit.batch_triage.refuse_globs` (`*.env`, `docker.env*`, ...), a path
-outside the repository, and any excerpt shaped like a credential are refused before a request is built.
+outside the repository, and any excerpt shaped like a credential are refused before a request is built,
+and an audit JSON that looks older than the checkout (a symbol no longer near its recorded line) is
+warned about before anything is spent.
 `collect` waits for `processing_status == "ended"`, joins results to requests by `custom_id` and never
 by position, validates every answer against the same schema it asked for, turns anything it cannot
 trust into `verify` with the reason, and appends one ledger row with the real token usage, once. Run it
