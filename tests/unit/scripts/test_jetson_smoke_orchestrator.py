@@ -406,6 +406,8 @@ def test_multi_config_csv_does_not_break_system_subcommand(tmp_path: Path) -> No
 # F-059: the motor/power stages stack the bench ESP32 overlay
 # ---------------------------------------------------------------------------
 
+# One stub serves both stages: test_motor greps the two PASSED lines, test_power only
+# checks pytest's exit status, and the stub exits 0.
 _STUB_PYTHON = """#!/usr/bin/env bash
 if [[ "$1" == "-m" && "$2" == "pytest" && "$3" == "--version" ]]; then echo "pytest 0"; exit 0; fi
 printf '%s\\n' "${MOUSEDROID_JETSON_CONFIGS:-}" >> "${SMOKE_STUB_CAPTURE}"
@@ -428,24 +430,69 @@ _PROD = f"{_REPO_ROOT}/config/jetson_production.yaml"
         ),
         (f"{_PROD},{_BENCH}", {}, f"{_PROD},{_BENCH}"),  # no double append
         (_PROD, {"MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY": ""}, _PROD),  # set-but-empty opts out
+        # The singular var is the base when the CSV is empty (parity with the Python loaders) ...
+        (
+            "",
+            {"MOUSEDROID_JETSON_CONFIG": "/etc/mousedroid/single.yaml"},
+            f"/etc/mousedroid/single.yaml,{_BENCH}",
+        ),
+        # ... and the CSV wins when both are set (same precedence as tests/_jetson_hardware.py).
+        (
+            "/etc/mousedroid/a.yaml",
+            {"MOUSEDROID_JETSON_CONFIG": "/etc/mousedroid/single.yaml"},
+            f"/etc/mousedroid/a.yaml,{_BENCH}",
+        ),
+        # Any other value of the override var is that file.
+        (
+            _PROD,
+            {"MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY": "/etc/mousedroid/other.yaml"},
+            f"{_PROD},/etc/mousedroid/other.yaml",
+        ),
+        # The opt-out still resolves a base when no CSV is given.
+        ("", {"MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY": ""}, _PROD),
+    ],
+    ids=[
+        "default-base",
+        "csv-appended",
+        "already-stacked",
+        "opt-out",
+        "singular-base",
+        "csv-beats-singular",
+        "override-path",
+        "opt-out-empty-csv",
     ],
 )
-def test_motor_stage_stacks_the_bench_esp32_overlay(
-    tmp_path: Path, given: str, extra: dict[str, str], expected: str
+@pytest.mark.parametrize(
+    ("stage", "pass_line", "stage_env"),
+    [
+        ("motor", "PASS: motor loopback smoke", {"MOUSEDROID_SMOKE_ALLOW_MOTION": "1"}),
+        ("power", "PASS: power chain smoke", {}),
+    ],
+    ids=["motor", "power"],
+)
+def test_esp32_stages_stack_the_bench_overlay(
+    tmp_path: Path,
+    stage: str,
+    pass_line: str,
+    stage_env: dict[str, str],
+    given: str,
+    extra: dict[str, str],
+    expected: str,
 ) -> None:
+    """Both ESP32-owned stages hand pytest the config stack plus the bench overlay, once."""
     stub = tmp_path / "python"
     stub.write_text(_STUB_PYTHON, encoding="utf-8")
     stub.chmod(0o755)
     capture = tmp_path / "configs.txt"
     result = _run_smoke(
-        "motor",
+        stage,
         env_extra={
             "MOUSEDROID_SMOKE_PYTHON": str(stub),
             "SMOKE_STUB_CAPTURE": str(capture),
-            "MOUSEDROID_SMOKE_ALLOW_MOTION": "1",
             "MOUSEDROID_JETSON_CONFIGS": given,
+            **stage_env,
             **extra,
         },
     )
-    assert "PASS: motor loopback smoke" in result.stdout, result.stdout
+    assert pass_line in result.stdout, result.stdout
     assert capture.read_text(encoding="utf-8").splitlines() == [expected]

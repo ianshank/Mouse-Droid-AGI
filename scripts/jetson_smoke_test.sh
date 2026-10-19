@@ -24,8 +24,9 @@
 #       factory then builds MockESP32Driver), so without the overlay they would
 #       measure a mock. The orchestrator's own stack is untouched.
 #         unset       -> <repo>/config/jetson_bench_esp32.yaml
-#         set, empty  -> no stacking (the no-chassis checkpoint uses this)
+#         set, empty  -> no stacking
 #         <path>      -> that file
+#       Set it empty for a bring-up run with no chassis attached (health only).
 #       The `pytest` stage never stacks it: the whole hardware suite stays on the
 #       orchestrator's stack, because enabling the board there would open the
 #       serial port for every module.
@@ -57,15 +58,18 @@ if [[ -n "${CONFIGS_CSV}" ]]; then
     done
 fi
 
-# F-059: unset -> repo default overlay; set-but-empty -> no stacking (opt-out
-# for the no-chassis checkpoint); otherwise that file.
+# F-059: unset -> repo default overlay; set-but-empty -> no stacking; otherwise
+# that file. Empty is the opt-out for a bring-up run with no chassis attached (health only).
 BENCH_ESP32_OVERLAY="${MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY-${PROJECT_DIR}/config/jetson_bench_esp32.yaml}"
 
 # Prints the config CSV the ESP32-owned stages (motor, power) pass as
 # MOUSEDROID_JETSON_CONFIGS: the orchestrator's stack with the bench overlay
-# appended once. printf '%s' (no newline) so $(...) captures it exactly.
+# appended once. The base resolves in the order the Python loaders use
+# (tests/_jetson_hardware.py): MOUSEDROID_JETSON_CONFIGS, else the singular
+# MOUSEDROID_JETSON_CONFIG, else <repo>/config/jetson_production.yaml.
+# printf '%s' (not echo) so no trailing newline lands in the CSV.
 esp32_stage_configs_csv() {
-    local base="${CONFIGS_CSV:-${PROJECT_DIR}/config/jetson_production.yaml}"
+    local base="${CONFIGS_CSV:-${MOUSEDROID_JETSON_CONFIG:-${PROJECT_DIR}/config/jetson_production.yaml}}"
     if [[ -z "${BENCH_ESP32_OVERLAY}" ]]; then printf '%s' "${base}"; return; fi
     case ",${base}," in
         *",${BENCH_ESP32_OVERLAY},"*) printf '%s' "${base}" ;;

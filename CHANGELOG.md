@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — Smoke motor/power stages test the board, not the mock
+
+`config/jetson_production.yaml` ships `esp32.enabled: false`, so the `motor` and `power` stages of
+`scripts/jetson_smoke_test.sh` resolved `MockESP32Driver` and could pass with no board attached
+(F-059). They now stack a new one-key overlay, `config/jetson_bench_esp32.yaml`
+(`esp32.enabled: true`), onto the config stack they were given, through the new
+`esp32_stage_configs_csv` function: the base is `MOUSEDROID_JETSON_CONFIGS`, else
+`MOUSEDROID_JETSON_CONFIG`, else `config/jetson_production.yaml` — the order the Python loaders use —
+and the overlay is appended once. `MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY` selects it: unset uses the
+default file, set-but-empty opts out (for a run with no chassis attached) and any other value is that
+file. The `pytest` stage and the orchestrator's own stack are untouched, so `esp32.enabled` stays
+`false` there until F-008 is done, and the overlay never opens the Pydantic motion gate:
+`esp32.smoke_test_allow_motion` stays `false`, and a regression test pins that the overlay is exactly
+one key. **Operator-visible:** on a dead board these two stages now fail where they used to pass
+against the mock; `scripts/jetson_full_validation.sh` records them as non-blocking warnings.
+
 ### Fixed — the nightly Spec Harness, red every night since 2026-09-08
 
 `validate-slow` runs `--strict-git`, which needs every `done` feature's `implemented_in` to resolve.
