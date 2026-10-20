@@ -201,6 +201,44 @@ def _missing_scanner(_text: str) -> ScanOutcome:
     return ScanOutcome(clean=True, available=False, detail="'gitleaks' not found on PATH")
 
 
+# --------------------------------------------------------------------------- #
+# Fake secrets, assembled when a test runs
+# --------------------------------------------------------------------------- #
+_FAKE_BODY = "AB3DE5FG7H"  # upper case and digits fit every character class the tool tests use
+
+
+def _fake_secret(prefix: str, length: int) -> str:
+    """``prefix`` followed by ``length`` throw-away characters, assembled when the test runs.
+
+    The tool's screen reads the text it is given, so its refusal tests need credential-shaped
+    text in the source files they write. Spelled out in THIS file that text would also be
+    found by the repository's secret scan (gitleaks reads the file, never the value), so no
+    fake secret is written down here: each test names a prefix and a length.
+    """
+    return prefix + (_FAKE_BODY * (length // len(_FAKE_BODY) + 1))[:length]
+
+
+def _assigned(name: str, length: int = 16, *, sep: str = " = ") -> str:
+    """``name = "<fake value>"``: an assignment of a made-up secret."""
+    return f'{name}{sep}"{_fake_secret("", length)}"'
+
+
+def _json_pair(key: str, length: int = 16) -> str:
+    """``{"key": "<fake value>"}``."""
+    return '{"' + key + '": "' + _fake_secret("", length) + '"}'
+
+
+def _pem_header(kind: str, *, block: bool = False) -> str:
+    """A private-key header, with the dashes kept out of the source text."""
+    dashes = "-" * 5
+    return f"{dashes}BEGIN {kind} PRIVATE KEY{' BLOCK' if block else ''}{dashes}"
+
+
+def _fake_jwt() -> str:
+    """Three dot-separated segments in the shape of a JSON Web Token."""
+    return ".".join([_fake_secret("eyJ", 17), _fake_secret("eyJ", 17), _fake_secret("", 26)])
+
+
 class _Batches:
     """``client.messages.batches``: records ``create``, replays statuses and results."""
 
@@ -919,38 +957,37 @@ def test_prompt_builder_refuses_a_link_that_leaves_the_repository(
 @pytest.mark.parametrize(
     "secret",
     [
-        "sk-ant-" + "a1B2c3D4" * 5,
-        "hf_" + "aB3dE5fG7h" * 4,
-        "AKIA" + "ABCDEFGHIJKLMNOP",
-        "ghp_" + "aB3dE5fG7h" * 4,
-        "-----BEGIN RSA " + "PRIVATE KEY-----",
-        "xoxb-" + "1234567890-abcdefghij",
+        pytest.param(_fake_secret("sk-ant-", 40), id="anthropic-key"),
+        pytest.param(_fake_secret("hf_", 40), id="hugging-face-token"),
+        pytest.param(_fake_secret("AKIA", 16), id="aws-access-key-id"),
+        pytest.param(_fake_secret("ghp_", 40), id="github-token"),
+        pytest.param(_pem_header("RSA"), id="private-key-block"),
+        pytest.param(_fake_secret("xoxb-", 20), id="slack-token"),
         # what the second review found the floor missing: prefixed names, annotations, dict keys
-        "db_pass" + "word = " + '"hunter2hunter2"',
-        "API_TO" + "KEN = " + '"abcd1234efgh5678"',
-        "aws_secret_access_" + "key = " + '"wJalrXUtnFEMI/K7MDENG/bPx"',
-        "pass" + "word: str = " + '"hunter2hunter2"',
-        '{"pass' + 'word": "hunter2hunter2"}',
-        'headers = {"x-api-' + 'key": "abcd1234efgh5678ijkl"}',
-        "to" + "ken = " + '"abcdef"',  # six characters is the shortest value that counts
-        "pass" + "wd = " + '"hunter2hunter2"',
-        "private_" + "key = " + '"abcd1234efgh5678"',
-        "api" + "key = " + '"abcd1234efgh5678"',
-        "-----BEGIN PGP " + "PRIVATE KEY BLOCK-----",
-        "eyJ"
-        + "hbGciOiJIUzI1NiJ9."
-        + "eyJzdWIiOiIxMjM0NTY3ODkwIn0."
-        + "abcdefghijklmnopqrstuvwxyz",
-        "Bear" + "er " + "abcd1234efgh5678ijklmnop",
-        "Bear" + "er " + "abcdefghij0123456789",  # twenty characters is the shortest
-        "authorization: bear" + "er abcd1234efgh5678ijklmnop",  # the scheme is case-insensitive
-        "client_" + "secret = " + '"abcd1234efgh5678"',
+        pytest.param(_assigned("db_password"), id="prefixed-password"),
+        pytest.param(_assigned("API_TOKEN"), id="upper-case-token"),
+        pytest.param(_assigned("aws_secret_access_key", 26), id="aws-secret-access-key"),
+        pytest.param(_assigned("password: str"), id="annotated-password"),
+        pytest.param(_json_pair("password"), id="json-password"),
+        pytest.param("headers = " + _json_pair("x-api-key", 20), id="header-dict"),
+        pytest.param(_assigned("token", 6), id="six-characters"),  # the shortest value that counts
+        pytest.param(_assigned("passwd"), id="passwd"),
+        pytest.param(_assigned("private_key"), id="private-key-name"),
+        pytest.param(_assigned("apikey"), id="apikey"),
+        pytest.param(_pem_header("PGP", block=True), id="pgp-block"),
+        pytest.param(_fake_jwt(), id="jwt"),
+        pytest.param(_fake_secret("Bearer ", 24), id="bearer"),
+        pytest.param(_fake_secret("Bearer ", 20), id="bearer-twenty"),  # twenty is the shortest
+        pytest.param("authorization: bearer " + _fake_secret("", 24), id="bearer-lower-case"),
+        pytest.param(_assigned("client_secret"), id="client-secret"),
         # the shapes the first review found passing with no repository scanner installed
-        "AIza" + "a1B2c3D4e5" * 3 + "a1B2c",
-        "github_pat_" + "aB3dE5fG7h" * 3,
-        "sk-proj-" + "aB3dE5fG7h" * 4,
-        "postgres://app:" + "s3cretPw9" + "@db.internal:5432/app",
-        "PASS" + "WORD=" + '"' + "hunter2hunter2" + '"',
+        pytest.param(_fake_secret("AIza", 35), id="google-key"),
+        pytest.param(_fake_secret("github_pat_", 30), id="github-fine-grained"),
+        pytest.param(_fake_secret("sk-proj-", 40), id="openai-project-key"),
+        pytest.param(
+            f"postgres://app:{_fake_secret('', 9)}@db.internal:5432/app", id="database-url"
+        ),
+        pytest.param(_assigned("PASSWORD", 14, sep="="), id="upper-case-assignment"),
     ],
 )
 def test_prompt_builder_refuses_source_that_contains_a_credential(repo: Path, secret: str) -> None:
@@ -973,14 +1010,13 @@ def test_a_credential_shape_is_refused_at_its_shortest_length_and_not_one_below(
     repo: Path, prefix: str, least: int
 ) -> None:
     """Pin both edges: a floor that is too high leaks the key, one too low blocks real code."""
-    body = "aB3dE5fG7h" * 5
     target = f"{_SRC}/alpha/edge.py"
     finding = _finding(target, 1, "f")
-    _write(repo, target, f"def f():\n    return '{prefix}{body[:least]}'\n")
+    _write(repo, target, f"def f():\n    return '{_fake_secret(prefix, least)}'\n")
     with pytest.raises(triage.RefusedFileError):
         triage.build_request(f"{_SRC}/alpha", [finding], repo)
 
-    _write(repo, target, f"def f():\n    return '{prefix}{body[: least - 1]}'\n")
+    _write(repo, target, f"def f():\n    return '{_fake_secret(prefix, least - 1)}'\n")
     triage.build_request(f"{_SRC}/alpha", [finding], repo)
 
 
@@ -1001,7 +1037,7 @@ def test_documented_url_and_assignment_placeholders_are_not_mistaken_for_credent
         "# the redaction docs use short ones too: ``http://u:pw@host/db``\n"
         'token = "short"\napi_key_env: str = "ANTHROPIC_API_KEY"\n'
         'label = dict(api_key_source="config")\npassword: str = ""\n'
-        "# Authorization: Bearer <token>, or Bearer abcdefghij012345678 (nineteen)\nx = 1\n",
+        f"# Authorization: Bearer <token>, or Bearer {_fake_secret('', 19)} (nineteen)\nx = 1\n",
     )
     finding = _finding(f"{_SRC}/alpha/doc2.py", 8, "x", "variable")
     triage.build_request(f"{_SRC}/alpha", [finding], repo)
@@ -1279,9 +1315,7 @@ def test_submit_refuses_an_unpriced_model_before_any_call(repo: Path) -> None:
 
 
 def test_submit_refuses_a_credential_in_the_source_before_any_call(repo: Path) -> None:
-    _write(
-        repo, f"{_SRC}/gamma.py", "value = '" + "sk-ant-" + "a1B2c3D4" * 5 + "'\n" + "x = 1\n" * 10
-    )
+    _write(repo, f"{_SRC}/gamma.py", f"value = '{_fake_secret('sk-ant-', 40)}'\n" + "x = 1\n" * 10)
     client = MagicMock()
     with pytest.raises(triage.RefusedFileError):
         triage.submit(
