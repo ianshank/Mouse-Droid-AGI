@@ -190,3 +190,6 @@ credit:
 agent_reviewer:
     model: opus
     max_turns: 40
+    # A run whose system and task prompts together pass this many characters is refused
+    # before any spend (a sanity bound on what leaves the machine; about 50k tokens).
+    max_prompt_chars: 200000

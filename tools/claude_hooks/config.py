@@ -518,6 +518,16 @@ class AgentReviewerConfig(BaseModel):
             "work and spend; this bounds a stalled connection."
         ),
     )
+    max_prompt_chars: int = Field(
+        default=200_000,
+        ge=1_000,
+        description=(
+            "Refuse a run whose system and task prompts together are longer than this many "
+            "characters, before any spend. The agent file comes from the base ref, so this is "
+            "a sanity bound on what leaves the machine, not a defence; the default is "
+            "generous (about 50k tokens)."
+        ),
+    )
 
     @field_validator("agent_file", "mcp_config", "artifact_dir")
     @classmethod

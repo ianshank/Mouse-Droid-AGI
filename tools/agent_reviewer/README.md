@@ -29,7 +29,27 @@ head controls may reach an exec sink, a process that holds the key, or the revie
   to print an object whatever its path.
 - **`git` and `gitleaks` are found in absolute `PATH` directories only.** Windows (and `shutil.which`) try the
   working directory first, so a `git.exe` committed to the head would otherwise run with the key in its
-  environment. The CLI is told `NoDefaultCurrentDirectoryInExePath=1` for the programs it starts.
+  environment. The CLI is told `NoDefaultCurrentDirectoryInExePath=1` for the programs it starts. For the
+  programs the *CLI* looks up by bare name there is no such switch to rely on alone, so a run is also refused
+  before any spend when the head (or the checkout) tracks a file in its root named like one of them - `git`,
+  `bash`, `sh`, `claude`, `rg`, `node`, `npm`, `npx`, `gitleaks`, `cmd`, `powershell`, `pwsh`, `python*` - with
+  any Windows executable extension (`.exe`, `.cmd`, `.bat`, ...).
+- **Reads stay inside the checkout.** A second PreToolUse hook (`policy.ReadGuard`, matcher `Read|Grep|Glob`)
+  resolves the path the tool would open with `os.path.realpath` - which follows symlinks and junctions and
+  expands Windows 8.3 short names - and requires the result to be inside the checkout under review. It also
+  refuses `.git` internals (use `git show`), secret-file names *after* the link is followed, paths the shell
+  would expand (`~`, `$VAR`, `%VAR%`), NTFS data streams (`::$DATA`) and globs that are absolute, climb out or
+  could match a secret-file name. Your shell profile (where keys get exported), other worktrees and
+  `~/.claude/projects` transcripts are therefore out of reach. It fails closed, like the Bash guard.
+- **The reviewer's own `git` and `gitleaks` run without any credential variable** (`ANTHROPIC_API_KEY`,
+  `*_API_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, ...): they read repository objects and scan text, and only
+  the CLI needs the key.
+- **The spend ledger is the controller's, not the head's.** It lives in the checkout the reviewer's own code runs
+  from (override with `--ledger-root DIR`), is refused if it is a symbolic link or resolves outside that
+  checkout, and the spend the cap sees is `max(the file, what the base ref's committed copy records)`: a head
+  cannot delete rows to widen the cap. The cap is **per workstream**, not per head worktree - every review
+  charges the same ledger. (Run from the head's own checkout with `--trust-checkout` and the controller's checkout
+  *is* the head's; the base's committed copy still floors the total.)
 - **The code that runs beside the key must not be the branch's.** That is the reviewer's own modules
   (`tools/agent_reviewer`), the interpreter's environment (its `site-packages` and `.pth` files run at startup,
   even under `-I`) and the `mousedroid` package the MCP server imports (the checkout's own source under an
@@ -41,10 +61,10 @@ head controls may reach an exec sink, a process that holds the key, or the revie
 
 | Surface | Allowed |
 |---|---|
-| Files | `Read`, `Grep`, `Glob` anywhere the user can read, **except** `*.env`, `docker.env*` and the usual credential directories (deny rules) |
-| Shell | `git diff`, `git log`, `git show` - one plain command: no pipes, redirection, chaining, substitution, variables or unquoted globs. Commits are the two full ids pinned in the task, with `^`, `^N` or `~N` (`A..B` ranges too): not `HEAD`, a branch, an abbreviation or a blob id. Option values are attached (`-n5`, `--grep=text`). Pathspecs go after `--` and are literal. `git show <commit>:<path>` names only a file tracked at the base (read a file the change adds from the diff). No `--all`, `--reflog`, `--branches`, `--remotes`, `--raw`, `--abbrev`, `--output`, `--no-index` |
+| Files | `Read`, `Grep`, `Glob` **inside the checkout under review only** (`ReadGuard`), and not `.git`, `*.env`, `docker.env*`; the CLI's deny rules cover the usual credential directories too |
+| Shell | `git diff`, `git log`, `git show` - one plain command: no pipes, redirection, chaining, substitution, variables or unquoted globs. Commits are the two full ids pinned in the task, with `^`, `^N` or `~N` (`A..B` ranges too): not `HEAD`, a branch, an abbreviation or a blob id. Option values are attached (`-n5`, `--grep=text`). Pathspecs go after `--` and are literal. `git show <commit>:<path>` names only a file tracked at the base (read a file the change adds from the diff). No `--all`, `--reflog`, `--branches`, `--remotes`, `--raw`, `--abbrev`, `--output`, `--no-index`, and no short option bundle that contains a capital `O` (`-O<file>` reads a file; so does `-pO<file>`) |
 | MCP | `system_info`, `lidar_diagnostics`, `esp32_diagnostics` of the mock-hardware `mousedroid` server |
-| Writes | none by the agent. The runner writes one review under `reports/agent_reviewer/<date>/wsb-NNNN.md` and one row in `reports/credit/ledger.jsonl` (paths from the base's `workforce.yaml`) |
+| Writes | none by the agent. The runner writes one review under `reports/agent_reviewer/<date>/wsb-NNNN.md` in the checkout under review and one row in `reports/credit/ledger.jsonl` of the **controller's** checkout (paths from the base's `workforce.yaml`) |
 | Network | the Anthropic API, through the SDK's bundled Claude Code CLI, plus one free `models.retrieve` lookup |
 
 ## What it never does
@@ -70,13 +90,16 @@ the old key.
    the virtualenv:
 
    ```bash
-   git worktree add ../reviewer-code <trusted-commit>   # a commit YOU trust that has this tool
-   git worktree add ../review-head <head-branch>        # the head under review (Read/Grep see it)
+   git worktree add --detach ../reviewer-code <trusted-commit>   # a commit YOU trust that has this tool
+   git worktree add --detach ../review-head <head-sha>           # the head under review (Read/Grep see it)
    uv venv ../reviewer-venv
    uv pip install --native-tls --python ../reviewer-venv/Scripts/python.exe \
        "../reviewer-code[agent_reviewer,anthropic,mcp]"  # NOT editable: mousedroid from the trusted code
    ```
 
+   `--detach` with the head's commit id (`git rev-parse <head-branch>`) always works: `git worktree add` refuses
+   a branch that is checked out in another worktree, which the head branch usually is. A fresh detached worktree
+   also holds nothing but tracked files - no untracked secrets for `Grep` to find.
    `<trusted-commit>` is today the tip of this PR's branch (or any commit you have read), and trunk once the tool
    is merged; it need not be the review's base. (`anthropic` is optional: without it the model alias is passed to
    the CLI unresolved and the row says `resolved_via: config`.) Nothing the head controls is then the reviewer's
@@ -98,17 +121,21 @@ the old key.
        --cap-usd 10 --opening "R3-1,R3-2,R3-3,R3-4" --dry-run
    ```
 
-   Read the `workforce_config:`, `trust_controller:`, `trust_interpreter:` and `trust_package:` lines of the plan
-   before a live run. A refusal that talks about code inside this checkout means step 1 is not satisfied yet.
+   Read the `workforce_config:`, `ledger:`, `ledger_floor:`, `trust_controller:`, `trust_interpreter:` and
+   `trust_package:` lines of the plan before a live run. A refusal that talks about code inside this checkout means step 1 is not satisfied yet.
 4. Run it: the same command without `--dry-run`. `--cap-usd` is this run's budget: it must fit in what is
    left of the workstream cap (`credit.caps_usd.B` in the base's `workforce.yaml`), and the SDK stops the run at
    it. The base ref must therefore carry the `credit:` block (and `agent_reviewer:`, the agent file, `.mcp.json`
    and `config/default.yaml`): a base without `workforce.yaml` gets the schema defaults, which cap nothing and so
-   refuse to spend. Consider a first run with a small cap (for example `--cap-usd 1`) to see the tool surface work
+   refuse to spend. Until PR-M (the `credit:` block and the ledger) is merged into the base you review against,
+   the dry run therefore exits 3 ("no spend cap is configured for workstream 'B'"): review against a base
+   that has it. Consider a first run with a small cap (for example `--cap-usd 1`) to see the tool surface work
    before spending $10.
-5. Read the artifact and the new row of `reports/credit/ledger.jsonl` (both under `../review-head`; the run prints
-   them), compare the cost with the console, and commit them on the head branch. Do not run the head's own
-   `tools/credit_ledger.py` while the key is exported.
+5. Read the artifact (under `../review-head`) and the new row of `reports/credit/ledger.jsonl` (under
+   `../reviewer-code`, the controller's checkout; the run prints both), compare the cost with the console, and
+   commit the artifact on the head branch and the row where the ledger is tracked. Until the row is committed it
+   counts from the controller's file only, so a second controller checkout would not see it. Do not run the
+   head's own `tools/credit_ledger.py` while the key is exported.
 
 ## How a run is costed and recorded
 
@@ -129,15 +156,25 @@ Exit codes: `0` reviewed and recorded; `1` the review did not succeed, or its le
 interrupted. Statuses: `ok`, `error_max_turns`, `error_max_budget_usd`, `error_during_execution`, `error_api`,
 `error`, `error:<ExceptionType>`, `timeout`, `interrupted`, `output_withheld`.
 
-`max_turns`, the model alias, the caps and the ledger path live in `.claude/workforce.yaml`
-(`agent_reviewer:` and `credit:`), never in code - and are read from the base ref.
+The workstream cap is shared: it is **per workstream (`B`), not per head worktree**. Reviews of different heads
+from the same controller checkout all charge the one ledger there. The spend the pre-check sees is the larger of
+that file's sum and the sum in the base ref's committed copy of the ledger (`ledger_floor:` in the plan), so a file
+that lost rows - a stale checkout, a head that deleted them - cannot widen the cap below what the base records.
+
+`max_turns`, `max_prompt_chars` (a run whose system and task prompts together pass it is refused before any
+spend), the model alias, the caps and the ledger path live in `.claude/workforce.yaml` (`agent_reviewer:` and
+`credit:`), never in code - and are read from the base ref.
 
 ## Known limits
 
-- `Read` is not confined to the repository. The deny rules cover env files and credential directories; run the
-  review from an account that holds nothing it should not read. They are matches on the path as written, so other
-  spellings of the same file (Windows 8.3 short names, `::$DATA` streams, a symlink the head commits) are not
-  enumerated.
+- `Read`, `Grep` and `Glob` are confined to the checkout by `ReadGuard`, which resolves symlinks, junctions and
+  short names before it judges a path. INSIDE the checkout, a `Grep` over a directory can still print lines of a
+  secret file whose name neither the CLI's deny rules nor the guard recognise, and a glob is screened by its
+  spelling (`*.env`, `.env*`, `*.{env,py}`), not proven: a head that *tracks* a secret has it in the diff anyway.
+  Review from a checkout that holds no real secrets - a fresh `git worktree add --detach` has none.
+- A short option bundle containing a capital `O` is refused wherever it sits (`-pO<file>`), so a pickaxe or regex
+  string whose leading letters include one (`-SOrange`, `-GFOO`) is refused too: search for the lower-case part,
+  or use `Grep` on the checkout.
 - The Bash guard is a whitelist over a small character set, not a shell parser; it fails closed. `git log -p` over the
   pinned revisions shows every file those commits touched, including a secret committed in the past and still
   reachable; env files are gitignored and CI scans history.
@@ -150,9 +187,13 @@ interrupted. Statuses: `ok`, `error_max_turns`, `error_max_budget_usd`, `error_d
   because the CLI ties it to forcing the permission mode down and to a subprocess sandbox, neither of which can be
   rehearsed without spending. Try it on the first small-cap run if you want the extra layer.
 - The base ref is trusted: if it is itself compromised, so is everything above. The ledger file is the exception to
-  "read from the base" - it is the spend history, so it is read from the checkout. A hostile head can edit its rows, so
-  the cumulative workstream cap is a guard against your own mistakes; the per-run `--cap-usd` (also the SDK's hard stop)
-  bounds each run whatever the ledger says.
+  "read from the base" - it is the spend history, so it is read from the controller's checkout, which the head cannot
+  edit, and floored by the base's committed copy. Whoever can write to the controller's checkout, or a base whose
+  committed ledger is stale, still decides the cumulative total: it is a guard against your own mistakes, and the
+  per-run `--cap-usd` (also the SDK's hard stop) bounds each run whatever the ledger says.
+- The egress secret screen (credential-shape patterns, gitleaks over the text that leaves the machine, strict mode)
+  is implemented here (`prompt.py`) and again in PR-O's batch tool (`tools/dead_code_triage_batch.py`). One shared
+  helper is a follow-up once both are merged.
 - `git` runs with your own git configuration. A diff or text-conversion driver you have defined globally
   and that a head's `.gitattributes` names would run; the guard refuses `--ext-diff` and `--textconv`
   but git applies configured drivers by default.

@@ -537,6 +537,7 @@ def test_agent_reviewer_defaults(tmp_path: Path) -> None:
     assert reviewer.artifact_dir == "reports/agent_reviewer"
     assert reviewer.resolve_timeout_s > 0
     assert reviewer.run_timeout_s > 0
+    assert reviewer.max_prompt_chars == 200_000
 
 
 def test_agent_reviewer_block_round_trips(tmp_path: Path) -> None:
@@ -550,7 +551,8 @@ def test_agent_reviewer_block_round_trips(tmp_path: Path) -> None:
         "    mcp_config: cfg/mcp.json\n"
         "    artifact_dir: out/reviews\n"
         "    resolve_timeout_s: 3.5\n"
-        "    run_timeout_s: 90\n",
+        "    run_timeout_s: 90\n"
+        "    max_prompt_chars: 5000\n",
     )
     reviewer = load_config(repo_root=tmp_path).agent_reviewer
     assert (reviewer.ws, reviewer.model, reviewer.max_turns) == ("C", "sonnet", 7)
@@ -559,6 +561,7 @@ def test_agent_reviewer_block_round_trips(tmp_path: Path) -> None:
     assert reviewer.artifact_dir == "out/reviews"
     assert reviewer.resolve_timeout_s == 3.5
     assert reviewer.run_timeout_s == 90.0
+    assert reviewer.max_prompt_chars == 5000
 
 
 def test_agent_reviewer_partial_block_keeps_the_other_defaults(tmp_path: Path) -> None:
@@ -640,6 +643,21 @@ def test_agent_reviewer_timeouts_must_be_positive_and_finite(
         load_config(repo_root=tmp_path)
 
 
+@pytest.mark.parametrize("value", ["999", "0", "-1", "1.5", "'many'", "true"])
+def test_agent_reviewer_max_prompt_chars_must_be_a_sane_whole_number(
+    tmp_path: Path, value: str
+) -> None:
+    """Below 1000 no real prompt fits; a bool or a fraction is not a length."""
+    _write_config(tmp_path, f"agent_reviewer:\n    max_prompt_chars: {value}\n")
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+def test_agent_reviewer_max_prompt_chars_accepts_its_lower_bound(tmp_path: Path) -> None:
+    _write_config(tmp_path, "agent_reviewer:\n    max_prompt_chars: 1000\n")
+    assert load_config(repo_root=tmp_path).agent_reviewer.max_prompt_chars == 1000
+
+
 def test_repo_config_declares_the_agent_reviewer_block() -> None:
     """The checked-in workforce.yaml states the reviewer's turn cap and model alias."""
     repo_root = Path(__file__).resolve().parents[4]
@@ -648,3 +666,4 @@ def test_repo_config_declares_the_agent_reviewer_block() -> None:
     reviewer = load_config(repo_root=repo_root).agent_reviewer
     assert reviewer.max_turns == 40
     assert reviewer.model == "opus"
+    assert reviewer.max_prompt_chars == 200_000

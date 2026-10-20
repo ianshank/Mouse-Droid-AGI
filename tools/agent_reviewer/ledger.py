@@ -1,7 +1,13 @@
 """A thin adapter between the reviewer and ``tools/credit_ledger.py`` (F-059 WS-B / WS-D).
 
+* :func:`locate` - where the ledger file is, and the refusal to use one that is not where
+  it must be: the spend history lives in the CONTROLLER's (trusted) checkout, never in the
+  head under review, and is never a symbolic link or a path that leaves that checkout.
 * :func:`precheck` - ``credit_ledger.charge`` for the reviewer's workstream, called
-  BEFORE the SDK is touched. It reads the ledger and never writes it.
+  BEFORE the SDK is touched. It reads the ledger and never writes it. The spend it finds
+  is floored by what the BASE ref's committed copy of the ledger records, so a ledger that
+  lost rows (a head that deleted them, a stale checkout) cannot widen the cap. The cap is
+  per workstream, not per head worktree: every review charges the same ledger.
 * :func:`account_run` - turns what a run produced (or failed to produce) into the
   numbers and the status that go in the row.
 * :func:`record_run` - ``credit_ledger.record`` with those numbers.
@@ -44,12 +50,14 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
 from tools import credit_ledger
+from tools.agent_reviewer import policy
 from tools.claude_hooks.config import WorkforceConfig
 
 COST_SOURCE_SDK: Final = "ResultMessage.total_cost_usd"
@@ -67,6 +75,10 @@ STATUS_OUTPUT_WITHHELD: Final = "output_withheld"
 _RESULT_SUCCESS: Final = "success"
 _CRASH_SUBTYPE: Final = "error_during_execution"
 _TERMINAL_API_ERROR: Final = "api_error"
+
+
+class LedgerLocationError(credit_ledger.LedgerError):
+    """The spend ledger is not where it must be (a symlink, or outside its root)."""
 
 
 class LedgerWriteError(RuntimeError):
@@ -95,18 +107,67 @@ class RunAccounting:
     status: str
 
 
-def precheck(cfg: WorkforceConfig, cap_usd: float, *, repo_root: Path) -> credit_ledger.Headroom:
+def locate(cfg: WorkforceConfig, ledger_root: Path) -> Path:
+    """Return the ledger file under ``ledger_root``, or refuse to use it.
+
+    The spend history belongs to the controller's checkout, whose files the head under
+    review cannot touch. A ledger that is a symbolic link, or whose real path leaves the
+    root, would let something else decide what was spent.
+
+    Raises:
+        LedgerLocationError: The root is not a directory, the ledger is a symbolic link,
+            or it resolves outside the root.
+    """
+    if not ledger_root.is_dir():
+        raise LedgerLocationError(f"the ledger root {ledger_root} is not a directory")
+    path = ledger_root / cfg.credit.ledger
+    if path.is_symlink():
+        raise LedgerLocationError(f"the spend ledger {path} is a symbolic link; refusing to use it")
+    if not policy.path_is_inside(os.path.realpath(path), os.path.realpath(ledger_root)):
+        raise LedgerLocationError(f"the spend ledger {path} resolves outside {ledger_root}")
+    return path
+
+
+def _floor_of(cfg: WorkforceConfig, floor_text: str | None, floor_source: str) -> float:
+    """What the trusted copy of the ledger records for the reviewer's workstream."""
+    if floor_text is None:
+        return 0.0
+    return credit_ledger.spent_usd_in_text(cfg.agent_reviewer.ws, floor_text, source=floor_source)
+
+
+def precheck(
+    cfg: WorkforceConfig,
+    cap_usd: float,
+    *,
+    ledger_root: Path,
+    floor_text: str | None = None,
+    floor_source: str = "the base ref's ledger",
+) -> credit_ledger.Headroom:
     """Authorise a run of up to ``cap_usd`` for the reviewer's workstream, or raise.
 
     Call this BEFORE any client is built or any API call is made.
 
+    Args:
+        cfg: The workforce config (from the base ref).
+        cap_usd: The run's budget.
+        ledger_root: The controller's checkout, which holds the ledger.
+        floor_text: The ledger as the base ref commits it (``None``: the base has none).
+            Its recorded spend is a lower bound on what the file may claim.
+        floor_source: What to call ``floor_text`` in messages.
+
     Raises:
+        LedgerLocationError: The ledger is not where it must be (see :func:`locate`).
         credit_ledger.CapExceeded: Recorded spend plus ``cap_usd`` would pass the cap.
         credit_ledger.LedgerError: The ledger is unreadable or damaged.
         ValueError: ``cap_usd`` is negative, not finite or not a number.
     """
+    locate(cfg, ledger_root)
     return credit_ledger.charge(
-        cfg.agent_reviewer.ws, cap_usd, config=cfg.credit, repo_root=repo_root
+        cfg.agent_reviewer.ws,
+        cap_usd,
+        config=cfg.credit,
+        repo_root=ledger_root,
+        floor_usd=_floor_of(cfg, floor_text, floor_source),
     )
 
 
@@ -241,7 +302,9 @@ def record_run(
     model_resolved: str,
     resolved_via: str,
     artifact: str,
-    repo_root: Path,
+    ledger_root: Path,
+    floor_text: str | None = None,
+    floor_source: str = "the base ref's ledger",
 ) -> dict[str, Any]:
     """Append this run's row to the ledger and return it as written.
 
@@ -266,6 +329,12 @@ def record_run(
         "status": accounting.status,
     }
     try:
-        return credit_ledger.record(entry, config=cfg.credit, repo_root=repo_root)
+        locate(cfg, ledger_root)
+        return credit_ledger.record(
+            entry,
+            config=cfg.credit,
+            repo_root=ledger_root,
+            floor_usd=_floor_of(cfg, floor_text, floor_source),
+        )
     except (credit_ledger.LedgerError, ValueError, OSError) as exc:
         raise LedgerWriteError(entry, exc) from exc

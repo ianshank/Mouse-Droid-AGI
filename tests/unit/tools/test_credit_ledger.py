@@ -185,6 +185,53 @@ def test_charge_refuses_when_the_workstream_is_already_over_its_cap(repo: Path) 
         credit_ledger.charge("A", 0.0, repo_root=repo)
 
 
+def test_charge_never_lets_the_file_spend_fall_below_the_floor(repo: Path) -> None:
+    """A copy the caller trusts (a git blob) bounds from below what the file may claim."""
+    _seed(repo, {"ws": "A", "cost_usd": 2.0})  # the file lost the rows that made it 9.0
+    headroom = credit_ledger.charge("A", 1.0, repo_root=repo, floor_usd=9.0)
+    assert headroom.spent_usd == 9.0
+    with pytest.raises(CapExceeded):
+        credit_ledger.charge("A", 1.5, repo_root=repo, floor_usd=9.0)
+    # The file's own sum wins when it is the larger one.
+    assert credit_ledger.charge("A", 1.0, repo_root=repo, floor_usd=1.0).spent_usd == 2.0
+
+
+@pytest.mark.parametrize("floor", [-1, math.nan, math.inf, True, "9"])
+def test_charge_rejects_a_floor_that_could_not_be_a_spend(repo: Path, floor: Any) -> None:
+    with pytest.raises(ValueError, match="floor_usd"):
+        credit_ledger.charge("A", 1.0, repo_root=repo, floor_usd=floor)
+
+
+def test_record_counts_the_floor_into_the_cumulative_spend(repo: Path) -> None:
+    _seed(repo, {"ws": "B", "cost_usd": 1.0})
+    row = credit_ledger.record(_entry(cost_usd=0.5), repo_root=repo, floor_usd=7.0)
+    assert row["cumulative_ws_usd"] == 7.5
+    row = credit_ledger.record(_entry(cost_usd=0.5), repo_root=repo, floor_usd=0.0)
+    assert row["cumulative_ws_usd"] == 2.0, (
+        "the floor is never written into the file: 1.0 + 0.5 + 0.5"
+    )
+
+
+def test_spent_usd_in_text_reads_ledger_text_that_is_not_a_file() -> None:
+    text = (
+        json.dumps({"ws": "B", "cost_usd": 1.25})
+        + "\n\n"
+        + json.dumps({"ws": "A", "cost_usd": 3})
+        + "\n"
+        + json.dumps({"ws": "B", "cost_usd": 0.75})
+    )
+    assert credit_ledger.spent_usd_in_text("B", text) == 2.0
+    assert credit_ledger.spent_usd_in_text("A", text) == 3.0
+    assert credit_ledger.spent_usd_in_text("C", text) == 0.0
+    assert credit_ledger.spent_usd_in_text("B", "") == 0.0
+
+
+@pytest.mark.parametrize("text", ["not json\n", "[1]\n", '{"ws": "B", "cost_usd": "x"}\n'])
+def test_spent_usd_in_text_names_its_source_when_the_text_is_damaged(text: str) -> None:
+    with pytest.raises(LedgerError, match=r"deadbeef:reports/ledger\.jsonl"):
+        credit_ledger.spent_usd_in_text("B", text, source="deadbeef:reports/ledger.jsonl")
+
+
 # --------------------------------------------------------------------------- #
 # The ledger file - append-only JSON lines
 # --------------------------------------------------------------------------- #

@@ -15,10 +15,11 @@ network or a key. The layers, in the order the SDK applies them:
    do not exist for it.
 2. :class:`BashGuard` (a PreToolUse hook): hooks run FIRST. A whitelist -
    ``git diff|log|show``, nothing else, as one plain command. It refuses the git
-   options that write a file, run a configured program, read outside the repo, widen
-   the search to every ref (``--all``, ``--reflog``, ...) or print blob ids
-   (``--raw``, ``--abbrev``). Pathspecs after ``--`` must be literal (no globs, no ``:``
-   magic, nothing starting with ``-``). A revision must be one of the PINNED commits
+   options that write a file, run a configured program, read outside the repo (also
+   ``-O<file>`` bundled behind other short options: ``-pO<file>``), widen the search to
+   every ref (``--all``, ``--reflog``, ...) or print blob ids (``--raw``, ``--abbrev``).
+   Pathspecs after ``--`` must be literal (no globs, no ``:`` magic, nothing starting with
+   ``-``). A revision must be one of the PINNED commits
    (the resolved base and head ids) with ancestry suffixes (``^``, ``~N``): a bare blob
    or tree id, an abbreviation or a ref name could name an object whatever its path, so
    none is accepted. And ``git show <rev>:<path>`` is accepted only for a non-secret
@@ -27,6 +28,13 @@ network or a key. The layers, in the order the SDK applies them:
    below, so it can only tighten, never grant. There is no pytest and no interpreter
    on the list: ``--collect-only`` still imports the repository's ``conftest.py`` and
    test modules, which is the head commit's code running in a process that holds the key.
+2b. :class:`ReadGuard` (the second PreToolUse hook, on ``Read|Grep|Glob``): the CLI's deny
+   rules are cwd-relative screens, so the hook ``realpath``s the tool's path, requires it to
+   be INSIDE the checkout under review (that also resolves 8.3 short names, ``::$DATA``
+   streams and symlink aliases), refuses ``.git`` internals and secret-file names, and
+   refuses a glob that is absolute, climbs out or could match a secret-file name. Shell
+   profiles (where keys get exported) and ``~/.claude/projects`` transcripts are therefore
+   unreachable. Fails closed.
 3. :func:`disallowed_tools` (deny rules): evaluated even if the hook were to fail.
    Writes, web access, subagents, every actuation tool by name, and reads of
    secret files (``*.env``, ``docker.env*``) and credential directories.
@@ -53,11 +61,15 @@ network or a key. The layers, in the order the SDK applies them:
    the key the CLI needs stays in the CLI's environment. What keeps the key out of
    the processes the CLI starts is that none of them runs tree-controlled code
    (layers 2 and 6), that the MCP server entry blanks the credential variables, and,
-   as an opt-in, the CLI's own ``CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`` (see README).
+   as an opt-in, the CLI's own ``CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`` (see README). The
+   children the REVIEWER starts itself (its ``git``, its ``gitleaks``) get its environment
+   through :func:`scrubbed_environ`, without any variable that can hold a credential.
 9. :func:`resolve_executable`: ``git`` and ``gitleaks`` are looked up in the absolute
    directories of ``PATH`` only. ``shutil.which`` and Windows' ``CreateProcess`` both
    look in the working directory first, so a ``git.exe`` committed to the head would
-   run with the key in its environment.
+   run with the key in its environment. The CLI looks up more programs by bare name than
+   can be wrapped, so :func:`planted_program_reason` also refuses a head (or checkout)
+   that tracks a root file named like one of them, before any spend.
 
 Why there is no ``RegexInjectionFilter`` here
 ---------------------------------------------
@@ -71,10 +83,10 @@ filter.
 
 Known limits, stated so nobody has to discover them
 ----------------------------------------------------
-* ``Read`` is not confined to the repository: a bare ``Read`` allow rule reads any
-  file the user can. The deny rules cover env files and the usual credential
-  directories; they are a screen, not a sandbox. Run the review from an account
-  that holds nothing it should not read.
+* ``Read``, ``Grep`` and ``Glob`` are confined to the checkout by :class:`ReadGuard`, but
+  INSIDE it a ``Grep`` over a directory can still print lines of a secret file the CLI's
+  own deny rules do not catch (an env file under another name). Run the review from a
+  checkout that holds no real secrets.
 * The Bash guard is a whitelist over a small character set, not a shell parser.
   It fails closed (an unusual-but-harmless command is refused) because the
   alternative is parsing shell.
@@ -95,7 +107,7 @@ import os
 import re
 import shlex
 import sys
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
@@ -108,6 +120,9 @@ MCP_SERVER: Final = "mousedroid"
 
 #: PreToolUse matcher the Bash guard is registered under.
 BASH_HOOK_MATCHER: Final = "Bash"
+
+#: PreToolUse matcher the read-confinement guard (:class:`ReadGuard`) is registered under.
+READ_HOOK_MATCHER: Final = "Read|Grep|Glob"
 
 #: ``dontAsk``: tools not pre-approved are denied instead of prompting.
 PERMISSION_MODE: Final = "dontAsk"
@@ -257,6 +272,25 @@ FORCED_PROCESS_ENV: Final[Mapping[str, str]] = MappingProxyType(
     }
 )
 
+#: Variables that can hold a credential. The CLI needs the API key; nothing ELSE the
+#: reviewer starts - its own git, its own gitleaks - does, so they run without these.
+#: The names are the ones this project is known to use; the suffixes (``*_API_KEY``,
+#: ``*_TOKEN`` - so ``*_AUTH_TOKEN`` too - ``*_SECRET``, ``*_PASSWORD``) catch the rest.
+CREDENTIAL_ENV_NAMES: Final = frozenset(
+    {
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "MOUSEDROID_LLM__API_KEY",
+    }
+)
+CREDENTIAL_ENV_SUFFIXES: Final[tuple[str, ...]] = (
+    "_API_KEY",
+    "_TOKEN",
+    "_SECRET",
+    "_PASSWORD",
+)
+
 # --- Bash guard vocabulary -------------------------------------------------- #
 _MAX_COMMAND_CHARS: Final = 4096
 
@@ -297,8 +331,12 @@ _GIT_DENIED_LONG: Final[tuple[str, ...]] = (
     "--abbrev",
 )
 
-# -O<orderfile> reads an arbitrary file; -g is --walk-reflogs.
-_GIT_DENIED_SHORT_PREFIXES: Final[tuple[str, ...]] = ("-O", "-g")
+# -O<orderfile> reads an arbitrary file, alone (`-O/etc/passwd`) or bundled after other
+# short options (`-pO/etc/passwd`: git reads that as `-p -O/etc/passwd`); -g is
+# --walk-reflogs. The bundled form is refused on any capital O, so a pickaxe string with
+# one (`-SOrange`) is refused too: the model attaches it with `--pickaxe...` or spells it out.
+_BUNDLED_ORDERFILE: Final = re.compile(r"-[A-Za-z]*O.*")
+_GIT_DENIED_SHORT_PREFIXES: Final[tuple[str, ...]] = ("-g",)
 
 # A pinned commit id (SHA-1 or SHA-256, lowercase) plus ancestry suffixes: `^`, `^2`, `~`,
 # `~3`. Nothing else names an object the guard lets through: a bare blob or tree id, an
@@ -436,6 +474,52 @@ def resolve_executable(name: str, environ: Mapping[str, str] | None = None) -> s
     return None
 
 
+def _is_credential_name(name: str) -> bool:
+    upper = name.upper()
+    return upper in CREDENTIAL_ENV_NAMES or upper.endswith(CREDENTIAL_ENV_SUFFIXES)
+
+
+def scrubbed_environ(environ: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Return ``environ`` without any variable that can hold a credential.
+
+    For the children the REVIEWER starts itself (its own ``git``, its own ``gitleaks``):
+    they read repository objects and scan text, they have no use for the API key, and a
+    program that is not the CLI must not be handed it.
+
+    Args:
+        environ: The environment to copy (default: ``os.environ``).
+    """
+    source = os.environ if environ is None else environ
+    return {name: value for name, value in source.items() if not _is_credential_name(name)}
+
+
+# A name the reviewer or the CLI starts by bare name; on Windows a file called like this in
+# the working directory is run BEFORE the one on PATH.
+_PLANTED_PROGRAM: Final = re.compile(
+    r"(?:git|bash|sh|claude|rg|node|npm|npx|gitleaks|cmd|powershell|pwsh"
+    r"|python[0-9.]*|pythonw[0-9.]*)"
+    r"(?:\.(?:exe|com|bat|cmd|ps1|vbs|vbe|js|jse|wsf|wsh|msc|lnk|scr))?"
+    r"[. ]*",  # Windows drops trailing dots and spaces: `git.exe.` is checked out as `git.exe`
+    re.IGNORECASE,
+)
+
+
+def planted_program_reason(names: Iterable[str]) -> str | None:
+    """Return why a root-level file name looks like a planted program, or ``None``.
+
+    The head is checked out into the directory the CLI runs in. A tracked ``git.exe`` or
+    ``bash.cmd`` there is, on Windows, found BEFORE the real program, so the review is
+    refused before anything is spent.
+    """
+    for name in names:
+        if _PLANTED_PROGRAM.fullmatch(name):
+            return (
+                f"the head tracks {name!r} in the repository root, named like a program the "
+                "reviewer or the CLI starts; on Windows the working directory is searched first"
+            )
+    return None
+
+
 # --------------------------------------------------------------------------- #
 # The Bash guard
 # --------------------------------------------------------------------------- #
@@ -475,8 +559,11 @@ def _git_option_reason(word: str) -> str | None:
                 "program or search every ref, so it is not allowed."
             )
         return None
-    if word.startswith(_GIT_DENIED_SHORT_PREFIXES):
-        return f"git option {word!r} is not allowed (it reads an arbitrary file or walks reflogs)."
+    if _BUNDLED_ORDERFILE.fullmatch(word) or word.startswith(_GIT_DENIED_SHORT_PREFIXES):
+        return (
+            f"git option {word!r} is not allowed: a capital O anywhere in a bundle of short "
+            "options (-O<file>, -pO<file>) makes git read an arbitrary file, and -g walks reflogs."
+        )
     return None
 
 
@@ -709,6 +796,195 @@ class BashGuard:
             base_paths=self.base_paths,
             revisions=self.revisions,
         )
+
+
+# --------------------------------------------------------------------------- #
+# The Read / Grep / Glob confinement
+# --------------------------------------------------------------------------- #
+#: The tools :class:`ReadGuard` governs, and the input field that says where each looks.
+_READ_PATH_FIELD: Final = MappingProxyType({"Read": "file_path", "Grep": "path", "Glob": "path"})
+
+#: Further fields that carry a glob: Grep's file filter, Glob's own pattern.
+_READ_GLOB_FIELDS: Final = MappingProxyType({"Grep": ("glob",), "Glob": ("pattern",)})
+
+_MAX_PATH_CHARS: Final = 4096
+
+
+def path_is_inside(path: str, root: str) -> bool:
+    """True when ``path`` is ``root`` or below it (both already real paths)."""
+    try:
+        common = os.path.commonpath([os.path.normcase(path), os.path.normcase(root)])
+    except ValueError:  # another drive
+        return False
+    return common == os.path.normcase(root)
+
+
+def _confined_path_reason(raw: object, root: str) -> str | None:
+    """Check one path the tool would open: a plain path that resolves inside ``root``."""
+    if not isinstance(raw, str) or not raw.strip():
+        return "the tool call names no path."
+    if len(raw) > _MAX_PATH_CHARS or any(ord(char) < 32 for char in raw):
+        return "the path is too long or contains control characters."
+    if raw.startswith("~") or "$" in raw or "%" in raw:
+        return (
+            f"{raw!r} would be expanded (~, $VAR, %VAR%) before it is opened; "
+            "give a plain path inside the checkout."
+        )
+    if ":" in os.path.splitdrive(raw)[1]:
+        return f"{raw!r} contains ':' (an NTFS data stream or a pathspec); give a plain path."
+    real = os.path.realpath(raw if os.path.isabs(raw) else os.path.join(root, raw))
+    root_real = os.path.realpath(root)
+    if not path_is_inside(real, root_real):
+        return (
+            f"{raw!r} resolves outside the checkout under review (symlinks and short names are "
+            "resolved first); the reviewer reads only files inside it."
+        )
+    parts = os.path.relpath(real, root_real).replace("\\", "/").split("/")
+    if any(part.lower() == ".git" for part in parts):
+        return f"{raw!r} is inside .git; use `git show` for repository content."
+    reason = secret_path_reason(real)
+    if reason:
+        return f"{raw!r} {reason}; the reviewer never reads those."
+    return None
+
+
+_BRACE_GROUP: Final = re.compile(r"\{([^{}]*)\}")
+_MAX_GLOB_VARIANTS: Final = 64
+
+
+def _brace_variants(segment: str) -> list[str]:
+    """Expand ``{a,b}`` groups in one glob segment (bounded; nested groups innermost first)."""
+    variants = [segment]
+    for _ in range(4):
+        expanded: list[str] = []
+        for variant in variants:
+            group = _BRACE_GROUP.search(variant)
+            if group is None:
+                expanded.append(variant)
+                continue
+            for option in group.group(1).split(","):
+                expanded.append(variant[: group.start()] + option + variant[group.end() :])
+        variants = expanded[:_MAX_GLOB_VARIANTS]
+    return variants
+
+
+def _glob_secret_reason(segment: str) -> str | None:
+    """Return why a glob's last segment could match a secret-file name, or ``None``.
+
+    Each ``{a,b}`` alternative is tried with ``*`` dropped and ``?`` read as the dot that
+    separates a secret file's name from its extension, so ``*.env``, ``.env*``, ``.env?``,
+    ``?env`` and ``*.{env,py}`` are all caught while ``*`` and ``*.py`` are not. This is a
+    screen over the common spellings, not a proof: a glob is a program of its own.
+    """
+    for variant in _brace_variants(segment):
+        reason = secret_path_reason(variant.replace("*", "").replace("?", "."))
+        if reason:
+            return reason
+    return None
+
+
+def _glob_reason(pattern: object) -> str | None:
+    """Check a glob: relative, not climbing out, not aimed at a secret-file name."""
+    if not isinstance(pattern, str):
+        return "a glob must be a string."
+    if len(pattern) > _MAX_PATH_CHARS or any(ord(char) < 32 for char in pattern):
+        return "the glob is too long or contains control characters."
+    text = pattern.replace("\\", "/")
+    if text.startswith(("/", "~")) or re.match(r"[A-Za-z]:", text):
+        return (
+            f"the glob {pattern!r} is absolute or home-relative; use a pattern inside the checkout."
+        )
+    if ".." in text:
+        return f"the glob {pattern!r} may not climb out of the checkout."
+    reason = _glob_secret_reason(text.rsplit("/", 1)[-1])
+    if reason:
+        return (
+            f"the glob {pattern!r} could match a file that {reason}; "
+            "the reviewer never reads those."
+        )
+    return None
+
+
+def check_read_access(tool_name: object, tool_input: object, *, root: str) -> str | None:
+    """Return why a ``Read`` / ``Grep`` / ``Glob`` call is refused, or ``None``.
+
+    Args:
+        tool_name: The tool (``Read``, ``Grep`` or ``Glob``); anything else is refused.
+        tool_input: The call's input (anything, so a malformed payload is refused).
+        root: The checkout under review; every path must resolve inside it.
+    """
+    if not isinstance(tool_name, str) or tool_name not in _READ_PATH_FIELD:
+        return f"{tool_name!r} is not a read tool."
+    if not isinstance(tool_input, Mapping):
+        return "The read request was malformed."
+    raw = tool_input.get(_READ_PATH_FIELD[tool_name])
+    if raw is None:
+        if tool_name == "Read":
+            return "Read needs a file_path."
+    else:
+        reason = _confined_path_reason(raw, root)
+        if reason:
+            return reason
+    for field in _READ_GLOB_FIELDS.get(tool_name, ()):
+        value = tool_input.get(field)
+        if value is not None:
+            reason = _glob_reason(value)
+            if reason:
+                return reason
+    return None
+
+
+async def deny_unconfined_reads(
+    input_data: Mapping[str, Any] | None,
+    tool_use_id: str | None,
+    context: Any,
+    *,
+    root: str,
+) -> dict[str, Any]:
+    """PreToolUse hook: refuse every Read / Grep / Glob that leaves the checkout.
+
+    Returns ``{}`` (no opinion) when the call is acceptable, so the permission rules still
+    apply - an explicit allow would approve the call on its own. Fails closed: a malformed
+    payload or an internal error is a deny, never a pass.
+
+    Args:
+        input_data: The SDK's ``PreToolUseHookInput``.
+        tool_use_id: The tool call id (unused).
+        context: The SDK's hook context (unused).
+        root: The checkout under review.
+    """
+    try:
+        if not isinstance(input_data, Mapping) or "tool_name" not in input_data:
+            return _deny("The read request was malformed.")
+        name = input_data["tool_name"]
+        if name not in _READ_PATH_FIELD:
+            return {}
+        reason = check_read_access(name, input_data.get("tool_input"), root=root)
+    except Exception as exc:  # fail closed: a guard that crashes must not wave a call through
+        return _deny(f"The read guard failed ({type(exc).__name__}); the call is denied.")
+    return {} if reason is None else _deny(reason)
+
+
+@dataclass(frozen=True)
+class ReadGuard:
+    """The second PreToolUse hook the reviewer registers: reads stay inside the checkout.
+
+    Attributes:
+        root: The checkout under review. Every path ``Read``, ``Grep`` and ``Glob`` would
+            open is resolved with ``realpath`` and must be inside it.
+    """
+
+    root: str
+
+    def check(self, tool_name: object, tool_input: object) -> str | None:
+        """Return why the call is refused, or ``None``."""
+        return check_read_access(tool_name, tool_input, root=self.root)
+
+    async def __call__(
+        self, input_data: Mapping[str, Any] | None, tool_use_id: str | None, context: Any
+    ) -> dict[str, Any]:
+        """Hook entry point: ``{}`` to pass, or a deny payload."""
+        return await deny_unconfined_reads(input_data, tool_use_id, context, root=self.root)
 
 
 # --------------------------------------------------------------------------- #

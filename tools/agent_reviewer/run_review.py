@@ -3,7 +3,7 @@
     python -m tools.agent_reviewer.run_review \\
         --base origin/<trunk> --head <branch> --cap-usd 10 [--opening R3-1,R3-2] \\
         [--out reports/agent_reviewer/<date>/wsb-NNNN.md] [--dry-run] [--repo-root DIR] \\
-        [--trust-checkout]
+        [--ledger-root DIR] [--trust-checkout]
 
 ``--dry-run`` builds everything a real run would - prompts, policy, SDK options, the
 artifact path, the ledger pre-check - and prints it, WITHOUT constructing a client,
@@ -23,7 +23,13 @@ the CLI that holds the key is checked too: the reviewer's own modules, the inter
 environment and the ``mousedroid`` package the MCP server imports. When any of them lives inside
 the checkout under review and the checkout is not at the base commit, the run is refused before
 any spend unless ``--trust-checkout`` accepts it; an interpreter environment inside the
-checkout that the head TRACKS files in is refused outright.
+checkout that the head TRACKS files in is refused outright. ``Read``, ``Grep`` and ``Glob``
+are confined to the checkout by a second PreToolUse hook (``policy.ReadGuard``).
+
+The spend ledger is the CONTROLLER's, not the head's: it is resolved against ``--ledger-root``
+(default: the checkout this reviewer's own code runs from), never a symbolic link, and the
+spend it reports is floored by what the base ref's committed copy records, so a head cannot
+delete rows to widen the cap. The cap is per workstream, not per head worktree.
 
 A real run, in order:
 
@@ -210,6 +216,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Repository root (default: discovered from the workforce tooling).",
     )
     parser.add_argument(
+        "--ledger-root",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="Checkout that holds the spend ledger (default: the checkout this reviewer's own "
+        "code runs from, never the head under review). The cap is per workstream: every "
+        "review charges this one ledger.",
+    )
+    parser.add_argument(
         TRUST_CHECKOUT_FLAG,
         action="store_true",
         help="Accept running code that lives inside the checkout under review (the reviewer's "
@@ -261,6 +276,18 @@ class Plan:
     config_source: str
     gitleaks_toml: str | None
     trust: CodeTrust
+    ledger_root: Path
+    ledger_floor: str | None
+
+    @property
+    def read_guard(self) -> policy.ReadGuard:
+        """The hook that keeps Read, Grep and Glob inside the checkout under review."""
+        return policy.ReadGuard(root=str(self.repo_root))
+
+    @property
+    def ledger_floor_source(self) -> str:
+        """What the base ref's copy of the ledger is called in messages."""
+        return f"{self.refs.base_sha}:{self.cfg.credit.ledger}"
 
     @property
     def guard(self) -> policy.BashGuard:
@@ -285,8 +312,9 @@ async def _git(repo_root: Path, *args: str) -> tuple[int, bytes]:
     """Run ``git -C repo_root <args>``; return ``(returncode, stdout)``.
 
     Every git the reviewer runs has literal pathspecs (``GIT_LITERAL_PATHSPECS=1``), the
-    same environment the model's own git gets. A git that does not finish in time is
-    killed and reported as a failure (``-1``).
+    same environment the model's own git gets - except that it runs without any variable
+    that can hold a credential: it reads repository objects, and has no use for the key. A
+    git that does not finish in time is killed and reported as a failure (``-1``).
 
     ``git`` is found in the absolute directories of ``PATH`` only: Windows tries the
     working directory first, and a ``git.exe`` committed to the head would run here, in the
@@ -306,7 +334,7 @@ async def _git(repo_root: Path, *args: str) -> tuple[int, bytes]:
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
-            env={**os.environ, **policy.GIT_ENV},
+            env={**policy.scrubbed_environ(), **policy.GIT_ENV},
         )
     except OSError as exc:
         raise RefusalError(f"git is required to resolve refs ({exc.strerror or exc})") from exc
@@ -375,6 +403,7 @@ class BaseMaterial:
     mcp_config: str
     agent_text: str
     gitleaks_toml: str | None
+    ledger_floor: str | None
 
 
 async def _base_blob_if_tracked(
@@ -402,6 +431,7 @@ async def _load_base_material(repo_root: Path, base: str, head: str) -> BaseMate
     agent_text = await _base_blob(repo_root, refs.base_sha, cfg.agent_reviewer.agent_file)
     mcp_config = await _base_blob(repo_root, refs.base_sha, policy.MCP_CONFIG_RELPATH)
     gitleaks_toml = await _base_blob_if_tracked(repo_root, refs, paths, cfg.secret_scan.config_file)
+    ledger_floor = await _base_blob_if_tracked(repo_root, refs, paths, cfg.credit.ledger)
     return BaseMaterial(
         refs=refs,
         cfg=cfg,
@@ -411,6 +441,7 @@ async def _load_base_material(repo_root: Path, base: str, head: str) -> BaseMate
         mcp_config=mcp_config,
         agent_text=agent_text,
         gitleaks_toml=gitleaks_toml,
+        ledger_floor=ledger_floor,
     )
 
 
@@ -435,15 +466,43 @@ def _mcp_package_origin() -> Path | None:
 
 
 def _is_within(path: Path, root: Path) -> bool:
+    """True when ``path`` is ``root`` or below it, once links and short names are resolved."""
     try:
-        path.resolve().relative_to(root.resolve())
-    except (ValueError, OSError):
+        return policy.path_is_inside(os.path.realpath(path), os.path.realpath(root))
+    except OSError:
         return False
-    return True
 
 
 def _relative(path: Path, root: Path) -> str:
     return path.resolve().relative_to(root.resolve()).as_posix()
+
+
+def _controller_root() -> Path:
+    """The checkout this reviewer's own code runs from (``tools/agent_reviewer/..``)."""
+    return Path(__file__).resolve().parents[2]
+
+
+async def _root_files(repo_root: Path, commit: str) -> list[str]:
+    """Return the names of the files (not directories) at the root of ``commit``."""
+    code, out = await _git(repo_root, "ls-tree", "-z", commit)
+    if code != 0:
+        raise RefusalError(f"cannot list the files at the root of {commit}")
+    names: list[str] = []
+    for entry in out.decode("utf-8", "replace").split(chr(0)):
+        meta, _, name = entry.partition("\t")
+        if name and meta.split(" ")[1:2] == ["blob"]:
+            names.append(name)
+    return names
+
+
+async def _refuse_planted_programs(repo_root: Path, refs: Refs) -> None:
+    """Refuse a head (or a checkout) whose root holds a file named like a program we start."""
+    for commit in dict.fromkeys((refs.head_sha, refs.worktree_sha)):
+        if not _SHA_RE.fullmatch(commit):
+            continue
+        reason = policy.planted_program_reason(await _root_files(repo_root, commit))
+        if reason:
+            raise RefusalError(reason)
 
 
 async def _tracked_under(repo_root: Path, refs: Refs, directory: Path) -> list[str]:
@@ -618,6 +677,8 @@ async def _plan(args: argparse.Namespace, work_dir: Path | None) -> Plan:
     reviewer = cfg.agent_reviewer
     refs = material.refs
     trust = await _evaluate_trust(repo_root, refs, trust_checkout=args.trust_checkout)
+    await _refuse_planted_programs(repo_root, refs)
+    ledger_root = (args.ledger_root or _controller_root()).resolve()
     system_prompt = prompt.build(
         repo_root=repo_root,
         cfg=cfg,
@@ -632,6 +693,12 @@ async def _plan(args: argparse.Namespace, work_dir: Path | None) -> Plan:
         worktree_sha=refs.worktree_sha,
         opening=args.opening,
     )
+    size = len(system_prompt) + len(user_prompt)
+    if size > reviewer.max_prompt_chars:
+        raise RefusalError(
+            f"the prompts are {size} characters, above agent_reviewer.max_prompt_chars "
+            f"({reviewer.max_prompt_chars}) in the base's workforce.yaml; nothing was sent"
+        )
     options = policy.reviewer_options(
         cfg=reviewer,
         repo_root=repo_root,
@@ -659,6 +726,8 @@ async def _plan(args: argparse.Namespace, work_dir: Path | None) -> Plan:
         config_source=material.config_source,
         gitleaks_toml=material.gitleaks_toml,
         trust=trust,
+        ledger_root=ledger_root,
+        ledger_floor=material.ledger_floor,
     )
 
 
@@ -683,15 +752,21 @@ def _sdk_version(sdk: Any) -> str:
     return str(getattr(sdk, "__version__", "unknown"))
 
 
-def _sdk_options(sdk: Any, kwargs: Mapping[str, Any], guard: policy.BashGuard) -> Any:
-    """Build ``ClaudeAgentOptions`` from the policy kwargs plus the Bash-guard hook.
+def _sdk_options(sdk: Any, kwargs: Mapping[str, Any], plan: Plan) -> Any:
+    """Build ``ClaudeAgentOptions`` from the policy kwargs plus the two PreToolUse hooks.
+
+    The Bash guard (git only, pinned revisions) and the read guard (``Read|Grep|Glob``
+    confined to the checkout) are separate matchers; both fail closed.
 
     Raises:
         SdkRejectedError: The installed SDK does not know one of the option names.
     """
-    matcher = sdk.HookMatcher(matcher=policy.BASH_HOOK_MATCHER, hooks=[guard])
+    matchers = [
+        sdk.HookMatcher(matcher=policy.BASH_HOOK_MATCHER, hooks=[plan.guard]),
+        sdk.HookMatcher(matcher=policy.READ_HOOK_MATCHER, hooks=[plan.read_guard]),
+    ]
     try:
-        return sdk.ClaudeAgentOptions(**kwargs, hooks={"PreToolUse": [matcher]})
+        return sdk.ClaudeAgentOptions(**kwargs, hooks={"PreToolUse": matchers})
     except TypeError as exc:
         raise SdkRejectedError(
             f"claude-agent-sdk {_sdk_version(sdk)} rejected the reviewer options: {exc}"
@@ -810,7 +885,7 @@ async def _drive(plan: Plan, sdk: Any, state: _RunState) -> None:
             reviewer.model, timeout_s=reviewer.resolve_timeout_s
         )
         _log.info("agent_reviewer_model_resolved", via=state.resolved_via)
-        options = _sdk_options(sdk, {**plan.options, "model": state.model}, plan.guard)
+        options = _sdk_options(sdk, {**plan.options, "model": state.model}, plan)
         await asyncio.wait_for(
             _consume(sdk, options, plan.user_prompt, state), timeout=reviewer.run_timeout_s
         )
@@ -900,7 +975,9 @@ def _record(plan: Plan, state: _RunState, accounting: ledger.RunAccounting, arti
             model_resolved=state.model,
             resolved_via=state.resolved_via,
             artifact=artifact,
-            repo_root=plan.repo_root,
+            ledger_root=plan.ledger_root,
+            floor_text=plan.ledger_floor,
+            floor_source=plan.ledger_floor_source,
         )
     except ledger.LedgerWriteError as exc:
         print(
@@ -983,6 +1060,16 @@ def _print_plan(plan: Plan, headroom: credit_ledger.Headroom, sdk_line: str) -> 
     print(f"resolved_via: {RESOLVED_VIA_CONFIG} (a real run asks models.retrieve first)")
     print(f"max_turns: {options['max_turns']}")
     print(f"cap_usd: {plan.cap_usd}")
+    print(
+        f"ledger: {plan.ledger_root / plan.cfg.credit.ledger} "
+        "(the controller's checkout; the cap is per workstream, not per head worktree)"
+    )
+    floor_note = (
+        f"{plan.ledger_floor_source} (rows the base already holds count even if the file lost them)"
+        if plan.ledger_floor is not None
+        else "(the base ref does not track a ledger)"
+    )
+    print(f"ledger_floor: {floor_note}")
     print(f"credit_cap_usd: {headroom.cap_usd}")
     print(f"credit_spent_usd: {headroom.spent_usd}")
     print(f"credit_remaining_after_this_run_usd: {headroom.remaining_usd}")
@@ -1014,22 +1101,35 @@ def _print_plan(plan: Plan, headroom: credit_ledger.Headroom, sdk_line: str) -> 
     for name, value in options["env"].items():
         shown = "(from the parent)" if name in policy.PROCESS_ENV_PASSTHROUGH else value
         print(f"  {name}={shown}")
+    print(f"read_guard: Read, Grep and Glob confined to {plan.repo_root}")
     print(f"system_prompt_chars: {len(plan.system_prompt)}")
     print(f"user_prompt_chars: {len(plan.user_prompt)}")
+    print(f"max_prompt_chars: {reviewer.max_prompt_chars} (both prompts together)")
     print(f"sdk: {sdk_line}")
     print(f"{API_KEY_ENV}: {key_state}")
 
 
+def _precheck(plan: Plan) -> credit_ledger.Headroom:
+    """Authorise the run against the controller's ledger, floored by the base's copy."""
+    return ledger.precheck(
+        plan.cfg,
+        plan.cap_usd,
+        ledger_root=plan.ledger_root,
+        floor_text=plan.ledger_floor,
+        floor_source=plan.ledger_floor_source,
+    )
+
+
 def _dry_run(plan: Plan) -> int:
     try:
-        headroom = ledger.precheck(plan.cfg, plan.cap_usd, repo_root=plan.repo_root)
+        headroom = _precheck(plan)
         sdk = _import_sdk()
         if sdk is None:
             sdk_line = (
                 "not installed (options not validated against it; install the agent_reviewer extra)"
             )
         else:
-            _sdk_options(sdk, plan.options, plan.guard)
+            _sdk_options(sdk, plan.options, plan)
             sdk_line = f"claude-agent-sdk {_sdk_version(sdk)} (options accepted)"
     except credit_ledger.CapExceeded as exc:
         print(f"refused: {exc}", file=sys.stderr)
@@ -1058,8 +1158,8 @@ def _live(plan: Plan) -> int:
         )
         return EXIT_REFUSED
     try:
-        _sdk_options(sdk, plan.options, plan.guard)  # the names are real, before any spend
-        headroom = ledger.precheck(plan.cfg, plan.cap_usd, repo_root=plan.repo_root)
+        _sdk_options(sdk, plan.options, plan)  # the names are real, before any spend
+        headroom = _precheck(plan)
     except credit_ledger.CapExceeded as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return EXIT_CAP

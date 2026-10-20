@@ -271,7 +271,9 @@ def _run_gitleaks(text: str, cfg: WorkforceConfig, gitleaks_toml: str | None) ->
     the working directory first; a ``gitleaks.exe`` committed to the head would run with the
     API key in its environment. So the program is resolved here, from absolute ``PATH``
     directories only, and the wrapper is handed the absolute path. The policy file it reads
-    is the base ref's copy, written to a scratch directory laid out like a checkout.
+    is the base ref's copy, written to a scratch directory laid out like a checkout. The
+    scanner has no use for the API key, so it runs without it (and without any other
+    credential variable).
     """
     executable = policy.resolve_executable(cfg.secret_scan.command)
     if executable is None:
@@ -287,7 +289,13 @@ def _run_gitleaks(text: str, cfg: WorkforceConfig, gitleaks_toml: str | None) ->
             policy_file = root / cfg.secret_scan.config_file
             policy_file.parent.mkdir(parents=True, exist_ok=True)
             policy_file.write_text(gitleaks_toml, encoding="utf-8", newline="\n")
-        return secret_scan.scan_content(text, trusted, repo_root=root, target=_SCAN_TARGET)
+        return secret_scan.scan_content(
+            text,
+            trusted,
+            repo_root=root,
+            target=_SCAN_TARGET,
+            env=policy.scrubbed_environ(),
+        )
 
 
 def scan_with_gitleaks(
