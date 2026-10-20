@@ -30,11 +30,18 @@ stages:
   - job: vulture-audit
     workflow: ci.yml
     since: 2026-07-03
-    promote_after_days: 90
+    promote_after_days: 180
     reason: >-
       F-020 dead-code audit is findings-only BY DESIGN (Protocol/DI false
       positives); the promotion decision at window end is "keep advisory
       forever + record an ADR" vs "strict mode on a curated allowlist".
+      Extended 2026-10-19 (90 -> 180 days) after check_advisory_promotions.py
+      reported the original window overdue (108d / 90d): decision input is
+      the WS-C triage document (#254); strict-on-allowlist once it lands.
+      Next touch: after the API key rotation run `python -m
+      tools.dead_code_triage_batch` (submit, then collect), commit the
+      triage document, and either seed scripts/vulture_allowlist.py from its
+      keep rows and run the audit with --strict, or record the ADR.
   - job: performance
     workflow: ci.yml
     since: 2026-07-25

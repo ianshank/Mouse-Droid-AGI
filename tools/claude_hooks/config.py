@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
@@ -357,6 +357,235 @@ class RatchetBudgetsConfig(BaseModel):
     )
 
 
+def _require_repo_relative(value: str) -> str:
+    """Return ``value`` if it is a non-blank repo-relative path without ``..``.
+
+    Shared by the credit sub-sections that join a configured path onto the repo
+    root: an absolute or ``..``-traversing value would point a read or a write
+    outside the checkout. Both path flavours are checked because the checkout may
+    sit on either OS (``PurePosixPath`` alone calls ``C:/x`` relative).
+    """
+    posix, windows = PurePosixPath(value), PureWindowsPath(value)
+    if (
+        not value.strip()
+        or posix.is_absolute()
+        or windows.is_absolute()
+        or ".." in posix.parts
+        or ".." in windows.parts
+    ):
+        raise ValueError("must be a non-empty repo-relative path without '..' traversal")
+    return value
+
+
+class ModelPrice(BaseModel):
+    """Standard (non-batch) token prices of one model, in USD per million tokens.
+
+    Both directions are required: a half-specified price cannot bound a cost, and
+    a zero price would make every estimate zero and so bypass the cap.
+    """
+
+    model_config = _STRICT
+
+    input_usd_per_mtok: float = Field(
+        gt=0.0,
+        allow_inf_nan=False,
+        description="USD per million input tokens at the standard (non-batch) rate.",
+    )
+    output_usd_per_mtok: float = Field(
+        gt=0.0,
+        allow_inf_nan=False,
+        description="USD per million output tokens at the standard (non-batch) rate.",
+    )
+
+
+class CreditPrices(BaseModel):
+    """The token prices the credit tools use to price an estimate and a recorded cost.
+
+    Fails closed like :class:`CreditConfig`: ``models`` defaults to empty, so a
+    model nobody priced cannot be estimated and therefore cannot be submitted.
+    """
+
+    model_config = _STRICT
+
+    batch_multiplier: float = Field(
+        default=1.0,
+        gt=0.0,
+        le=1.0,
+        allow_inf_nan=False,
+        description=(
+            "Fraction of the standard token price the Message Batches API bills "
+            "(0.5 = half price). Defaults to 1.0, no discount assumed, so an estimate "
+            "made without this key can only over-state the cost."
+        ),
+    )
+    models: dict[str, ModelPrice] = Field(
+        default_factory=dict,
+        description=(
+            "Standard prices per model id. A model absent from this map cannot be "
+            "estimated, so a tool that prices its spend before the call refuses it."
+        ),
+    )
+
+    @field_validator("models")
+    @classmethod
+    def _reject_blank_model_names(cls, value: dict[str, ModelPrice]) -> dict[str, ModelPrice]:
+        """Reject a blank model id, which could never match a request."""
+        for name in value:
+            if not name.strip():
+                raise ValueError("model ids must not be empty or whitespace-only")
+        return value
+
+
+class BatchTriageConfig(BaseModel):
+    """Settings of the Batch-API vulture triage (F-059 WS-C, ``tools/dead_code_triage_batch.py``).
+
+    Every knob the tool would otherwise inline: which model answers and how it is
+    asked, how much source it is shown, how big a request may get, how the pre-call
+    estimate is made, how long to wait for the batch, and where the artifacts live.
+    The defaults reproduce the plan's figures, so a workforce.yaml written before
+    this section existed behaves identically.
+    """
+
+    model_config = _STRICT
+
+    workstream: str = Field(
+        default="C",
+        description="Key of credit.caps_usd that pays for the triage run (F-059 WS-C).",
+    )
+    model: str = Field(
+        default="claude-sonnet-5-5",
+        description=(
+            "Model id the triage requests ask for. The tool resolves it through "
+            "client.models.retrieve before submitting and records both ids."
+        ),
+    )
+    max_tokens: int = Field(
+        default=4096,
+        gt=0,
+        description=(
+            "max_tokens of each triage request. Thinking tokens count against it, so "
+            "it also bounds how much a model that thinks may spend before it answers."
+        ),
+    )
+    effort: Literal["low", "medium", "high"] | None = Field(
+        default="low",
+        description=(
+            "output_config.effort sent with each request; null sends none (the model's "
+            "default, which thinks longest). Capped at high: xhigh and max are rejected "
+            "together with a disabled thinking mode."
+        ),
+    )
+    thinking: Literal["adaptive", "between_tools"] | None = Field(
+        default=None,
+        description=(
+            "Explicit thinking mode; null sends no thinking field (the model default). "
+            "Claude Sonnet 5.5 answers HTTP 400 to type disabled; between_tools is its "
+            "way to switch thinking off, accepted at effort high or below."
+        ),
+    )
+    source_root: str = Field(
+        default="src/mousedroid",
+        description=(
+            "Repo-relative tree the audit scans. Findings are grouped by the first path "
+            "segment below it, and the part of a recorded absolute path before it is dropped."
+        ),
+    )
+    context_lines: int = Field(
+        default=20,
+        ge=0,
+        description="Lines of source shown on each side of a finding (the excerpt window).",
+    )
+    max_findings_per_request: int = Field(
+        default=20,
+        gt=0,
+        description=(
+            "Findings sent in one request; a larger package is split. Bounds the answer "
+            "(about 75 tokens per finding) so it fits max_tokens beside any thinking."
+        ),
+    )
+    max_hint_names: int = Field(
+        default=300,
+        ge=0,
+        description=(
+            "Cap on the Protocol member and validator names listed in one prompt; the "
+            "rest are summarised as a count."
+        ),
+    )
+    chars_per_token: float = Field(
+        default=3.0,
+        gt=0.0,
+        allow_inf_nan=False,
+        description=(
+            "Characters per token assumed when sizing a prompt for the estimate. Code runs "
+            "near 3, so 3.0 over-states the input and keeps the estimate an upper bound."
+        ),
+    )
+    assumed_input_tokens_per_request: int = Field(
+        default=8000,
+        ge=0,
+        description=(
+            "Floor for one request's input tokens in the estimate (the plan's 8K per "
+            "chunk); a measured prompt above it is priced as measured."
+        ),
+    )
+    poll_interval_s: float = Field(
+        default=60.0,
+        gt=0.0,
+        allow_inf_nan=False,
+        description="Seconds between processing_status checks while collecting a batch.",
+    )
+    poll_timeout_s: float = Field(
+        default=90000.0,
+        gt=0.0,
+        allow_inf_nan=False,
+        description=(
+            "Seconds collect waits before giving up (the batch keeps running). A batch "
+            "expires 24 hours after creation, so the default is 25 hours."
+        ),
+    )
+    batches_dir: str = Field(
+        default="reports/credit/batches",
+        description=(
+            "Repo-relative directory of the per-submit batch records (<UTC date>.json, then "
+            "<UTC date>-2.json for a second batch that day), written before the create call."
+        ),
+    )
+    analysis_dir: str = Field(
+        default="docs/analysis",
+        description="Repo-relative directory the default triage document is written to.",
+    )
+    refuse_globs: list[str] = Field(
+        default_factory=lambda: ["*.env", "docker.env*", ".env*"],
+        description=(
+            "File-name patterns (fnmatch, case-insensitive) the prompt builder will not read "
+            "or send: a finding in a matching file is withheld from the API and listed as "
+            "'verify', so an environment file can never become part of a request."
+        ),
+    )
+
+    @field_validator("workstream", "model")
+    @classmethod
+    def _reject_blank(cls, value: str) -> str:
+        """Reject whitespace-only identifiers, which could never match anything."""
+        if not value.strip():
+            raise ValueError("must not be empty or whitespace-only")
+        return value
+
+    @field_validator("source_root", "batches_dir", "analysis_dir")
+    @classmethod
+    def _reject_unsafe_path(cls, value: str) -> str:
+        """Keep every configured path inside the checkout (it is joined onto the repo root)."""
+        return _require_repo_relative(value)
+
+    @field_validator("refuse_globs")
+    @classmethod
+    def _reject_blank_globs(cls, value: list[str]) -> list[str]:
+        """Reject a blank pattern, which would silently match nothing."""
+        if any(not pattern.strip() for pattern in value):
+            raise ValueError("patterns must not be empty or whitespace-only")
+        return value
+
+
 class CreditConfig(BaseModel):
     """Spend caps and ledger location for the F-059 credit workstreams.
 
@@ -364,6 +593,10 @@ class CreditConfig(BaseModel):
     BEFORE it is made when the workstream's recorded spend plus the estimate
     would exceed its cap, and ``record()`` appends one JSON object per run to
     :attr:`ledger`. The numbers live in ``.claude/workforce.yaml``, never in code.
+
+    :attr:`prices` and :attr:`batch_triage` serve ``tools/dead_code_triage_batch.py``:
+    the price table its pre-call estimate is made from, and the triage run's own
+    settings. Both default so that a workforce.yaml written before them still loads.
 
     Fails closed: :attr:`caps_usd` defaults to empty, so a repository that has
     not adopted the block — or an unknown workstream name — cannot spend. This
@@ -387,6 +620,17 @@ class CreditConfig(BaseModel):
             "Repo-relative path of the append-only JSON-lines spend ledger "
             "(tracked: it is the evidence that ledgers stayed under their caps)."
         ),
+    )
+    prices: CreditPrices = Field(
+        default_factory=CreditPrices,
+        description=(
+            "Token prices used to price a pre-call estimate and a recorded cost. Empty by "
+            "default: a model with no price cannot be estimated, so it cannot be submitted."
+        ),
+    )
+    batch_triage: BatchTriageConfig = Field(
+        default_factory=BatchTriageConfig,
+        description="Settings of the Batch-API vulture triage (tools/dead_code_triage_batch.py).",
     )
 
     @field_validator("caps_usd")

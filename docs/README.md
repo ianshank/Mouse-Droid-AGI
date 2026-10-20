@@ -68,7 +68,8 @@ Failure-recovery **playbooks** live in [playbooks/](playbooks/) (camera, LiDAR, 
 - **Planning** — [planning/](planning/) and [superpowers/](superpowers/) (dated design plans + specs).
   The root [`NEXT_STEPS.md`](../NEXT_STEPS.md) is the **canonical** forward roadmap; `planning/NEXT_STEPS.md`
   is a legacy v0.3.0-era snapshot.
-- **Analysis** — [analysis/](analysis/) (coverage, test-suite, spikes).
+- **Analysis** — [analysis/](analysis/) (coverage, test-suite, spikes, and the batch-triaged
+  `vulture` findings, `dead-code-triage-<date>.md`, written by `tools/dead_code_triage_batch.py`).
 
 ## Skills
 

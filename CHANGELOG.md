@@ -36,6 +36,72 @@ the credit workstreams: `charge(ws, estimate_usd)` raises `CapExceeded` before a
 `record(entry)` appends one JSON line per run, and the caps come from the new `credit:` block of
 `.claude/workforce.yaml` (A 10 / B 60 / C 15 USD) — an unconfigured workstream cannot spend.
 
+### Added — a Batch-API triage of the vulture findings, priced from the workforce config before it spends (F-059 WS-C)
+
+`scripts/dead_code_audit.py` lists what `vulture` found no caller for (433 findings on this tree),
+and in a Protocol- and DI-heavy codebase most of them are alive: a method called through a
+`@runtime_checkable` Protocol, a pydantic validator, a factory hook. `tools/dead_code_triage_batch.py`
+sorts them into `keep` / `delete` / `verify` with the Message Batches API, a package at a time and at
+most 20 findings to a request (44 requests for the 33 packages on this tree, estimated at about $1.3
+against the $15 workstream cap), and writes a ranked document: `delete` rows by vulture confidence,
+then `verify`, then `keep`, under a header that records the audit JSON's sha256 and the vulture
+version. It deletes nothing and edits nothing under `src/`: a `delete` row is a candidate that a later
+PR must still prove with `prove-pin-fails`.
+
+`submit` builds every request offline and prices the batch from the new `credit.prices` block
+(Sonnet 5.5, batch rate) before it calls anything. It refuses (`CapExceeded`) when the estimate passes
+`--cap-usd` or the workstream's cap, counting batches already submitted but not yet collected, and it
+creates the batch once with the SDK's automatic retry off, because a retried create would be a second
+batch.
+
+The batch record is a write-ahead log. `submit` writes it BEFORE the create call, in state `creating`
+(estimate, plan fingerprint, audit sha256, timestamp, no batch id), and rewrites it as `submitted` with
+the id when the call returns, so a timeout or a crash between the two cannot leave a batch the cap never
+sees. If the record cannot be written, nothing is sent. If the API said no (400, 401, 403, 404, 413, 422
+or 429) or the connection never opened (a TLS failure behind an intercepting proxy), no batch exists and
+the record is removed. After a timeout waiting for the answer, a dropped connection, a 408, a 409, a 5xx
+or a crash the record stays `creating`, its estimate keeps counting against the workstream cap, and
+every later `submit` refuses (exit 3) until the operator has checked the Console's Batches page and
+either run `submit --adopt <batch_id>` (the batch must hold as many requests as the record, have been
+created after it (five minutes of clock skew aside) and within an hour, and be owned by no other
+record) or deleted the record. A record file that
+cannot be read blocks the same way, since it may hide a batch. Two real `submit` runs cannot overlap:
+the checks and the write-ahead record sit inside an exclusive `.submit.lock`, and the checks are made
+again once it is held. A second batch on the same day waits for the first to be collected; after that it
+is recorded as `<date>-2.json` (no record is overwritten) and collected into
+`dead-code-triage-<date>-2.md`. The records and the ledger belong to one checkout, so run `submit` and
+`collect` from the same one.
+
+Source leaves the machine, so three layers stand in front of that. A finding in a file whose
+name matches `credit.batch_triage.refuse_globs` (`*.env`, `docker.env*`, ...), that is not a `.py`, or
+that lies outside the repository is WITHHELD: never sent, and listed in the document as `verify` with the
+reason. A link that resolves outside the repository, or an excerpt shaped like a credential (a short
+built-in list: Anthropic, OpenAI, Google, GitHub, Hugging Face, Slack and AWS keys, private-key blocks,
+JWTs, bearer tokens, a URL with a password in it, and a quoted value assigned to a name that ends in
+password, secret, token or key), stops the whole submit. And every
+assembled prompt goes through the repository's own scanner (`gitleaks` with `.gitleaks.toml`), which a
+real submit REQUIRES: with no `gitleaks` on PATH, with `secret_scan.enabled: false`, or after a scanner
+timeout, `submit` exits 3 rather than send on the built-in list alone. `--allow-unscanned-egress` is the
+override; it is printed and written into the batch record (`unscanned_egress: true`, with the scanner's
+reason), and `secret_scan.strict: true` in `.claude/workforce.yaml` forbids it. `--dry-run` sends nothing,
+so it only warns. An audit JSON that looks older than the checkout (a symbol no longer near its recorded
+line) is warned about before anything is spent.
+
+`collect` waits for `processing_status == "ended"`, joins results to requests by `custom_id` and never
+by position, validates every answer against the same schema it asked for, turns anything it cannot
+trust into `verify` with the reason, and appends one ledger row with the real token usage, once. A
+`delete` the model gives for a name the prompt forbids deleting (a Protocol member or a pydantic
+validator found by the AST scan) is overruled in code: it becomes `verify`, keeps the model's reason
+beside the downgrade, and is counted in the document header. Run it only after the API key is rotated;
+the procedure is the tool's module docstring, and the key is read from the environment by the SDK,
+with no flag for it.
+
+`.claude/workforce.yaml` gains `credit.prices` and `credit.batch_triage` (both defaulted, so an older
+file still loads; an unpriced model cannot be submitted). `vulture-audit`'s advisory window is extended
+from 90 to 180 days (`since` unchanged) with the reason that the triage document is the decision input
+for "strict on a curated allowlist"; `scripts/check_advisory_promotions.py` had reported it overdue
+(108 d / 90 d). `test-windows` is left alone: that decision is the operator's.
+
 ### Fixed — the nightly Spec Harness, red every night since 2026-09-08
 
 `validate-slow` runs `--strict-git`, which needs every `done` feature's `implemented_in` to resolve.
