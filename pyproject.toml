@@ -160,8 +160,8 @@ anthropic = [
 # in the rover's hot loop may import it (tests/regression/test_hot_loop_import_purity.py).
 # Deliberately NOT in [dev]: CI installs [dev,telemetry,mcp], so the real-SDK pins in
 # tests/unit/tools/test_agent_reviewer.py importorskip there and run wherever this extra
-# is installed. Bounded below 0.3 because the option names the reviewer uses were
-# verified against 0.2.168 and a 0.x minor may rename them -- lifting the bound is a
+# is installed. Pinned to <0.3 because the option names the reviewer uses were
+# verified against 0.2.168 and a 0.x minor may rename them -- lifting the pin is a
 # deliberate re-verification, not a version bump. tomli: the reviewer reads
 # .gitleaks.toml, and stdlib tomllib only exists from Python 3.11.
 agent_reviewer = [

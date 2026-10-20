@@ -23,8 +23,10 @@ injects options). It refuses `--output`, `--no-index`, whole-history flags (`--a
 output (`--raw`, `--abbrev`), unquoted globs, secret-file names and any pathspec that is not a literal path;
 git runs with `GIT_LITERAL_PATHSPECS=1`; a revision must be one of the two pinned commits (the resolved base
 and head ids, with `^` / `~N`) so a bare blob id cannot print an object whatever its path; and
-`git show <commit>:<path>` may name only a non-secret file tracked at the base ref. No actuation tool,
-`Write`/`Edit` or web tool is allowed or reachable. The reviewer's own configuration
+`git show <commit>:<path>` may name only a non-secret file tracked at the base ref. A second PreToolUse hook
+confines `Read`, `Grep` and `Glob` to the checkout under review: it `realpath`s the path (symlinks, junctions
+and 8.3 short names are followed) and refuses anything outside it, `.git`, secret-file names and globs that
+escape or could match one. No actuation tool, `Write`/`Edit` or web tool is allowed or reachable. The reviewer's own configuration
 (`.claude/workforce.yaml`, which selects the agent file, the MCP declaration, the secret-scan program and the
 paths and caps), the agent instructions, `.mcp.json`, the MCP server's configuration and `.gitleaks.toml` are
 read from the base ref, never the working tree. The `mousedroid` MCP entry is built in code
@@ -37,20 +39,25 @@ the base commit the run is refused unless `--trust-checkout` says so, and a virt
 tracks files is refused outright. `git` and `gitleaks` are looked up in absolute `PATH` directories only (Windows
 tries the working directory first). The environment the reviewer adds is an allowlist that never carries a
 credential (the SDK merges it over the CLI's own, so the key is kept from the head's code by what is allowed to
-run, not by scrubbing), and no user or project settings file is loaded, so nothing on the workstation can widen
-any of it. The prompt builder strips the agent file's front-matter, appends the house output shape, and
+run, not by scrubbing); the `git` and `gitleaks` the reviewer starts itself run without any credential variable;
+and no user or project settings file is loaded, so nothing on the workstation can widen any of it. A run is
+refused before any spend when the head or the checkout tracks a root file named like a program the CLI looks up
+(`git.exe`, `bash.cmd`, ...) or when the prompts pass `agent_reviewer.max_prompt_chars`. The prompt builder strips the agent file's front-matter, appends the house output shape, and
 refuses `*.env`, `docker.env*`, key-shaped text and anything matching the regexes in the base's
 `.gitleaks.toml`.
 
 Spend is checked before it happens. `--cap-usd` must fit in what is left of the workstream cap
 (`charge()` raises `CapExceeded` before any client is built) and is also handed to the SDK as its hard
 stop; the row's cost is `ResultMessage.total_cost_usd`, and when that is unknown the run is charged its cap
-rather than zero. The artifact and the ledger row are written however the run ends - error result,
+rather than zero. The ledger is the controller's - the checkout the reviewer's own code runs from, or
+`--ledger-root`; never the head's, a symbolic link or a path outside it - and the spend the cap sees is floored
+by the base ref's committed copy, so a head cannot delete rows to widen it. The cap is per workstream, not per
+head worktree. The artifact and the ledger row are written however the run ends - error result,
 crash, timeout, Ctrl-C - and a review that looks like it contains a credential is withheld, not saved.
 `--dry-run` prints the resolved plan (allowlist, denylist, prompt sizes, artifact path, credit headroom)
 without constructing a client, calling the network or writing anything. `max_turns` (40) and the model
 alias (`opus`) are the new `agent_reviewer:` block of `.claude/workforce.yaml`; the SDK is the new
-`agent_reviewer` extra (not in `[dev]`, bounded below 0.3 because the option names were verified against
+`agent_reviewer` extra (not in `[dev]`, pinned to <0.3 because the option names were verified against
 0.2.168). No credit is spent by this change: the first real run waits for the API key rotation. See
 `tools/agent_reviewer/README.md` and the new section of `docs/architecture/c4-claude-workforce.md`.
 
