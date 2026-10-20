@@ -24,9 +24,13 @@ output (`--raw`, `--abbrev`), unquoted globs, secret-file names and any pathspec
 git runs with `GIT_LITERAL_PATHSPECS=1`; a revision must be one of the two pinned commits (the resolved base
 and head ids, with `^` / `~N`) so a bare blob id cannot print an object whatever its path; and
 `git show <commit>:<path>` may name only a non-secret file tracked at the base ref. A second PreToolUse hook
-confines `Read`, `Grep` and `Glob` to the checkout under review: it `realpath`s the path (symlinks, junctions
-and 8.3 short names are followed) and refuses anything outside it, `.git`, secret-file names and globs that
-escape or could match one. No actuation tool, `Write`/`Edit` or web tool is allowed or reachable. The reviewer's own configuration
+confines `Read`, `Grep` and `Glob` to the checkout under review: it `realpath`s every path the tool is given
+(symlinks, junctions and 8.3 short names are followed) and refuses anything outside it, `.git`, secret-file and
+private-key names and Windows device names. A glob is not judged by rewriting it into text - the CLI splits a
+Grep glob on whitespace and commas and ripgrep reads classes, braces and escapes - but by a strict grammar
+(letters, digits, `. _ @ + -`, `/` and `*`; the file part a literal name or `*.<extension>`), by matching it
+against concrete secret names (`.env`, `prod.env`, `docker.env.local`, `id_rsa`, ...) and by resolving its
+literal start inside the checkout; a head that tracks a symbolic link which can leave the checkout is refused. No actuation tool, `Write`/`Edit` or web tool is allowed or reachable. The reviewer's own configuration
 (`.claude/workforce.yaml`, which selects the agent file, the MCP declaration, the secret-scan program and the
 paths and caps), the agent instructions, `.mcp.json`, the MCP server's configuration and `.gitleaks.toml` are
 read from the base ref, never the working tree. The `mousedroid` MCP entry is built in code
@@ -39,7 +43,8 @@ the base commit the run is refused unless `--trust-checkout` says so, and a virt
 tracks files is refused outright. `git` and `gitleaks` are looked up in absolute `PATH` directories only (Windows
 tries the working directory first). The environment the reviewer adds is an allowlist that never carries a
 credential (the SDK merges it over the CLI's own, so the key is kept from the head's code by what is allowed to
-run, not by scrubbing); the `git` and `gitleaks` the reviewer starts itself run without any credential variable;
+run, not by scrubbing); the `git` and `gitleaks` the reviewer starts itself run without any credential variable (any name with `KEY`,
+`TOKEN`, `SECRET`, `PASSWORD` or `CREDENTIAL(S)` as a word);
 and no user or project settings file is loaded, so nothing on the workstation can widen any of it. A run is
 refused before any spend when the head or the checkout tracks a root file named like a program the CLI looks up
 (`git.exe`, `bash.cmd`, ...) or when the prompts pass `agent_reviewer.max_prompt_chars`. The prompt builder strips the agent file's front-matter, appends the house output shape, and
@@ -52,7 +57,7 @@ stop; the row's cost is `ResultMessage.total_cost_usd`, and when that is unknown
 rather than zero. The ledger is the controller's - the checkout the reviewer's own code runs from, or
 `--ledger-root`; never the head's, a symbolic link or a path outside it - and the spend the cap sees is floored
 by the base ref's committed copy, so a head cannot delete rows to widen it. The cap is per workstream, not per
-head worktree. The artifact and the ledger row are written however the run ends - error result,
+head worktree, and a `--ledger-root` inside a checkout the head controls needs `--trust-checkout`. The artifact and the ledger row are written however the run ends - error result,
 crash, timeout, Ctrl-C - and a review that looks like it contains a credential is withheld, not saved.
 `--dry-run` prints the resolved plan (allowlist, denylist, prompt sizes, artifact path, credit headroom)
 without constructing a client, calling the network or writing anything. `max_turns` (40) and the model

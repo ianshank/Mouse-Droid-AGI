@@ -35,21 +35,40 @@ head controls may reach an exec sink, a process that holds the key, or the revie
   `bash`, `sh`, `claude`, `rg`, `node`, `npm`, `npx`, `gitleaks`, `cmd`, `powershell`, `pwsh`, `python*` - with
   any Windows executable extension (`.exe`, `.cmd`, `.bat`, ...).
 - **Reads stay inside the checkout.** A second PreToolUse hook (`policy.ReadGuard`, matcher `Read|Grep|Glob`)
-  resolves the path the tool would open with `os.path.realpath` - which follows symlinks and junctions and
-  expands Windows 8.3 short names - and requires the result to be inside the checkout under review. It also
-  refuses `.git` internals (use `git show`), secret-file names *after* the link is followed, paths the shell
-  would expand (`~`, `$VAR`, `%VAR%`), NTFS data streams (`::$DATA`) and globs that are absolute, climb out or
-  could match a secret-file name. Your shell profile (where keys get exported), other worktrees and
-  `~/.claude/projects` transcripts are therefore out of reach. It fails closed, like the Bash guard.
-- **The reviewer's own `git` and `gitleaks` run without any credential variable** (`ANTHROPIC_API_KEY`,
-  `*_API_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, ...): they read repository objects and scan text, and only
-  the CLI needs the key.
+  resolves every path the tool is given (`file_path` and `path` - the CLI reads a Grep `file_path` as its
+  `path`) with `os.path.realpath`, which follows symlinks and junctions and expands Windows 8.3 short names,
+  and requires the result to be inside the checkout under review. It also refuses `.git` internals (use
+  `git show`), secret-file and private-key names *after* the link is followed, Windows device names (`NUL`,
+  `CON`, `COM1`, ... with or without an extension), paths the shell would expand (`~`, `$VAR`, `%VAR%`), NTFS
+  data streams (`::$DATA`) and glob characters in a path field. Your shell profile (where keys get exported),
+  other worktrees and `~/.claude/projects` transcripts are therefore out of reach. It answers with a reason
+  and never raises; it fails closed, like the Bash guard.
+- **A glob is judged by a strict grammar, not by rewriting it into text.** The CLI splits a Grep `glob` on
+  whitespace and commas and hands the pieces to ripgrep, which reads character classes, braces, `?`, `!` and
+  backslash escapes; a screen that read the string as one name would be reading something else. So a glob is
+  written with letters, digits, `. _ @ + -`, `/` and `*` and nothing else: no `[..]`, `{..}`, `?`, `!`, `\`,
+  comma or space (one glob per call). A directory part is a literal name, `*` or `**`; the file part is a
+  literal name or `*.<extension>` (`**/*.py`, `src/**/*.md`, `**/pyproject.toml`; not `test_*.py` or `*`). The
+  file part is then matched against concrete names made from the secret patterns (`.env`, `prod.env`,
+  `docker.env.local`, `.env.production`, `id_rsa`, ...), so `*`, `*.env` and `*.local` are refused and `*.py`
+  is not, and the literal start of the glob (`link` in `link/*.py`) is resolved against the search directory
+  and must stay inside the checkout. The guard refuses rather than rewrites: it adds no exclusion globs to a
+  call, because the CLI already turns the `Read(...)` deny rules into ripgrep exclusions.
+- **A head that tracks a symbolic link out of the checkout is refused.** `git ls-tree -r` of the head and of
+  the checkout lists the mode-`120000` entries; a target that is absolute, climbs above the repository root, or
+  has a `..` after a name (which only the file system can resolve once links chain) refuses the run before any
+  spend, as a planted program does.
+- **The reviewer's own `git` and `gitleaks` run without any credential variable** - any name with `KEY`, `TOKEN`,
+  `SECRET`, `PASSWORD` or `CREDENTIAL(S)` as one of its words (`API_KEY`, a bare `TOKEN`, `AWS_ACCESS_KEY_ID`,
+  `GOOGLE_APPLICATION_CREDENTIALS`, ...), plus `AWS_SECRET_ACCESS_KEY` and the password variables the rule cannot
+  see: they read repository objects and scan text, and only the CLI needs the key.
 - **The spend ledger is the controller's, not the head's.** It lives in the checkout the reviewer's own code runs
   from (override with `--ledger-root DIR`), is refused if it is a symbolic link or resolves outside that
   checkout, and the spend the cap sees is `max(the file, what the base ref's committed copy records)`: a head
   cannot delete rows to widen the cap. The cap is **per workstream**, not per head worktree - every review
-  charges the same ledger. (Run from the head's own checkout with `--trust-checkout` and the controller's checkout
-  *is* the head's; the base's committed copy still floors the total.)
+  charges the same ledger. A `--ledger-root` inside the checkout under review is refused unless the checkout is at
+  the base commit or you pass `--trust-checkout` (the plan prints `trust_ledger:`): the file would be one the head
+  can rewrite, and the base's committed copy only floors the total.
 - **The code that runs beside the key must not be the branch's.** That is the reviewer's own modules
   (`tools/agent_reviewer`), the interpreter's environment (its `site-packages` and `.pth` files run at startup,
   even under `-I`) and the `mousedroid` package the MCP server imports (the checkout's own source under an
@@ -121,8 +140,8 @@ the old key.
        --cap-usd 10 --opening "R3-1,R3-2,R3-3,R3-4" --dry-run
    ```
 
-   Read the `workforce_config:`, `ledger:`, `ledger_floor:`, `trust_controller:`, `trust_interpreter:` and
-   `trust_package:` lines of the plan before a live run. A refusal that talks about code inside this checkout means step 1 is not satisfied yet.
+   Read the `workforce_config:`, `ledger:`, `ledger_floor:`, `trust_controller:`, `trust_interpreter:`,
+   `trust_package:` and `trust_ledger:` lines of the plan before a live run. A refusal that talks about code inside this checkout means step 1 is not satisfied yet.
 4. Run it: the same command without `--dry-run`. `--cap-usd` is this run's budget: it must fit in what is
    left of the workstream cap (`credit.caps_usd.B` in the base's `workforce.yaml`), and the SDK stops the run at
    it. The base ref must therefore carry the `credit:` block (and `agent_reviewer:`, the agent file, `.mcp.json`
@@ -169,9 +188,11 @@ spend), the model alias, the caps and the ledger path live in `.claude/workforce
 
 - `Read`, `Grep` and `Glob` are confined to the checkout by `ReadGuard`, which resolves symlinks, junctions and
   short names before it judges a path. INSIDE the checkout, a `Grep` over a directory can still print lines of a
-  secret file whose name neither the CLI's deny rules nor the guard recognise, and a glob is screened by its
-  spelling (`*.env`, `.env*`, `*.{env,py}`), not proven: a head that *tracks* a secret has it in the diff anyway.
-  Review from a checkout that holds no real secrets - a fresh `git worktree add --detach` has none.
+  secret file whose name neither the CLI's deny rules nor the guard recognise (the secret names are the
+  project's patterns and the `ssh-keygen` key names; a glob is matched against concrete names made from them, not
+  proven harmless): a head that *tracks* a secret has it in the diff anyway. A symbolic link made in the checkout
+  after the run starts, or untracked, is not seen. Review from a checkout that holds no real secrets - a fresh
+  `git worktree add --detach` has none.
 - A short option bundle containing a capital `O` is refused wherever it sits (`-pO<file>`), so a pickaxe or regex
   string whose leading letters include one (`-SOrange`, `-GFOO`) is refused too: search for the lower-case part,
   or use `Grep` on the checkout.

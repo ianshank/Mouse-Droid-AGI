@@ -23,13 +23,16 @@ the CLI that holds the key is checked too: the reviewer's own modules, the inter
 environment and the ``mousedroid`` package the MCP server imports. When any of them lives inside
 the checkout under review and the checkout is not at the base commit, the run is refused before
 any spend unless ``--trust-checkout`` accepts it; an interpreter environment inside the
-checkout that the head TRACKS files in is refused outright. ``Read``, ``Grep`` and ``Glob``
-are confined to the checkout by a second PreToolUse hook (``policy.ReadGuard``).
+checkout that the head TRACKS files in is refused outright, and so is a head (or checkout)
+that tracks a symbolic link which can leave the checkout. ``Read``, ``Grep`` and ``Glob`` are
+confined to the checkout by a second PreToolUse hook (``policy.ReadGuard``).
 
 The spend ledger is the CONTROLLER's, not the head's: it is resolved against ``--ledger-root``
 (default: the checkout this reviewer's own code runs from), never a symbolic link, and the
 spend it reports is floored by what the base ref's committed copy records, so a head cannot
-delete rows to widen the cap. The cap is per workstream, not per head worktree.
+delete rows to widen the cap. The cap is per workstream, not per head worktree. A ledger root
+inside a checkout that is not at the base is a file the head can rewrite, so it needs
+``--trust-checkout`` like the code does.
 
 A real run, in order:
 
@@ -108,6 +111,8 @@ _MCP_CONFIG_FILENAME: Final = "mcp-config.yaml"
 _DRY_RUN_SCRATCH: Final = "agent-reviewer-dry-run"
 
 _GIT_TIMEOUT_S: Final = 30.0
+_SYMLINK_MODE: Final = "120000"  # the mode git records for a symbolic link
+_MAX_TRACKED_SYMLINKS: Final = 200  # more than this is not a source tree we will follow links in
 _DEFAULT_RUN_PREFIX: Final = "wsb"
 _DATE_FORMAT: Final = "%Y-%m-%d"
 _TIMESTAMP_FORMAT: Final = "%Y-%m-%dT%H:%M:%SZ"
@@ -251,11 +256,12 @@ class Refs:
 
 @dataclass(frozen=True)
 class CodeTrust:
-    """Where the code that runs beside the API key comes from, as the plan prints it."""
+    """Where the code that runs beside the API key, and the spend ledger, come from."""
 
     controller: str
     interpreter: str
     package: str
+    ledger: str
 
 
 @dataclass(frozen=True)
@@ -505,6 +511,49 @@ async def _refuse_planted_programs(repo_root: Path, refs: Refs) -> None:
             raise RefusalError(reason)
 
 
+async def _tracked_symlinks(repo_root: Path, commit: str) -> list[tuple[str, str]]:
+    """Return ``(path, blob id)`` for every symbolic link tracked at ``commit``."""
+    code, out = await _git(repo_root, "ls-tree", "-r", "-z", commit)
+    if code != 0:
+        raise RefusalError(f"cannot list the tracked files of {commit}")
+    links: list[tuple[str, str]] = []
+    for entry in out.decode("utf-8", "replace").split(chr(0)):
+        meta, _, name = entry.partition("\t")
+        fields = meta.split(" ")
+        if name and len(fields) == 3 and fields[0] == _SYMLINK_MODE:
+            links.append((name, fields[2]))
+    return links
+
+
+async def _refuse_escaping_symlinks(repo_root: Path, refs: Refs) -> None:
+    """Refuse a head (or checkout) that tracks a symbolic link which can leave the checkout.
+
+    Read, Grep and Glob resolve what they are given against the checkout. A link the head
+    commits - ``docs/latest -> /etc`` - would be a way out that no pattern shows, so the whole
+    run is refused before any spend (see :func:`policy.symlink_escape_reason`).
+    """
+    for commit in dict.fromkeys((refs.head_sha, refs.worktree_sha)):
+        if not _SHA_RE.fullmatch(commit):
+            continue
+        links = await _tracked_symlinks(repo_root, commit)
+        if len(links) > _MAX_TRACKED_SYMLINKS:
+            raise RefusalError(
+                f"{commit[:12]} tracks {len(links)} symbolic links (more than "
+                f"{_MAX_TRACKED_SYMLINKS}); the reviewer will not follow that many"
+            )
+        for link, blob in links:
+            code, out = await _git(repo_root, "cat-file", "blob", blob)
+            if code != 0:
+                raise RefusalError(f"cannot read the symbolic link {link!r} at {commit[:12]}")
+            target = out.decode("utf-8", "replace")
+            reason = policy.symlink_escape_reason(link, target)
+            if reason:
+                raise RefusalError(
+                    f"{commit[:12]} tracks the symbolic link {link!r} -> {target!r} ({reason}); "
+                    "Read, Grep and Glob would follow it out of the checkout under review"
+                )
+
+
 async def _tracked_under(repo_root: Path, refs: Refs, directory: Path) -> list[str]:
     """Return the files the head (or the checkout's index) tracks under ``directory``."""
     where = _relative(directory, repo_root)
@@ -520,7 +569,9 @@ async def _tracked_under(repo_root: Path, refs: Refs, directory: Path) -> list[s
     return sorted(names)
 
 
-async def _evaluate_trust(repo_root: Path, refs: Refs, *, trust_checkout: bool) -> CodeTrust:
+async def _evaluate_trust(
+    repo_root: Path, refs: Refs, *, trust_checkout: bool, ledger_path: Path
+) -> CodeTrust:
     """Say where the code that runs beside the API key comes from; refuse the branch's own.
 
     Three pieces of code run in, or beside, the process that holds the key: the reviewer's
@@ -531,6 +582,11 @@ async def _evaluate_trust(repo_root: Path, refs: Refs, *, trust_checkout: bool) 
     ``mousedroid`` is the checkout's own source under an editable install. A checkout that is
     at the base commit holds trusted code, and so does anything outside the checkout.
 
+    The spend ledger is a fourth piece of trust: a ledger file inside a checkout that is not
+    at the base is a file the head can rewrite, so ``--ledger-root`` pointing there is
+    refused the same way (the base's committed copy still floors the total, but the operator
+    has to say they accept the rest).
+
     An interpreter environment inside the checkout in which the head TRACKS files (a
     force-added ``.venv/...``) is refused whatever the operator says: it is demonstrably not
     the operator's.
@@ -539,9 +595,10 @@ async def _evaluate_trust(repo_root: Path, refs: Refs, *, trust_checkout: bool) 
         repo_root: The resolved checkout the review runs in.
         refs: The resolved commits; ``worktree_sha`` is what the checkout holds.
         trust_checkout: The operator accepted running code from inside the checkout.
+        ledger_path: Where the spend ledger file is (or would be created).
 
     Returns:
-        The three lines the plan prints.
+        The four lines the plan prints.
 
     Raises:
         RefusalError: Any piece is the branch's own and ``trust_checkout`` is false, or the
@@ -601,22 +658,40 @@ async def _evaluate_trust(repo_root: Path, refs: Refs, *, trust_checkout: bool) 
                 "inside this checkout"
             )
 
-    notes = [controller_note, interpreter_note, package_note]
+    code_problems = len(problems)
+    if not _is_within(ledger_path, repo_root):
+        ledger_note = "outside the checkout under review"
+    else:
+        where = _relative(ledger_path, repo_root)
+        if at_base:
+            ledger_note = f"{where}, in the checkout, which is at the base commit"
+        else:
+            ledger_note = f"IN THE CHECKOUT UNDER REVIEW ({where})"
+            problems.append(
+                f"the spend ledger ({where}) is inside this checkout, which the head controls"
+            )
+
+    notes = [controller_note, interpreter_note, package_note, ledger_note]
     if problems:
         if not trust_checkout:
+            lead = (
+                "code inside this checkout would run beside the CLI that holds the API key"
+                if code_problems
+                else "the spend ledger would live inside a checkout the head controls"
+            )
             raise RefusalError(
-                "code inside this checkout would run beside the CLI that holds the API key, "
-                f"and the checkout is at {refs.worktree_sha[:12]}, not at the base "
+                f"{lead}, and the checkout is at {refs.worktree_sha[:12]}, not at the base "
                 f"{refs.base_sha[:12]}: {'; '.join(problems)}. Run the reviewer from a trusted "
                 "checkout and point --repo-root at the one under review (virtualenv outside it, "
-                f"`{policy.MCP_MODULE}` installed from the base ref without -e), or pass "
-                f"{TRUST_CHECKOUT_FLAG} if you would run this branch's code anyway."
+                f"`{policy.MCP_MODULE}` installed from the base ref without -e, --ledger-root "
+                f"outside it), or pass {TRUST_CHECKOUT_FLAG} if you would run this branch's code "
+                "and trust its files anyway."
             )
         notes = [
             f"{note}; accepted with {TRUST_CHECKOUT_FLAG}" if note.startswith("IN THE") else note
             for note in notes
         ]
-    return CodeTrust(controller=notes[0], interpreter=notes[1], package=notes[2])
+    return CodeTrust(controller=notes[0], interpreter=notes[1], package=notes[2], ledger=notes[3])
 
 
 def next_run_id(artifact_root: Path, *, prefix: str = _DEFAULT_RUN_PREFIX) -> str:
@@ -676,9 +751,15 @@ async def _plan(args: argparse.Namespace, work_dir: Path | None) -> Plan:
     cfg = material.cfg
     reviewer = cfg.agent_reviewer
     refs = material.refs
-    trust = await _evaluate_trust(repo_root, refs, trust_checkout=args.trust_checkout)
-    await _refuse_planted_programs(repo_root, refs)
     ledger_root = (args.ledger_root or _controller_root()).resolve()
+    trust = await _evaluate_trust(
+        repo_root,
+        refs,
+        trust_checkout=args.trust_checkout,
+        ledger_path=ledger_root / cfg.credit.ledger,
+    )
+    await _refuse_planted_programs(repo_root, refs)
+    await _refuse_escaping_symlinks(repo_root, refs)
     system_prompt = prompt.build(
         repo_root=repo_root,
         cfg=cfg,
@@ -1090,6 +1171,7 @@ def _print_plan(plan: Plan, headroom: credit_ledger.Headroom, sdk_line: str) -> 
     print(f"trust_controller: {plan.trust.controller}")
     print(f"trust_interpreter: {plan.trust.interpreter}")
     print(f"trust_package: {plan.trust.package}")
+    print(f"trust_ledger: {plan.trust.ledger}")
     print(
         f"mcp_json: {plan.refs.base_sha}:{reviewer.mcp_config} confirms the pinned invocation "
         "(built from constants; the working tree's copy is never read)"

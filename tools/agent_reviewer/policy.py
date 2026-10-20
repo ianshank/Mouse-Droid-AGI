@@ -29,12 +29,23 @@ network or a key. The layers, in the order the SDK applies them:
    on the list: ``--collect-only`` still imports the repository's ``conftest.py`` and
    test modules, which is the head commit's code running in a process that holds the key.
 2b. :class:`ReadGuard` (the second PreToolUse hook, on ``Read|Grep|Glob``): the CLI's deny
-   rules are cwd-relative screens, so the hook ``realpath``s the tool's path, requires it to
-   be INSIDE the checkout under review (that also resolves 8.3 short names, ``::$DATA``
-   streams and symlink aliases), refuses ``.git`` internals and secret-file names, and
-   refuses a glob that is absolute, climbs out or could match a secret-file name. Shell
-   profiles (where keys get exported) and ``~/.claude/projects`` transcripts are therefore
-   unreachable. Fails closed.
+   rules are cwd-relative screens, so the hook ``realpath``s every path the tool is given
+   (``file_path`` and ``path``: the CLI reads a Grep ``file_path`` as its ``path``), requires
+   it to be INSIDE the checkout under review (that also resolves 8.3 short names,
+   ``::$DATA`` streams and symlink aliases), and refuses ``.git`` internals, secret-file and
+   private-key names, Windows device names (``NUL``, ``COM1``, ...) and glob characters in a
+   path. A GLOB is not judged by rewriting it into text - the CLI splits a Grep glob on
+   whitespace and commas and hands the pieces to ripgrep, which reads classes, braces, ``?``,
+   ``!`` and escapes - but by a strict grammar: letters, digits and ``. _ @ + -``, ``/`` and
+   ``*`` only; directory parts are literal names, ``*`` or ``**``; the file part is a literal
+   name or ``*.<extension>``. The file part is then matched (``fnmatch``) against concrete
+   names made from the secret patterns (``.env``, ``prod.env``, ``docker.env.local``,
+   ``.env.production``, ``id_rsa``, ...), and the literal start of the glob is resolved
+   against the search directory and must stay inside the checkout. The guard never rewrites
+   a call (the CLI already turns the ``Read()`` deny rules into ripgrep exclusions); it
+   refuses, answers with a reason and does not raise. The run itself is refused when the
+   head or the checkout tracks a symbolic link that can leave the checkout
+   (:func:`symlink_escape_reason`). Fails closed.
 3. :func:`disallowed_tools` (deny rules): evaluated even if the hook were to fail.
    Writes, web access, subagents, every actuation tool by name, and reads of
    secret files (``*.env``, ``docker.env*``) and credential directories.
@@ -63,7 +74,9 @@ network or a key. The layers, in the order the SDK applies them:
    (layers 2 and 6), that the MCP server entry blanks the credential variables, and,
    as an opt-in, the CLI's own ``CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`` (see README). The
    children the REVIEWER starts itself (its ``git``, its ``gitleaks``) get its environment
-   through :func:`scrubbed_environ`, without any variable that can hold a credential.
+   through :func:`scrubbed_environ`, without any variable that can hold a credential: a
+   name with KEY, TOKEN, SECRET, PASSWORD or CREDENTIAL(S) as one of its words, and a few
+   named ones.
 9. :func:`resolve_executable`: ``git`` and ``gitleaks`` are looked up in the absolute
    directories of ``PATH`` only. ``shutil.which`` and Windows' ``CreateProcess`` both
    look in the working directory first, so a ``git.exe`` committed to the head would
@@ -273,22 +286,26 @@ FORCED_PROCESS_ENV: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 #: Variables that can hold a credential. The CLI needs the API key; nothing ELSE the
-#: reviewer starts - its own git, its own gitleaks - does, so they run without these.
-#: The names are the ones this project is known to use; the suffixes (``*_API_KEY``,
-#: ``*_TOKEN`` - so ``*_AUTH_TOKEN`` too - ``*_SECRET``, ``*_PASSWORD``) catch the rest.
+#: reviewer starts - its own git, its own gitleaks - does, so they run without these. The
+#: names are the ones this project is known to use, the AWS secret key, and the password
+#: variables the word rule below cannot see; the rule catches the rest.
 CREDENTIAL_ENV_NAMES: Final = frozenset(
     {
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",
         "CLAUDE_CODE_OAUTH_TOKEN",
         "MOUSEDROID_LLM__API_KEY",
+        "AWS_SECRET_ACCESS_KEY",
+        "PGPASSWORD",
+        "MYSQL_PWD",
     }
 )
-CREDENTIAL_ENV_SUFFIXES: Final[tuple[str, ...]] = (
-    "_API_KEY",
-    "_TOKEN",
-    "_SECRET",
-    "_PASSWORD",
+
+#: A name made of words (split on ``_``, or any other non-alphanumeric), one of which is KEY,
+#: TOKEN, SECRET, PASSWORD or CREDENTIAL(S): ``API_KEY``, a bare ``TOKEN``, ``AWS_ACCESS_KEY_ID``,
+#: ``GITHUB_TOKEN``, ``GOOGLE_APPLICATION_CREDENTIALS``. ``KEYBOARD`` is not.
+_CREDENTIAL_WORD: Final = re.compile(
+    r"(?:^|[^A-Z0-9])(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?)(?:[^A-Z0-9]|$)"
 )
 
 # --- Bash guard vocabulary -------------------------------------------------- #
@@ -476,7 +493,7 @@ def resolve_executable(name: str, environ: Mapping[str, str] | None = None) -> s
 
 def _is_credential_name(name: str) -> bool:
     upper = name.upper()
-    return upper in CREDENTIAL_ENV_NAMES or upper.endswith(CREDENTIAL_ENV_SUFFIXES)
+    return upper in CREDENTIAL_ENV_NAMES or _CREDENTIAL_WORD.search(upper) is not None
 
 
 def scrubbed_environ(environ: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -517,6 +534,38 @@ def planted_program_reason(names: Iterable[str]) -> str | None:
                 f"the head tracks {name!r} in the repository root, named like a program the "
                 "reviewer or the CLI starts; on Windows the working directory is searched first"
             )
+    return None
+
+
+def symlink_escape_reason(link: str, target: str) -> str | None:
+    """Return why the tracked symbolic link ``link`` may lead out of the repository, or ``None``.
+
+    ``link`` is the repository-relative path of the link (``docs/latest``) and ``target`` is
+    what git stores for it. Only the plainest targets pass: names, with ``..`` in front and
+    nowhere else, climbing no higher than the repository root. An absolute or drive-rooted
+    target, a ``..`` after a name (which only a walk of the real file system can resolve once
+    other links are involved) and a malformed target are all judged to leave: a read tool
+    that follows such a link would be reading outside the checkout.
+    """
+    stored = target.replace("\\", "/")
+    if not stored or any(ord(char) < 32 for char in stored):
+        return "an empty or malformed target"
+    if stored.startswith("/") or re.match(r"[A-Za-z]:", stored):
+        return "an absolute target"
+    ups = 0
+    named = False
+    for part in stored.split("/"):
+        if part in ("", "."):
+            continue
+        if part != "..":
+            named = True
+        elif named:
+            return "a '..' after a name, which cannot be followed without the file system"
+        else:
+            ups += 1
+    depth = len([part for part in link.replace("\\", "/").split("/") if part]) - 1
+    if ups > depth:
+        return "a target above the repository root"
     return None
 
 
@@ -801,13 +850,52 @@ class BashGuard:
 # --------------------------------------------------------------------------- #
 # The Read / Grep / Glob confinement
 # --------------------------------------------------------------------------- #
-#: The tools :class:`ReadGuard` governs, and the input field that says where each looks.
-_READ_PATH_FIELD: Final = MappingProxyType({"Read": "file_path", "Grep": "path", "Glob": "path"})
+#: The tools :class:`ReadGuard` governs.
+_READ_TOOLS: Final = frozenset({"Read", "Grep", "Glob"})
 
-#: Further fields that carry a glob: Grep's file filter, Glob's own pattern.
-_READ_GLOB_FIELDS: Final = MappingProxyType({"Grep": ("glob",), "Glob": ("pattern",)})
+#: Both spellings of "where to look" are judged on every tool, whichever the tool documents:
+#: the CLI reads a Grep ``file_path`` as its ``path`` (and a Write ``path`` as ``file_path``),
+#: and a hook may be handed the input before or after that rewrite.
+_READ_PATH_KEYS: Final = ("file_path", "path")
+
+#: The field that carries a glob: Grep's file filter, Glob's own pattern.
+_READ_GLOB_FIELD: Final = MappingProxyType({"Grep": "glob", "Glob": "pattern"})
 
 _MAX_PATH_CHARS: Final = 4096
+
+#: A path field takes a plain path; these make it a pattern (the CLI hands it to ripgrep).
+_PATH_PATTERN_CHARS: Final = frozenset("*?[]{}")
+
+#: A Windows device name - ``CON``, ``PRN``, ``AUX``, ``NUL``, ``COM1-9``, ``LPT1-9`` (also
+#: the superscript digits) - with or without an extension, a trailing dot or space or a
+#: stream: the OS opens the DEVICE whatever directory the name is in, so such a path is
+#: not a file inside the checkout, and resolving it can even raise.
+_DEVICE_NAME: Final = re.compile(
+    r"(?:con|prn|aux|nul|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3]|conin\$|conout\$)"
+    r"(?:[. :].*)?",
+    re.IGNORECASE | re.DOTALL,
+)
+
+#: Private-key file names the read guard refuses besides :data:`SECRET_PATH_GLOBS`: the usual
+#: ``ssh-keygen`` outputs (their ``.pub`` halves are public and stay readable).
+PRIVATE_KEY_NAMES: Final[tuple[str, ...]] = ("id_rsa", "id_dsa", "id_ecdsa", "id_ed25519")
+
+#: What ``*`` stands for when a secret-file pattern is turned into concrete names.
+_PROBE_FILLERS: Final[tuple[str, ...]] = (
+    "",
+    "x",
+    "prod",
+    "local",
+    "production",
+    ".local",
+    ".production",
+)
+
+#: A glob is written in this alphabet and no other. Everything a glob engine reads as syntax
+#: (``? [ ] { } ! \``), and everything the CLI splits a Grep glob on (whitespace, commas),
+#: is outside it, so no glob can mean to the engine what the screen did not see.
+_GLOB_ALPHABET: Final = re.compile(r"[A-Za-z0-9_.@+*/-]+")
+_GLOB_FILE_PART: Final = re.compile(r"\*\.[A-Za-z0-9_+-]+")
 
 
 def path_is_inside(path: str, root: str) -> bool:
@@ -819,119 +907,266 @@ def path_is_inside(path: str, root: str) -> bool:
     return common == os.path.normcase(root)
 
 
+def read_secret_reason(path: str | Path) -> str | None:
+    """Return why ``path`` names a file the read guard never opens, or ``None``.
+
+    The project's secret-file patterns (:data:`SECRET_PATH_GLOBS`) plus
+    :data:`PRIVATE_KEY_NAMES`, matched on the base name, case-insensitively.
+    """
+    reason = secret_path_reason(path)
+    if reason:
+        return reason
+    if PurePosixPath(str(path).replace("\\", "/")).name.lower() in PRIVATE_KEY_NAMES:
+        return "is a private-key file name"
+    return None
+
+
+def secret_probe_names(patterns: Iterable[str]) -> tuple[str, ...]:
+    """Turn secret-file patterns into concrete lower-case names a glob can be tested against.
+
+    ``*.env`` becomes ``.env``, ``prod.env``, ...; ``docker.env*`` becomes ``docker.env``,
+    ``docker.env.local``, ...; ``.env.*`` becomes ``.env.local``, ``.env.production``, ...;
+    a pattern without ``*`` (``id_rsa``) is its own probe. A glob is judged by asking
+    whether it matches one of these names, never by rewriting the glob into text.
+    """
+    names: list[str] = []
+    for pattern in patterns:
+        if "*" not in pattern:
+            names.append(pattern.lower())
+            continue
+        names.extend(pattern.replace("*", filler).lower() for filler in _PROBE_FILLERS)
+    return tuple(dict.fromkeys(name for name in names if not name.endswith(".")))
+
+
+#: The names a glob's file part must not be able to match.
+_SECRET_PROBES: Final = secret_probe_names((*SECRET_PATH_GLOBS, *PRIVATE_KEY_NAMES))
+
+
+def _device_name_in(path: str) -> str | None:
+    """Return the first component of ``path`` that is a Windows device name, or ``None``."""
+    return next((part for part in re.split(r"[\\/]", path) if _DEVICE_NAME.fullmatch(part)), None)
+
+
+def _real_of(raw: str, root: str) -> str:
+    """The real path a tool would open for ``raw`` (links and short names followed)."""
+    return os.path.realpath(raw if os.path.isabs(raw) else os.path.join(root, raw))
+
+
+def _git_internals_reason(real: str, root_real: str, what: str) -> str | None:
+    parts = os.path.relpath(real, root_real).replace("\\", "/").split("/")
+    if any(part.lower() == ".git" for part in parts):
+        return f"{what} is inside .git; use `git show` for repository content."
+    return None
+
+
 def _confined_path_reason(raw: object, root: str) -> str | None:
     """Check one path the tool would open: a plain path that resolves inside ``root``."""
     if not isinstance(raw, str) or not raw.strip():
         return "the tool call names no path."
     if len(raw) > _MAX_PATH_CHARS or any(ord(char) < 32 for char in raw):
         return "the path is too long or contains control characters."
+    device = _device_name_in(raw)
+    if device is not None:
+        return f"{raw!r} names a Windows device ({device!r}); the reviewer reads files only."
     if raw.startswith("~") or "$" in raw or "%" in raw:
         return (
             f"{raw!r} would be expanded (~, $VAR, %VAR%) before it is opened; "
             "give a plain path inside the checkout."
         )
+    if _PATH_PATTERN_CHARS.intersection(raw):
+        return (
+            f"{raw!r} contains glob characters (* ? [ ] {{ }}); a path field takes a plain "
+            "path, and patterns go in the glob field."
+        )
     if ":" in os.path.splitdrive(raw)[1]:
         return f"{raw!r} contains ':' (an NTFS data stream or a pathspec); give a plain path."
-    real = os.path.realpath(raw if os.path.isabs(raw) else os.path.join(root, raw))
+    real = _real_of(raw, root)
     root_real = os.path.realpath(root)
     if not path_is_inside(real, root_real):
         return (
             f"{raw!r} resolves outside the checkout under review (symlinks and short names are "
             "resolved first); the reviewer reads only files inside it."
         )
-    parts = os.path.relpath(real, root_real).replace("\\", "/").split("/")
-    if any(part.lower() == ".git" for part in parts):
-        return f"{raw!r} is inside .git; use `git show` for repository content."
-    reason = secret_path_reason(real)
+    reason = _git_internals_reason(real, root_real, repr(raw))
+    if reason:
+        return reason
+    reason = read_secret_reason(real)
     if reason:
         return f"{raw!r} {reason}; the reviewer never reads those."
     return None
 
 
-_BRACE_GROUP: Final = re.compile(r"\{([^{}]*)\}")
-_MAX_GLOB_VARIANTS: Final = 64
+def _is_plain_name(segment: str) -> bool:
+    """A literal file or directory name of a glob already known to be in the plain alphabet:
+    no wildcard, not ``.``, ``..`` or ``...``, not ending in a dot (Windows drops it)."""
+    return (
+        segment != ""
+        and "*" not in segment
+        and not segment.startswith("..")
+        and not segment.endswith(".")
+    )
 
 
-def _brace_variants(segment: str) -> list[str]:
-    """Expand ``{a,b}`` groups in one glob segment (bounded; nested groups innermost first)."""
-    variants = [segment]
-    for _ in range(4):
-        expanded: list[str] = []
-        for variant in variants:
-            group = _BRACE_GROUP.search(variant)
-            if group is None:
-                expanded.append(variant)
-                continue
-            for option in group.group(1).split(","):
-                expanded.append(variant[: group.start()] + option + variant[group.end() :])
-        variants = expanded[:_MAX_GLOB_VARIANTS]
-    return variants
-
-
-def _glob_secret_reason(segment: str) -> str | None:
-    """Return why a glob's last segment could match a secret-file name, or ``None``.
-
-    Each ``{a,b}`` alternative is tried with ``*`` dropped and ``?`` read as the dot that
-    separates a secret file's name from its extension, so ``*.env``, ``.env*``, ``.env?``,
-    ``?env`` and ``*.{env,py}`` are all caught while ``*`` and ``*.py`` are not. This is a
-    screen over the common spellings, not a proof: a glob is a program of its own.
-    """
-    for variant in _brace_variants(segment):
-        reason = secret_path_reason(variant.replace("*", "").replace("?", "."))
-        if reason:
-            return reason
+def _glob_directories_reason(pattern: str, directories: list[str]) -> str | None:
+    """Check the directory parts of a glob: each is a literal name, ``*`` or ``**``."""
+    for segment in directories:
+        if segment == "":
+            return f"the glob {pattern!r} has an empty part (a doubled /)."
+        if segment.lower() == ".git":
+            return f"the glob {pattern!r} names .git; use `git show` for repository content."
+        if segment in ("*", "**") or _is_plain_name(segment):
+            continue
+        if segment.startswith(".."):
+            return f"the glob {pattern!r} may not climb out of the checkout."
+        return (
+            f"the glob {pattern!r} has the directory part {segment!r}; "
+            "a directory part is a literal name, * or **."
+        )
     return None
 
 
-def _glob_reason(pattern: object) -> str | None:
-    """Check a glob: relative, not climbing out, not aimed at a secret-file name."""
-    if not isinstance(pattern, str):
-        return "a glob must be a string."
+def _glob_secret_reason(pattern: str, file_part: str) -> str | None:
+    """Return why a glob's file part can reach a secret-file name, or ``None``.
+
+    A literal is judged by name. Any file part is also matched (``fnmatch``) against the
+    concrete secret names from :func:`secret_probe_names`, so ``*.env``, ``*.local`` and a
+    bare ``*`` are refused while ``*.py`` is not.
+    """
+    reason = read_secret_reason(file_part)
+    if reason is None:
+        lowered = file_part.lower()
+        probe = next((p for p in _SECRET_PROBES if fnmatch.fnmatchcase(p, lowered)), None)
+        if probe is None:
+            return None
+        reason = f"could match the secret-file name {probe!r}"
+    else:
+        reason = f"could match a file that {reason}"
+    return (
+        f"the glob {pattern!r} {reason}; the reviewer never reads those. "
+        "Name an extension that is not a secret one, for example *.py."
+    )
+
+
+def _glob_file_part_reason(pattern: str, file_part: str) -> str | None:
+    """Check the file part of a glob: a literal name or ``*.<extension>`` (``*`` and ``**``
+    alone are let through here and stopped by :func:`_glob_secret_reason`)."""
+    if file_part == "":
+        return f"the glob {pattern!r} ends with / and names no file; end it with a name or *.py."
+    if file_part.lower() == ".git":
+        return f"the glob {pattern!r} names .git; use `git show` for repository content."
+    if (
+        file_part in ("*", "**")
+        or _GLOB_FILE_PART.fullmatch(file_part)
+        or _is_plain_name(file_part)
+    ):
+        return None
+    if file_part.startswith(".."):
+        return f"the glob {pattern!r} may not climb out of the checkout."
+    return (
+        f"the glob {pattern!r} has the file part {file_part!r}; "
+        "the file part is a literal name or *.<extension> (for example *.py)."
+    )
+
+
+def _glob_prefix_reason(pattern: str, base: str, root_real: str) -> str | None:
+    """Resolve the literal (wildcard-free) leading part of a glob and keep it inside the root.
+
+    The CLI resolves a glob against the search directory, so ``link/*.py`` reads ``link``
+    first. If ``link`` is a symbolic link out of the checkout, that is a way out the glob's
+    spelling does not show. A glob with no wildcard at all names one file, which is then
+    also judged like a ``Read`` path.
+    """
+    segments = pattern.split("/")
+    literal: list[str] = []
+    for segment in segments:
+        if "*" in segment:
+            break
+        literal.append(segment)
+    if not literal:
+        return None
+    real = os.path.realpath(os.path.join(base, *literal))
+    if not path_is_inside(real, root_real):
+        return (
+            f"the glob {pattern!r} starts at {'/'.join(literal)!r}, which resolves outside the "
+            "checkout under review (links and short names are followed first)."
+        )
+    reason = _git_internals_reason(real, root_real, f"the glob {pattern!r}")
+    if reason:
+        return reason
+    if len(literal) == len(segments):  # no wildcard: it names one file
+        reason = read_secret_reason(real)
+        if reason:
+            return f"the glob {pattern!r} {reason}; the reviewer never reads those."
+    return None
+
+
+def _glob_reason(pattern: object, *, base: str, root_real: str) -> str | None:
+    """Check a glob: written in the plain alphabet, unable to match a secret-file name, and
+    starting somewhere inside the checkout."""
+    if not isinstance(pattern, str) or not pattern:
+        return "a glob must be a non-empty string."
     if len(pattern) > _MAX_PATH_CHARS or any(ord(char) < 32 for char in pattern):
         return "the glob is too long or contains control characters."
-    text = pattern.replace("\\", "/")
-    if text.startswith(("/", "~")) or re.match(r"[A-Za-z]:", text):
+    if pattern.startswith(("/", "~")) or re.match(r"[A-Za-z]:", pattern):
         return (
             f"the glob {pattern!r} is absolute or home-relative; use a pattern inside the checkout."
         )
-    if ".." in text:
-        return f"the glob {pattern!r} may not climb out of the checkout."
-    reason = _glob_secret_reason(text.rsplit("/", 1)[-1])
-    if reason:
+    if not _GLOB_ALPHABET.fullmatch(pattern):
         return (
-            f"the glob {pattern!r} could match a file that {reason}; "
-            "the reviewer never reads those."
+            f"the glob {pattern!r} uses a character a glob engine reads as syntax, or the CLI "
+            "splits a glob on (a class [..], a brace {..}, ?, !, a backslash, a comma, a space); "
+            "write it with letters, digits, . _ @ + - and / and *."
         )
-    return None
+    device = _device_name_in(pattern)
+    if device is not None:
+        return f"the glob {pattern!r} names a Windows device ({device!r}); files only."
+    *directories, file_part = pattern.split("/")
+    return (
+        _glob_directories_reason(pattern, directories)
+        or _glob_secret_reason(pattern, file_part)
+        or _glob_file_part_reason(pattern, file_part)
+        or _glob_prefix_reason(pattern, base, root_real)
+    )
 
 
 def check_read_access(tool_name: object, tool_input: object, *, root: str) -> str | None:
     """Return why a ``Read`` / ``Grep`` / ``Glob`` call is refused, or ``None``.
+
+    It answers and does not raise: a path the checks cannot resolve (an OS error, a name
+    the platform refuses to normalise) is not a path to read, so that too is a reason.
 
     Args:
         tool_name: The tool (``Read``, ``Grep`` or ``Glob``); anything else is refused.
         tool_input: The call's input (anything, so a malformed payload is refused).
         root: The checkout under review; every path must resolve inside it.
     """
-    if not isinstance(tool_name, str) or tool_name not in _READ_PATH_FIELD:
+    try:
+        return _check_read_access(tool_name, tool_input, root=root)
+    except Exception as exc:  # fail closed: what cannot be checked is refused
+        return f"the read could not be checked safely ({type(exc).__name__}); it is refused."
+
+
+def _check_read_access(tool_name: object, tool_input: object, *, root: str) -> str | None:
+    if not isinstance(tool_name, str) or tool_name not in _READ_TOOLS:
         return f"{tool_name!r} is not a read tool."
     if not isinstance(tool_input, Mapping):
         return "The read request was malformed."
-    raw = tool_input.get(_READ_PATH_FIELD[tool_name])
-    if raw is None:
-        if tool_name == "Read":
-            return "Read needs a file_path."
-    else:
+    root_real = os.path.realpath(root)
+    base = root_real  # a glob is resolved against the search directory, else the checkout
+    given = [tool_input[key] for key in _READ_PATH_KEYS if tool_input.get(key) is not None]
+    if not given and tool_name == "Read":
+        return "Read needs a file_path."
+    for raw in given:
         reason = _confined_path_reason(raw, root)
         if reason:
             return reason
-    for field in _READ_GLOB_FIELDS.get(tool_name, ()):
-        value = tool_input.get(field)
-        if value is not None:
-            reason = _glob_reason(value)
-            if reason:
-                return reason
-    return None
+    if given:
+        base = _real_of(given[-1], root)  # `path` wins over `file_path`, as in the CLI
+    glob_field = _READ_GLOB_FIELD.get(tool_name)
+    glob = None if glob_field is None else tool_input.get(glob_field)
+    if glob is None:
+        return None
+    return _glob_reason(glob, base=base, root_real=root_real)
 
 
 async def deny_unconfined_reads(
@@ -957,7 +1192,7 @@ async def deny_unconfined_reads(
         if not isinstance(input_data, Mapping) or "tool_name" not in input_data:
             return _deny("The read request was malformed.")
         name = input_data["tool_name"]
-        if name not in _READ_PATH_FIELD:
+        if name not in _READ_TOOLS:
             return {}
         reason = check_read_access(name, input_data.get("tool_input"), root=root)
     except Exception as exc:  # fail closed: a guard that crashes must not wave a call through

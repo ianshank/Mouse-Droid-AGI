@@ -12,7 +12,9 @@ so what is pinned here is the *containment*, not the review quality:
   ref do not;
 * the PreToolUse read guard - ``Read``, ``Grep`` and ``Glob`` resolve their path (symlinks
   and junctions followed) and stay inside the checkout under review; ``.git``, secret-file
-  names and escaping or secret-matching globs are refused; it fails closed;
+  names, device names and glob syntax are refused; a glob is judged by a strict grammar and
+  by concrete secret names, and its literal start is resolved; it answers and fails closed;
+  a head that tracks a symlink out of the checkout is refused before any spend;
 * the MCP entry - built in code from constants (``sys.executable -m mousedroid``, a
   fixed minimal environment, mock hardware forced), with ``.mcp.json`` read from the
   BASE ref only to confirm it; the reviewer's instructions and the files ``git show``
@@ -41,6 +43,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import dataclasses
+import fnmatch
 import json
 import os
 import re
@@ -100,14 +103,26 @@ agent_reviewer:
 # --------------------------------------------------------------------------- #
 # Fixtures and fakes
 # --------------------------------------------------------------------------- #
-def _git(root: Path, *args: str) -> str:
+def _git(root: Path, *args: str, stdin: str | None = None) -> str:
     done = subprocess.run(
         ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", str(root), *args],
         check=True,
         capture_output=True,
         text=True,
+        input=stdin,
     )
     return done.stdout.strip()
+
+
+def _ledger_dir(repo: Path) -> Path:
+    """The stand-in for the controller's checkout: a sibling of the repo under review.
+
+    The ledger is the controller's, so a ledger root inside the checkout (which a head
+    controls) is refused unless the flag accepts it; the tests keep theirs outside.
+    """
+    root = repo.parent / "ledger-root"
+    root.mkdir(exist_ok=True)
+    return root
 
 
 def _write(root: Path, rel: str, body: str) -> Path:
@@ -313,12 +328,12 @@ def _no_scanner(_text: str) -> ScanOutcome:
 
 
 def _argv(repo: Path, *extra: str, cap: str = "10") -> list[str]:
-    """The command line of a review of ``repo``; its ledger lives in ``repo`` unless overridden."""
+    """The command line of a review of ``repo``; its ledger lives beside it unless overridden."""
     return [
         "--repo-root",
         str(repo),
         "--ledger-root",
-        str(repo),
+        str(_ledger_dir(repo)),
         "--base",
         "HEAD~1",
         "--head",
@@ -348,7 +363,7 @@ def _argv_with_base_config(repo: Path, yaml_text: str, *extra: str, cap: str = "
 
 
 def _ledger_rows(repo: Path) -> list[dict[str, Any]]:
-    path = repo / "reports/credit/ledger.jsonl"
+    path = _ledger_dir(repo) / "reports/credit/ledger.jsonl"
     if not path.is_file():
         return []
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
@@ -1041,26 +1056,104 @@ def test_git_internals_are_not_readable_files(checkout: Path) -> None:
 @pytest.mark.parametrize(
     "pattern",
     [
-        "/etc/*",
-        "C:/Users/*",
-        "C:\\Users\\*",
-        "~/*",
-        "../*",
-        "src/../../*",
-        "**/../x",
-        "*.env",
-        ".env*",
-        "docker.env*",
-        "**/.env.local",
-        "**/*.{env,py}",
-        "*.{py,{env,md}}",
-        "docker.env?",
-        ".env?",
-        ".env?x",
-        "?env",
+        "/etc/*.conf",
+        "C:/Users/*.txt",
+        "~/*.txt",
+        "../*.py",
+        "src/../../*.py",
+        "**/../x.py",
+        "src/..",
+        "..",
+        "..x/a.py",
     ],
 )
-def test_a_glob_that_leaves_the_checkout_or_names_secrets_is_refused(
+def test_a_glob_that_leaves_the_checkout_is_refused(checkout: Path, pattern: str) -> None:
+    assert _read(checkout, "Glob", pattern=pattern)
+    assert _read(checkout, "Grep", pattern="x", glob=pattern)
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "[.]env",
+        ".e[n]v",
+        "*.[e]nv",
+        "[!a]*.py",
+        "src/[a]/*.py",
+        "{.env,x}",
+        "*.{env,py}",
+        "*.{py,md}",
+        "*.{py,{env,md}}",
+        "src/{a,b}/*.py",
+        "!*.env",
+        "\\.env",
+        "src\\*.py",
+        "src\\a.py",
+        "?env",
+        ".en?",
+        "*.p?",
+        "docker.env?",
+        ".env *.py",
+        "*.py .env",
+        "*.py,.env",
+        "*.py;.env",
+        "*.py\u00a0.env",
+        "'*.py'",
+        '"*.py"',
+        "$HOME/*.py",
+        "%X%/*.py",
+        "a:b/*.py",
+        "caf\u00e9/*.py",
+        "*.py#",
+    ],
+)
+def test_a_glob_with_syntax_the_engine_reads_is_refused(checkout: Path, pattern: str) -> None:
+    """Character classes, braces, negation, escapes, ``?``, and everything the CLI splits a
+    Grep glob on: none of it is spelled the way the secret screen would read it."""
+    assert _read(checkout, "Glob", pattern=pattern), pattern
+    assert _read(checkout, "Grep", pattern="x", glob=pattern), pattern
+
+
+def test_the_cli_splits_a_grep_glob_on_whitespace_and_commas_so_one_may_not_hide_two(
+    checkout: Path,
+) -> None:
+    """The CLI turns ``"*.env *.py"`` into two ripgrep globs; judged as one string it would pass."""
+    secret_pairs = (
+        "*.env *.py",
+        "*.env,*.py",
+        ".env *.py",
+        "*.py .env",
+        "*.py,.env",
+        ".env,*.py",
+        "*.py\t.env",
+        "*.py\n.env",
+        "*.py\u00a0.env",
+    )
+    for glob in secret_pairs:
+        assert _read(checkout, "Grep", pattern="x", glob=glob), glob
+        assert _read(checkout, "Glob", pattern=glob), glob
+
+
+@pytest.mark.parametrize("glob", ["*.py *.md", "*.py,*.md", "*.py, *.md", "src/*.py docs/*.md"])
+def test_even_two_harmless_globs_are_one_too_many_per_call(checkout: Path, glob: str) -> None:
+    """The alphabet has no space and no comma, so a list is never read as one glob."""
+    _says(_read(checkout, "Grep", pattern="x", glob=glob), "splits a glob on", glob)
+    assert _read(checkout, "Grep", pattern="x", glob=re.split(r"[\s,]+", glob)[0]) is None
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["test_*.py", "*_test.py", "a*b", "**.py", "*.py*", "*.tar.gz", "file.*"],
+)
+def test_the_file_part_of_a_glob_is_a_literal_name_or_star_dot_extension(
+    checkout: Path, pattern: str
+) -> None:
+    for tool, field in (("Glob", "pattern"), ("Grep", "glob")):
+        _says(_read(checkout, tool, **{field: pattern}), "file part", (tool, pattern))
+
+
+@pytest.mark.parametrize("pattern", ["src*/a.py", "s*c/a.py", "**x/a.py", "*.d/a.py", "a?/b.py"])
+def test_a_directory_part_of_a_glob_is_a_literal_name_star_or_double_star(
     checkout: Path, pattern: str
 ) -> None:
     assert _read(checkout, "Glob", pattern=pattern)
@@ -1070,15 +1163,135 @@ def test_a_glob_that_leaves_the_checkout_or_names_secrets_is_refused(
 @pytest.mark.parametrize(
     "pattern",
     [
+        "*.env",
+        "docker.env*",
+        ".env*",
+        ".env",
+        "prod.env",
+        "docker.env",
+        "docker.env.local",
+        ".env.production",
+        "**/.env.local",
+        "id_rsa",
+        "**/id_ed25519",
+        "*",
+        "**",
+        "**/*",
+        "src/*",
+        "src/**",
+        "*.local",
+        "*.production",
+        "*.prod",
+        "*.x",
+        "*.ENV",
+        "DOCKER.ENV*",
+        "*.*",
+        "x*",
+        "*.LOCAL",
+        "*.Production",
+        "config.env",
+        "deploy/foo.env",
+        "**/config.env",
+        "src/**/foo.env",
+        "**/docker.env.rover",
+        "docker.env.rover",
+        ".env.staging",
+        "**/ID_RSA",
+    ],
+)
+def test_a_glob_that_can_match_a_secret_file_name_is_refused(checkout: Path, pattern: str) -> None:
+    """Tested by matching the glob against concrete secret names, not by rewriting the glob."""
+    for tool, field in (("Glob", "pattern"), ("Grep", "glob")):
+        reason = _read(checkout, tool, **{field: pattern})
+        assert reason is not None, (tool, pattern)
+        assert "secret" in reason or "private-key" in reason or "syntax" in reason, reason
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "./src/*.py",
+        "src/./a.py",
+        ".git/*.py",
+        "**/.GIT/config",
+        "**/.git",
+        "**/.GIT",
+        "src/.git",
+        ".git",
+        "src//a.py",
+    ],
+)
+def test_a_dot_git_or_empty_part_of_a_glob_is_refused(checkout: Path, pattern: str) -> None:
+    assert _read(checkout, "Glob", pattern=pattern)
+    assert _read(checkout, "Grep", pattern="x", glob=pattern)
+
+
+def test_the_reasons_for_a_dot_git_part_and_an_empty_part_are_given(checkout: Path) -> None:
+    _says(_read(checkout, "Glob", pattern="src//a.py"), "empty part")
+    _says(_read(checkout, "Glob", pattern="**/.git"), "names .git")
+    _says(_read(checkout, "Glob", pattern="**/.git/config"), "names .git")
+    _says(_read(checkout, "Glob", pattern=".git/*.py"), "names .git")
+
+
+def test_a_link_into_dot_git_is_followed_before_the_glob_is_judged(checkout: Path) -> None:
+    _write(checkout, ".git/config", "[core]\n")
+    _link_dir(checkout / "alias", checkout / ".git")
+    _says(_read(checkout, "Glob", pattern="alias/*.txt"), ".git")
+    _says(_read(checkout, "Grep", pattern="x", glob="alias/config"), ".git")
+
+
+def test_a_glob_that_ends_in_a_slash_names_no_file(checkout: Path) -> None:
+    _says(_read(checkout, "Glob", pattern="src/"), "names no file")
+
+
+@pytest.mark.parametrize(
+    ("segment", "plain"),
+    [
+        ("src", True),
+        ("app.py", True),
+        (".hidden", True),
+        (".gitignore", True),
+        ("a..b", True),
+        ("e@f+g-h_i", True),
+        ("", False),
+        (".", False),
+        ("..", False),
+        ("...", False),
+        ("..x", False),
+        ("a.", False),
+        ("a*b", False),
+        ("*", False),
+        ("**", False),
+        ("*.py", False),
+    ],
+)
+def test_what_counts_as_a_plain_name_in_a_glob(segment: str, plain: bool) -> None:
+    assert policy._is_plain_name(segment) is plain
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
         "*.py",
+        "*.PY",
         "**/*.py",
-        "src/**/*.{py,pyi}",
+        "src/**/*.py",
+        "src/*/app.py",
         "docs/*.txt",
         "*.md",
-        "**/*_env.py",
-        "environment.py",
-        "?.py",
-        "data?.json",
+        "**/*.json",
+        "src/app.py",
+        "README.md",
+        "Makefile",
+        ".github/workflows/*.yml",
+        "**/pyproject.toml",
+        "**/conftest.py",
+        "**/.gitignore",
+        "src/mousedroid/**/*.py",
+        "*.toml",
+        "**/*.pyi",
+        "**/*.c",
+        "a-b/c_d/e@f+g.h",
     ],
 )
 def test_an_ordinary_glob_is_fine(checkout: Path, pattern: str) -> None:
@@ -1086,17 +1299,233 @@ def test_an_ordinary_glob_is_fine(checkout: Path, pattern: str) -> None:
     assert _read(checkout, "Grep", pattern="x", glob=pattern) is None
 
 
-def test_brace_expansion_is_bounded() -> None:
-    """Four groups of ten alternatives would be ten thousand patterns; the screen caps them."""
-    assert len(policy._brace_variants("{0,1,2,3,4,5,6,7,8,9}" * 4)) <= 64
-    assert sorted(policy._brace_variants("a.{b,c}")) == ["a.b", "a.c"]
-    assert policy._brace_variants("plain") == ["plain"]
+def test_the_probe_names_come_from_the_secret_patterns() -> None:
+    probes = policy.secret_probe_names(policy.SECRET_PATH_GLOBS)
+    for name in (".env", "prod.env", "docker.env", "docker.env.local", ".env.production"):
+        assert name in probes, name
+    for probe in probes:
+        assert policy.secret_path_reason(probe), f"{probe!r} should itself be a secret name"
+    for pattern in policy.SECRET_PATH_GLOBS:
+        assert any(fnmatch.fnmatchcase(probe, pattern.lower()) for probe in probes), pattern
 
 
-@pytest.mark.parametrize("glob", [7, ["*.py"], "a\x00b", "*" * 5000])
+def test_a_new_secret_pattern_gets_its_own_probes() -> None:
+    probes = policy.secret_probe_names(("*.pem", "credentials", "secrets.*"))
+    assert {"x.pem", "prod.pem", "credentials", "secrets.x", "secrets.local"} <= set(probes)
+    assert "secrets." not in probes, "a name that ends in a dot is not a file name"
+    assert policy.secret_probe_names(("A.ENV",)) == ("a.env",), "lower case, like the glob"
+    assert policy.secret_probe_names(()) == ()
+
+
+def test_the_read_guards_probes_cover_the_private_key_names() -> None:
+    probes = policy._SECRET_PROBES
+    assert set(policy.PRIVATE_KEY_NAMES) <= set(probes)
+    assert {".env", "prod.env", "docker.env.local", ".env.production", "id_rsa"} <= set(probes)
+
+
+@pytest.mark.parametrize("name", ["id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "keys/ID_RSA"])
+def test_a_private_key_file_is_never_read(checkout: Path, name: str) -> None:
+    _write(checkout, name, "key material\n")
+    _says(_read(checkout, "Read", file_path=name), "private-key", name)
+    _says(_read(checkout, "Grep", pattern="x", path=name), "private-key", name)
+
+
+def test_a_public_key_file_is_readable(checkout: Path) -> None:
+    _write(checkout, "keys/id_rsa.pub", "ssh-rsa AAAA\n")
+    assert _read(checkout, "Read", file_path="keys/id_rsa.pub") is None
+
+
+@pytest.mark.parametrize(("tool", "field"), _READ_FIELDS)
+@pytest.mark.parametrize("raw", ["src/*", "*.py", "src/{a,b}", "src/[a]", "a?b"])
+def test_a_path_field_takes_a_plain_path_not_a_pattern(
+    checkout: Path, tool: str, field: str, raw: str
+) -> None:
+    _says(_read(checkout, tool, **{field: raw}), "glob characters", (tool, raw))
+
+
+def test_the_literal_start_of_a_glob_is_resolved_and_must_stay_inside(checkout: Path) -> None:
+    """``link/*.py`` reads ``link`` first; a link out of the checkout is a way out the glob's
+    spelling does not show."""
+    _link_dir(checkout / "alias", checkout.parent / "elsewhere")
+    for tool, field in (("Glob", "pattern"), ("Grep", "glob")):
+        for pattern in ("alias/*.txt", "alias/**/*.txt", "alias/sub/*.txt", "alias/secret.txt"):
+            _says(
+                _read(checkout, tool, **{field: pattern}),
+                "outside the checkout",
+                (tool, pattern),
+            )
+
+
+def test_a_glob_is_resolved_against_the_search_directory_not_just_the_checkout(
+    checkout: Path,
+) -> None:
+    _link_dir(checkout / "docs" / "alias", checkout.parent / "elsewhere")
+    _says(_read(checkout, "Glob", pattern="alias/*.txt", path="docs"), "outside the checkout")
+    _says(_read(checkout, "Grep", pattern="x", glob="alias/*.txt", path="docs"), "outside")
+    assert _read(checkout, "Glob", pattern="alias/*.txt") is None, "no `alias` at the root"
+    assert _read(checkout, "Glob", pattern="*.txt", path="docs") is None
+
+
+def test_the_literal_start_of_a_glob_may_lead_somewhere_inside(checkout: Path) -> None:
+    _link_dir(checkout / "docs_alias", checkout / "docs")
+    assert _read(checkout, "Glob", pattern="docs_alias/*.txt") is None
+    assert _read(checkout, "Glob", pattern="docs_alias/notes.txt") is None
+    assert _read(checkout, "Grep", pattern="x", glob="docs/*.txt", path="src") is None
+
+
+def test_a_glob_that_names_one_file_is_judged_like_a_read_path(checkout: Path) -> None:
+    _write(checkout, "vault.env/key.txt", "KEY=value\n")
+    _link_dir(checkout / "innocent", checkout / "vault.env")
+    _says(_read(checkout, "Glob", pattern="innocent"), "secret-file pattern")
+    assert _read(checkout, "Glob", pattern="innocent/other.txt") is None, (
+        "only the last name counts"
+    )
+
+
+@pytest.mark.parametrize("glob", [7, ["*.py"], "a\x00b", "*" * 5000, ""])
 def test_a_malformed_glob_is_refused(checkout: Path, glob: object) -> None:
     assert _read(checkout, "Glob", pattern=glob)
     assert _read(checkout, "Grep", pattern="x", glob=glob)
+
+
+_DEVICE_NAMES = [
+    "NUL",
+    "nul",
+    "CON",
+    "Con",
+    "PRN",
+    "AUX",
+    "COM1",
+    "COM9",
+    "LPT1",
+    "LPT9",
+    "NUL.txt",
+    "con.py",
+    "aux.tar.gz",
+    "com3.log",
+    "lpt2.",
+    "NUL ",
+    "nul:stream",
+    "COM\u00b9",
+    "LPT\u00b2",
+]
+
+
+@pytest.mark.parametrize("name", _DEVICE_NAMES)
+def test_a_windows_device_name_is_refused_wherever_it_stands(checkout: Path, name: str) -> None:
+    """Windows opens the DEVICE whatever directory the name is in, with or without an
+    extension; such a path is not a file inside the checkout."""
+    for tool, field in _READ_FIELDS:
+        for raw in (name, f"src/{name}", str(checkout / name), f"{name}/x.py"):
+            _says(_read(checkout, tool, **{field: raw}), "device", (tool, raw))
+    plain = re.fullmatch(r"[A-Za-z0-9_.@+-]+", name) is not None
+    for tool, field in (("Glob", "pattern"), ("Grep", "glob")):
+        reason = _read(checkout, tool, **{field: name})
+        assert reason is not None, (tool, name)
+        if plain:
+            assert "device" in reason, reason
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["console.py", "NULL", "communicate.py", "auxiliary", "com0", "lpt10", "nulls.txt", "cons"],
+)
+def test_a_name_that_only_starts_like_a_device_is_fine(checkout: Path, name: str) -> None:
+    for tool, field in _READ_FIELDS:
+        assert _read(checkout, tool, **{field: name}) is None, (tool, name)
+    assert _read(checkout, "Glob", pattern=name) is None
+    assert _read(checkout, "Glob", pattern=f"src/{name}") is None
+
+
+def test_the_nul_case_returns_a_reason_where_resolving_it_used_to_raise(checkout: Path) -> None:
+    """``<root>\\NUL`` is the device, not a file under the root: ``relpath`` raised on it."""
+    reason = policy.check_read_access(
+        "Read", {"file_path": str(checkout) + os.sep + "NUL"}, root=str(checkout)
+    )
+    _says(reason, "device")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "\ud800",
+        "a\x00b",
+        "\u202e",
+        "x" * 10_000,
+        "..\\..",
+        "C:",
+        "\\\\?\\C:\\",
+        "\\\\.\\PIPE\\x",
+        "//server/share",
+        "NUL\x00",
+        "a/b\x7fc",
+        "\U0001f600",
+        "",
+        " ",
+    ],
+)
+def test_the_read_guard_answers_strange_values_and_does_not_raise(
+    checkout: Path, value: str
+) -> None:
+    for tool in ("Read", "Grep", "Glob"):
+        for field in ("file_path", "path", "glob", "pattern"):
+            tool_input = {field: value, "file_path": "src/app.py"}
+            result = policy.check_read_access(tool, tool_input, root=str(checkout))
+            assert result is None or isinstance(result, str), (tool, field, value)
+
+
+@pytest.mark.parametrize("error", [OSError, ValueError, RuntimeError, TypeError])
+def test_a_failure_inside_the_checks_is_a_refusal_not_an_exception(
+    checkout: Path, monkeypatch: pytest.MonkeyPatch, error: type[Exception]
+) -> None:
+    def broken(*_args: object, **_kwargs: object) -> str | None:
+        raise error("boom")
+
+    monkeypatch.setattr(policy, "_confined_path_reason", broken)
+    reason = policy.ReadGuard(root=str(checkout)).check("Read", {"file_path": "src/app.py"})
+    assert reason is not None
+    assert error.__name__ in reason
+    assert "refused" in reason
+
+
+def test_both_spellings_of_the_path_are_judged_on_every_tool(checkout: Path) -> None:
+    """The CLI reads a Grep ``file_path`` as its ``path``; a hook may see either."""
+    elsewhere = str(checkout.parent / "elsewhere")
+    for tool in ("Read", "Grep", "Glob"):
+        for key in ("file_path", "path"):
+            _says(_read(checkout, tool, **{key: elsewhere}), "outside the checkout", (tool, key))
+            assert _read(checkout, tool, **{key: "src"}) is None, (tool, key)
+
+
+def test_when_both_spellings_are_given_both_must_be_inside(checkout: Path) -> None:
+    elsewhere = str(checkout.parent / "elsewhere")
+    for tool in ("Read", "Grep", "Glob"):
+        assert _read(checkout, tool, file_path="src", path=elsewhere), tool
+        assert _read(checkout, tool, file_path=elsewhere, path="src"), tool
+        assert _read(checkout, tool, file_path="src", path="docs") is None, tool
+
+
+def test_a_glob_is_resolved_against_the_path_the_cli_would_use(checkout: Path) -> None:
+    _link_dir(checkout / "docs" / "alias", checkout.parent / "elsewhere")
+    _says(
+        _read(checkout, "Grep", pattern="x", glob="alias/*.txt", file_path="docs"),
+        "outside the checkout",
+    )
+    assert _read(checkout, "Grep", pattern="x", glob="alias/*.txt", file_path="src") is None
+
+
+def test_path_wins_over_file_path_as_the_search_directory(checkout: Path) -> None:
+    """Both given and different: the glob is resolved against ``path``, as the CLI does."""
+    _link_dir(checkout / "docs" / "alias", checkout.parent / "elsewhere")
+    both = {"pattern": "x", "glob": "alias/*.txt"}
+    assert _read(checkout, "Grep", **both, file_path="src", path="docs")
+    assert _read(checkout, "Grep", **both, file_path="docs", path="src") is None
+
+
+def test_a_read_needs_one_of_the_path_spellings(checkout: Path) -> None:
+    _says(_read(checkout, "Read"), "needs a file_path")
+    _says(_read(checkout, "Read", file_path=None, path=None), "needs a file_path")
+    assert _read(checkout, "Read", path="src/app.py") is None
 
 
 @pytest.mark.parametrize(
@@ -1596,6 +2025,76 @@ def test_scrubbed_environ_drops_every_variable_that_can_hold_a_credential() -> N
         "SYSTEMROOT": "C:\\Windows",
     }
     assert "ANTHROPIC_API_KEY" in environ, "the caller's mapping is left alone"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SESSION_TOKEN",
+        "TOKEN",
+        "API_KEY",
+        "KEY",
+        "SECRET",
+        "PASSWORD",
+        "CREDENTIALS",
+        "CREDENTIAL",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "MY_KEY_FILE",
+        "SECRET_KEY_BASE",
+        "OPENAI_API_KEY",
+        "NPM_TOKEN",
+        "GH_TOKEN",
+        "HF_TOKEN",
+        "DB_PASSWORD",
+        "PGPASSWORD",
+        "MYSQL_PWD",
+        "github_token",
+        "Db_Password",
+        "api-key",
+        "my.secret",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "MOUSEDROID_LLM__API_KEY",
+    ],
+)
+def test_a_credential_variable_is_scrubbed_from_the_reviewers_own_children(name: str) -> None:
+    assert policy.scrubbed_environ({name: "v", "PATH": "p"}) == {"PATH": "p"}
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "PATH",
+        "HOME",
+        "SYSTEMROOT",
+        "COMSPEC",
+        "TEMP",
+        "USERNAME",
+        "TERM",
+        "LANG",
+        "PYTHONPATH",
+        "GIT_EXEC_PATH",
+        "KEYBOARD",
+        "MONKEY",
+        "LESSKEY",
+        "TOKENIZERS_PARALLELISM",
+        "PASSWORDLESS",
+        "SECRETARY",
+        "SSH_AUTH_SOCK",
+    ],
+)
+def test_an_ordinary_variable_is_kept_for_the_reviewers_own_children(name: str) -> None:
+    assert policy.scrubbed_environ({name: "v"}) == {name: "v"}
+
+
+def test_the_aws_secret_key_and_the_password_variables_are_named_outright() -> None:
+    """The word rule sees ``AWS_SECRET_ACCESS_KEY`` too; naming it (and ``PGPASSWORD``, which
+    the rule cannot see) keeps them scrubbed if the rule is ever narrowed."""
+    for name in ("AWS_SECRET_ACCESS_KEY", "PGPASSWORD", "MYSQL_PWD"):
+        assert name in policy.CREDENTIAL_ENV_NAMES
 
 
 def test_scrubbed_environ_reads_the_process_environment_by_default(
@@ -2608,7 +3107,7 @@ def test_dry_run_constructs_no_client(
     assert re.search(r"base_tracked_files: \d+", text)
     assert "GIT_LITERAL_PATHSPECS=1" in text
     assert "confirms the pinned invocation" in text
-    rules = text.replace(str(repo), "<repo>").replace(str(repo.resolve()), "<repo>")
+    rules = text.replace(str(repo.parent), "<tmp>").replace(str(repo.parent.resolve()), "<tmp>")
     assert "pytest" not in rules, "no pytest rule, no pytest in the plan"
     for rule in policy.ALLOWED:
         assert rule in text
@@ -2725,7 +3224,7 @@ def test_cli_rejects_an_unknown_head(repo: Path, capsys: pytest.CaptureFixture[s
         "--repo-root",
         str(repo),
         "--ledger-root",
-        str(repo),
+        str(_ledger_dir(repo)),
         "--base",
         "HEAD~1",
         "--head",
@@ -2776,7 +3275,7 @@ def test_a_hung_git_is_killed_and_the_ref_is_refused(
 def test_a_damaged_ledger_refuses_the_dry_run(
     repo: Path, fake_sdk: _FakeSdk, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    _write(repo, "reports/credit/ledger.jsonl", "this is not json\n")
+    _write(_ledger_dir(repo), "reports/credit/ledger.jsonl", "this is not json\n")
     assert run_review.main(_argv(repo, "--dry-run")) == run_review.EXIT_REFUSED
     assert "ledger" in capsys.readouterr().err.lower()
 
@@ -2852,7 +3351,7 @@ def test_the_mcp_declaration_is_read_from_the_base_ref_not_the_head_or_the_worki
         "--repo-root",
         str(repo),
         "--ledger-root",
-        str(repo),
+        str(_ledger_dir(repo)),
         "--base",
         "HEAD~2",
         "--head",
@@ -2879,7 +3378,7 @@ def test_a_live_run_never_uses_a_tampered_declaration_from_the_head(
         "--repo-root",
         str(repo),
         "--ledger-root",
-        str(repo),
+        str(_ledger_dir(repo)),
         "--base",
         "HEAD~2",
         "--head",
@@ -2909,7 +3408,7 @@ def test_a_tampered_declaration_at_the_base_ref_refuses_the_run(
         "--repo-root",
         str(repo),
         "--ledger-root",
-        str(repo),
+        str(_ledger_dir(repo)),
         "--base",
         "HEAD~1",
         "--head",
@@ -2937,7 +3436,7 @@ def test_a_base_ref_without_the_declaration_refuses_the_run_and_does_not_fall_ba
         "--repo-root",
         str(repo),
         "--ledger-root",
-        str(repo),
+        str(_ledger_dir(repo)),
         "--base",
         "HEAD~1",
         "--head",
@@ -3001,7 +3500,7 @@ def test_the_reviewer_instructions_come_from_the_base_ref_not_the_head(
         "--repo-root",
         str(repo),
         "--ledger-root",
-        str(repo),
+        str(_ledger_dir(repo)),
         "--base",
         "HEAD~2",
         "--head",
@@ -3032,7 +3531,7 @@ def test_a_base_ref_without_the_reviewer_file_refuses_the_run(
         "--repo-root",
         str(repo),
         "--ledger-root",
-        str(repo),
+        str(_ledger_dir(repo)),
         "--base",
         "HEAD~1",
         "--head",
@@ -3159,7 +3658,7 @@ def test_a_workforce_yaml_the_head_commits_changes_nothing_either(
         "--repo-root",
         str(repo),
         "--ledger-root",
-        str(repo),
+        str(_ledger_dir(repo)),
         "--base",
         "HEAD~2",
         "--head",
@@ -3341,9 +3840,18 @@ def _code_at(
         monkeypatch.setattr(run_review, "_mcp_package_origin", lambda: package)
 
 
-def _evaluate(repo: Path, refs: run_review.Refs | None = None, *, trust: bool = False) -> Any:
+def _evaluate(
+    repo: Path,
+    refs: run_review.Refs | None = None,
+    *,
+    trust: bool = False,
+    ledger: Path | None = None,
+) -> Any:
     resolved = refs or asyncio.run(run_review._resolve_refs(repo, "HEAD~1", "HEAD"))
-    return asyncio.run(run_review._evaluate_trust(repo, resolved, trust_checkout=trust))
+    ledger_path = ledger or _ledger_dir(repo) / "reports" / "credit" / "ledger.jsonl"
+    return asyncio.run(
+        run_review._evaluate_trust(repo, resolved, trust_checkout=trust, ledger_path=ledger_path)
+    )
 
 
 def test_code_from_outside_the_checkout_is_trusted(
@@ -3548,7 +4056,7 @@ def test_a_head_that_tracks_files_in_the_interpreters_environment_is_refused_out
         "--repo-root",
         str(repo),
         "--ledger-root",
-        str(repo),
+        str(_ledger_dir(repo)),
         "--base",
         "HEAD~2",
         "--head",
@@ -3634,7 +4142,7 @@ def _argv_at_the_base(repo: Path, *extra: str) -> list[str]:
         "--repo-root",
         str(repo),
         "--ledger-root",
-        str(repo),
+        str(_ledger_dir(repo)),
         "--base",
         "rbase",
         "--head",
@@ -3643,6 +4151,116 @@ def _argv_at_the_base(repo: Path, *extra: str) -> list[str]:
         "5",
         *extra,
     ]
+
+
+# --- the spend ledger is a piece of trust too -----------------------------------------------------
+_LEDGER_IN_REPO = "reports/credit/ledger.jsonl"
+
+
+def test_a_ledger_root_inside_a_checkout_the_head_controls_is_refused_without_the_flag(
+    repo: Path,
+    fake_sdk: _FakeSdk,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``--ledger-root`` pointing at the checkout under review: the head can rewrite that file."""
+    _live_env(monkeypatch)
+
+    assert run_review.main(_argv(repo, "--ledger-root", str(repo))) == run_review.EXIT_REFUSED
+
+    err = capsys.readouterr().err
+    assert "spend ledger" in err
+    assert _LEDGER_IN_REPO in err
+    assert "--ledger-root" in err
+    assert run_review.TRUST_CHECKOUT_FLAG in err
+    assert "not at the base" in err
+    fake_sdk.query.assert_not_called()
+    assert not (repo / "reports").exists()
+
+
+def test_the_flag_accepts_a_ledger_inside_the_checkout_and_the_plan_says_so(
+    repo: Path, fake_sdk: _FakeSdk, capsys: pytest.CaptureFixture[str]
+) -> None:
+    argv = _argv(repo, "--ledger-root", str(repo), "--dry-run", run_review.TRUST_CHECKOUT_FLAG)
+
+    assert run_review.main(argv) == 0
+
+    out = capsys.readouterr().out
+    accepted = f"; accepted with {run_review.TRUST_CHECKOUT_FLAG}"
+    assert f"trust_ledger: IN THE CHECKOUT UNDER REVIEW ({_LEDGER_IN_REPO}){accepted}" in out
+    assert "trust_controller: outside the checkout under review" in out, "and nothing else"
+
+
+def test_a_ledger_inside_a_checkout_at_the_base_commit_is_trusted(
+    repo: Path, fake_sdk: _FakeSdk, capsys: pytest.CaptureFixture[str]
+) -> None:
+    argv = _argv_at_the_base(repo, "--ledger-root", str(repo), "--dry-run")
+
+    assert run_review.main(argv) == 0
+
+    out = capsys.readouterr().out
+    assert f"trust_ledger: {_LEDGER_IN_REPO}, in the checkout, which is at the base commit" in out
+
+
+def test_a_ledger_root_beside_or_above_the_checkout_is_outside_it(
+    repo: Path, tmp_path: Path, fake_sdk: _FakeSdk, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for root in (_ledger_dir(repo), tmp_path):  # tmp_path is an ANCESTOR of the checkout
+        argv = _argv(repo, "--ledger-root", str(root), "--dry-run")
+        assert run_review.main(argv) == 0, root
+        assert "trust_ledger: outside the checkout under review" in capsys.readouterr().out
+
+
+def test_a_ledger_root_in_a_subdirectory_of_the_checkout_is_refused(
+    repo: Path, fake_sdk: _FakeSdk, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sub = repo / "ledgers" / "trusted"
+    sub.mkdir(parents=True)
+    argv = _argv(repo, "--ledger-root", str(sub), "--dry-run")
+
+    assert run_review.main(argv) == run_review.EXIT_REFUSED
+
+    assert "ledgers/trusted/reports/credit/ledger.jsonl" in capsys.readouterr().err
+
+
+def test_a_ledger_root_that_is_an_alias_of_the_checkout_is_refused(
+    repo: Path, tmp_path: Path, fake_sdk: _FakeSdk, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Judged by where it really is: a junction or symlink into the checkout is the checkout."""
+    _link_dir(tmp_path / "ledger-alias", repo)
+    argv = _argv(repo, "--ledger-root", str(tmp_path / "ledger-alias"), "--dry-run")
+
+    assert run_review.main(argv) == run_review.EXIT_REFUSED
+
+    assert "spend ledger" in capsys.readouterr().err
+
+
+def test_the_ledger_problem_is_listed_beside_the_code_problems(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _code_at(monkeypatch, controller=repo / "tools" / "agent_reviewer")
+    with pytest.raises(run_review.RefusalError) as excinfo:
+        _evaluate(repo, ledger=repo / _LEDGER_IN_REPO)
+    message = str(excinfo.value)
+    assert "reviewer's own modules" in message
+    assert "spend ledger" in message
+    assert "holds the API key" in message
+
+
+def test_a_ledger_alone_is_not_described_as_code_beside_the_key(repo: Path) -> None:
+    with pytest.raises(run_review.RefusalError) as excinfo:
+        _evaluate(repo, ledger=repo / _LEDGER_IN_REPO)
+    message = str(excinfo.value)
+    assert "the spend ledger would live inside a checkout the head controls" in message
+    assert "holds the API key" not in message
+
+
+def test_an_unresolvable_checkout_is_not_taken_for_the_base_by_the_ledger_either(
+    repo: Path,
+) -> None:
+    refs = run_review.Refs("b", "a" * 40, "h", "c" * 40, "unknown")
+    with pytest.raises(run_review.RefusalError, match="spend ledger"):
+        _evaluate(repo, refs, ledger=repo / _LEDGER_IN_REPO)
 
 
 # --- how the package is located ------------------------------------------------------------
@@ -3868,20 +4486,21 @@ def _commit_base_ledger(repo: Path, usd: float) -> None:
     _commit(repo, "the change under review")
 
 
-def test_a_head_that_empties_the_ledger_cannot_widen_the_cap(
+def test_a_controller_file_that_lost_rows_cannot_widen_the_cap(
     repo: Path, fake_sdk: _FakeSdk, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The base commits 58 of 60; the file in the checkout has lost the rows."""
+    """The base commits 58 of 60; the controller's own file is a stale copy holding 2."""
     _commit_base_ledger(repo, 58.0)
-    (repo / _LEDGER_REL).write_text("", encoding="utf-8")
+    _spend(_ledger_dir(repo), 2.0)
     _live_env(monkeypatch)
 
     assert run_review.main(_argv(repo, cap="3")) == run_review.EXIT_CAP
     fake_sdk.query.assert_not_called()
 
     assert run_review.main(_argv(repo, cap="2")) == 0
-    (row,) = _ledger_rows(repo)
-    assert row["cumulative_ws_usd"] == 59.25, "the base's 58.0 counts even though the file is empty"
+    rows = _ledger_rows(repo)
+    assert [row["cost_usd"] for row in rows] == [2.0, 1.25]
+    assert rows[-1]["cumulative_ws_usd"] == 59.25, "the base's 58.0 counts, not the file's 2.0"
 
 
 def test_a_head_that_deletes_the_ledger_cannot_widen_the_cap_either(
@@ -3903,7 +4522,6 @@ def test_a_damaged_base_ledger_is_a_refusal_that_names_the_base_blob(
     _commit(repo, "the base's damaged ledger")
     _write(repo, "later_change.py", "z = 1\n")
     _commit(repo, "the change under review")
-    (repo / _LEDGER_REL).unlink()  # the controller's own file is fine; the base's copy is not
 
     assert run_review.main(_argv(repo, "--dry-run")) == run_review.EXIT_REFUSED
 
@@ -4007,7 +4625,7 @@ def test_a_planted_program_in_the_checkout_counts_even_when_the_head_is_clean(
     """The CLI runs in the CHECKOUT: what it tracks at its own HEAD is what Windows would find."""
     _write(repo, "bash.cmd", "@echo off\n")
     _commit(repo, "a later commit in the checkout, past the head under review")
-    argv = ["--repo-root", str(repo), "--ledger-root", str(repo)]
+    argv = ["--repo-root", str(repo), "--ledger-root", str(_ledger_dir(repo))]
     argv += ["--base", "HEAD~2", "--head", "HEAD~1", "--cap-usd", "5", "--dry-run"]
 
     assert run_review.main(argv) == run_review.EXIT_REFUSED
@@ -4023,12 +4641,183 @@ def test_a_planted_program_in_the_head_counts_even_when_the_checkout_is_clean(
     _commit(repo, "the head plants a program")
     _git(repo, "rm", "-q", "node.cmd")
     _commit(repo, "a later commit in the checkout removes it again")
-    argv = ["--repo-root", str(repo), "--ledger-root", str(repo)]
+    argv = ["--repo-root", str(repo), "--ledger-root", str(_ledger_dir(repo))]
     argv += ["--base", "HEAD~2", "--head", "HEAD~1", "--cap-usd", "5", "--dry-run"]
 
     assert run_review.main(argv) == run_review.EXIT_REFUSED
 
     assert "'node.cmd'" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("link", "target"),
+    [
+        ("docs/latest", "../README.md"),
+        ("docs/latest", "../src/app.py"),
+        ("docs/latest", "sibling.md"),
+        ("docs/latest", "./sibling.md"),
+        ("docs/latest", "sub/dir/file.md"),
+        ("docs/latest", "."),
+        ("a/b/c", "../../d"),
+        ("a/b/c", "../x/y"),
+        ("top", "docs/readme.md"),
+    ],
+)
+def test_a_symlink_that_stays_inside_the_repository_is_not_an_escape(
+    link: str, target: str
+) -> None:
+    assert policy.symlink_escape_reason(link, target) is None
+
+
+@pytest.mark.parametrize(
+    ("link", "target", "why"),
+    [
+        ("docs/latest", "/etc/passwd", "absolute"),
+        ("docs/latest", "//server/share", "absolute"),
+        ("docs/latest", "\\\\server\\share", "absolute"),
+        ("docs/latest", "C:/Windows", "absolute"),
+        ("docs/latest", "c:\\Windows", "absolute"),
+        ("docs/latest", "../..", "above the repository root"),
+        ("top", "..", "above the repository root"),
+        ("top", "../x", "above the repository root"),
+        ("a/b/c", "../../../x", "above the repository root"),
+        ("docs/latest", "x/../../..", "after a name"),
+        ("docs/latest", "sub/../..", "after a name"),
+        ("docs/latest", "", "empty"),
+        ("docs/latest", "a\x00b", "malformed"),
+        ("docs/latest", "a\nb", "malformed"),
+    ],
+)
+def test_a_symlink_that_can_leave_the_repository_is_judged_an_escape(
+    link: str, target: str, why: str
+) -> None:
+    reason = policy.symlink_escape_reason(link, target)
+    assert reason is not None
+    assert why in reason, reason
+
+
+def test_a_dot_dot_after_a_name_is_an_escape_even_when_it_would_stay_inside() -> None:
+    """``s/s/../..`` is lexically ``.``; with ``s`` a link to ``.`` it is the checkout's
+    grandparent. Only the plainest targets are accepted, so that trick has no room."""
+    assert policy.symlink_escape_reason("l", "s/s/../..")
+    assert policy.symlink_escape_reason("d/l", "x/../y")
+
+
+def _track_symlink(repo: Path, path: str, target: str) -> None:
+    """Commit a symbolic link ``path -> target`` without needing the privilege to create one."""
+    blob = _git(repo, "hash-object", "-w", "--stdin", stdin=target)
+    _git(repo, "update-index", "--add", "--cacheinfo", f"120000,{blob},{path}")
+    _git(repo, "commit", "-q", "-m", f"track the symbolic link {path}")
+    _git(repo, "checkout", "--", path)  # a link (or, without the privilege, a file) on disk too
+
+
+@pytest.mark.parametrize(
+    "target", ["/etc/passwd", "../..", "C:/Windows", "docs/../../..", "x/../../.."]
+)
+def test_a_head_that_tracks_a_symlink_out_of_the_checkout_is_refused_before_any_spend(
+    repo: Path,
+    fake_sdk: _FakeSdk,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    target: str,
+) -> None:
+    _track_symlink(repo, "docs/latest", target)
+    _live_env(monkeypatch)
+
+    assert run_review.main(_argv(repo)) == run_review.EXIT_REFUSED
+
+    err = capsys.readouterr().err
+    assert "'docs/latest'" in err
+    assert repr(target) in err
+    assert "follow it out of the checkout" in err
+    fake_sdk.query.assert_not_called()
+    assert _ledger_rows(repo) == []
+
+
+def test_a_symlink_that_stays_inside_the_repository_does_not_stop_a_review(
+    repo: Path, fake_sdk: _FakeSdk
+) -> None:
+    _track_symlink(repo, "docs/latest", "../src_change.py")
+    _track_symlink(repo, "alias", "docs/latest")
+    assert run_review.main(_argv(repo, "--dry-run")) == 0
+
+
+def test_a_symlink_the_checkout_tracks_counts_even_when_the_head_is_clean(
+    repo: Path, fake_sdk: _FakeSdk, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The CLI reads the CHECKOUT: what it tracks at its own HEAD is what a read can follow."""
+    _track_symlink(repo, "docs/latest", "/etc")
+    argv = ["--repo-root", str(repo), "--ledger-root", str(_ledger_dir(repo))]
+    argv += ["--base", "HEAD~2", "--head", "HEAD~1", "--cap-usd", "5", "--dry-run"]
+
+    assert run_review.main(argv) == run_review.EXIT_REFUSED
+
+    assert "'docs/latest'" in capsys.readouterr().err
+
+
+def test_a_symlink_in_the_head_counts_even_when_the_checkout_is_clean(
+    repo: Path, fake_sdk: _FakeSdk, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Fail closed: the head may be the next thing checked out."""
+    _track_symlink(repo, "docs/latest", "/etc")
+    _git(repo, "rm", "-q", "docs/latest")
+    _commit(repo, "a later commit in the checkout removes the link again")
+    argv = ["--repo-root", str(repo), "--ledger-root", str(_ledger_dir(repo))]
+    argv += ["--base", "HEAD~2", "--head", "HEAD~1", "--cap-usd", "5", "--dry-run"]
+
+    assert run_review.main(argv) == run_review.EXIT_REFUSED
+
+    assert "'docs/latest'" in capsys.readouterr().err
+
+
+def test_a_head_with_more_symlinks_than_the_reviewer_will_follow_is_refused(
+    repo: Path,
+    fake_sdk: _FakeSdk,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _track_symlink(repo, "one", "src_change.py")
+    _track_symlink(repo, "two", "src_change.py")
+    monkeypatch.setattr(run_review, "_MAX_TRACKED_SYMLINKS", 1)
+
+    assert run_review.main(_argv(repo, "--dry-run")) == run_review.EXIT_REFUSED
+
+    assert "2 symbolic links" in capsys.readouterr().err
+
+
+def test_listing_the_symlinks_of_a_commit_git_does_not_have_is_a_refusal(repo: Path) -> None:
+    with pytest.raises(run_review.RefusalError, match="cannot list the tracked files"):
+        asyncio.run(run_review._tracked_symlinks(repo, "f" * 40))
+
+
+def test_only_mode_120000_entries_are_symlinks(repo: Path) -> None:
+    _track_symlink(repo, "docs/latest", "../src_change.py")
+    head = _git(repo, "rev-parse", "HEAD")
+    links = asyncio.run(run_review._tracked_symlinks(repo, head))
+    assert [path for path, _blob in links] == ["docs/latest"]
+    assert asyncio.run(run_review._tracked_symlinks(repo, _git(repo, "rev-parse", "HEAD~1"))) == []
+
+
+def test_a_symlink_that_cannot_be_read_is_a_refusal(
+    repo: Path, fake_sdk: _FakeSdk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _track_symlink(repo, "docs/latest", "../src_change.py")
+    real = run_review._git
+
+    async def blind(root: Path, *args: str) -> tuple[int, bytes]:
+        return (1, b"") if args[:1] == ("cat-file",) else await real(root, *args)
+
+    head = _git(repo, "rev-parse", "HEAD")
+    refs = run_review.Refs("base", "a" * 40, "head", head, head)
+    monkeypatch.setattr(run_review, "_git", blind)
+    with pytest.raises(run_review.RefusalError, match="cannot read the symbolic link"):
+        asyncio.run(run_review._refuse_escaping_symlinks(repo, refs))
+
+
+def test_a_checkout_whose_head_cannot_be_resolved_has_no_symlinks_to_check(repo: Path) -> None:
+    head = _git(repo, "rev-parse", "HEAD")
+    refs = run_review.Refs("base", "a" * 40, "head", head, "unknown")
+    asyncio.run(run_review._refuse_escaping_symlinks(repo, refs))
 
 
 def test_a_directory_named_like_a_program_is_not_a_planted_program(
@@ -4231,7 +5020,7 @@ def test_a_run_over_the_cap_is_refused_before_any_client_is_touched(
     anthropic = _FakeAnthropic()
     monkeypatch.setitem(sys.modules, "anthropic", anthropic)
     _live_env(monkeypatch)
-    ledger_path = repo / "reports/credit/ledger.jsonl"
+    ledger_path = _ledger_dir(repo) / "reports/credit/ledger.jsonl"
     ledger_path.parent.mkdir(parents=True)
     ledger_path.write_text(json.dumps({"ws": "B", "cost_usd": 55.0}) + "\n", encoding="utf-8")
 
@@ -4251,7 +5040,7 @@ def test_a_damaged_ledger_stops_a_live_run_before_the_sdk(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    _write(repo, "reports/credit/ledger.jsonl", "this is not json\n")
+    _write(_ledger_dir(repo), "reports/credit/ledger.jsonl", "this is not json\n")
     _live_env(monkeypatch)
     assert run_review.main(_argv(repo)) == run_review.EXIT_REFUSED
     fake_sdk.query.assert_not_called()
@@ -4491,7 +5280,7 @@ def test_the_working_tree_head_is_told_to_the_reviewer_when_it_is_not_the_review
         "--repo-root",
         str(repo),
         "--ledger-root",
-        str(repo),
+        str(_ledger_dir(repo)),
         "--base",
         "HEAD~2",
         "--head",
@@ -4592,10 +5381,10 @@ def test_workforce_caps_are_the_single_source(
     assert options.max_turns == 7
     assert options.model == "sonnet"
     # (2) the cap and the ledger path are the YAML's, too.
-    lines = (repo / "out/spend.jsonl").read_text(encoding="utf-8").splitlines()
+    lines = (_ledger_dir(repo) / "out/spend.jsonl").read_text(encoding="utf-8").splitlines()
     (row,) = [json.loads(line) for line in lines]
     assert row["cap_usd"] == 4.0
-    assert not (repo / "reports/credit/ledger.jsonl").exists()
+    assert not (_ledger_dir(repo) / "reports/credit/ledger.jsonl").exists()
     assert run_review.main(argv) == run_review.EXIT_CAP, "1.25 + 3 > 4"
 
 
