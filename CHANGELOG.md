@@ -63,7 +63,8 @@ the record is removed. After a timeout waiting for the answer, a dropped connect
 or a crash the record stays `creating`, its estimate keeps counting against the workstream cap, and
 every later `submit` refuses (exit 3) until the operator has checked the Console's Batches page and
 either run `submit --adopt <batch_id>` (the batch must hold as many requests as the record, have been
-created within an hour of it, and be owned by no other record) or deleted the record. A record file that
+created after it (five minutes of clock skew aside) and within an hour, and be owned by no other
+record) or deleted the record. A record file that
 cannot be read blocks the same way, since it may hide a batch. Two real `submit` runs cannot overlap:
 the checks and the write-ahead record sit inside an exclusive `.submit.lock`, and the checks are made
 again once it is held. A second batch on the same day waits for the first to be collected; after that it

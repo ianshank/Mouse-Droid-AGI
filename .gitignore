@@ -335,6 +335,11 @@ config-compat-*/
 # Dead-code audit reports (F-020) - dated JSON artifacts, never committed
 reports/dead_code/
 
+# F-059 WS-C: the lock a running `python -m tools.dead_code_triage_batch submit` holds in
+# credit.batch_triage.batches_dir (reports/credit/batches/ by default). A run that is killed
+# outright leaves it behind; it must never be staged.
+.submit.lock
+
 # observe_step consumer-ceiling desk calculation
 # (scripts/analyze_observe_step_ceiling.py, openspec task 2.1) - regenerable
 # from config alone, carries the analysing commit's SHA and dirty state, and

@@ -2313,9 +2313,11 @@ def test_adopt_counts_a_batch_in_every_state_it_can_be_in(
         (datetime(2026, 10, 19, 14, 2, 11, tzinfo=timezone.utc), True),  # the same second
         (datetime(2026, 10, 19, 15, 2, 11, tzinfo=timezone.utc), True),  # exactly an hour after
         (datetime(2026, 10, 19, 15, 1, 11, tzinfo=timezone.utc), True),  # 59 minutes after
-        (datetime(2026, 10, 19, 13, 3, 11, tzinfo=timezone.utc), True),  # 59 minutes before
         (datetime(2026, 10, 19, 15, 3, 11, tzinfo=timezone.utc), False),  # 61 minutes after
-        (datetime(2026, 10, 19, 13, 1, 11, tzinfo=timezone.utc), False),  # 61 minutes before
+        (datetime(2026, 10, 19, 13, 58, 11, tzinfo=timezone.utc), True),  # 4 minutes before: skew
+        (datetime(2026, 10, 19, 13, 57, 11, tzinfo=timezone.utc), True),  # exactly 5 minutes before
+        (datetime(2026, 10, 19, 13, 56, 11, tzinfo=timezone.utc), False),  # 6 minutes before
+        (datetime(2026, 10, 19, 13, 3, 11, tzinfo=timezone.utc), False),  # 59 minutes before
         (datetime(2026, 8, 31, 9, 0, 0, tzinfo=timezone.utc), False),  # seven weeks before
         (datetime(2026, 10, 19, 14, 2, 15), True),  # no zone: read as UTC
     ],
@@ -2323,14 +2325,16 @@ def test_adopt_counts_a_batch_in_every_state_it_can_be_in(
         "same",
         "an-hour-after",
         "59m-after",
-        "59m-before",
         "61m-after",
-        "61m-before",
+        "4m-before",
+        "5m-before",
+        "6m-before",
+        "59m-before",
         "seven-weeks",
         "naive-utc",
     ],
 )
-def test_adopt_only_takes_a_batch_made_when_the_record_was_written(
+def test_adopt_only_takes_a_batch_made_after_the_record_was_written(
     repo: Path, created: datetime, accepted: bool
 ) -> None:
     _fail_to_create(repo)
@@ -2344,7 +2348,36 @@ def test_adopt_only_takes_a_batch_made_when_the_record_was_written(
         with pytest.raises(triage.TriageError, match="was created") as excinfo:
             triage.adopt("msgbatch_found01", repo_root=repo, client=client)
         assert "not the batch that submit was creating" in str(excinfo.value)
+        side = (
+            "after"
+            if created > datetime(2026, 10, 19, 14, 2, 11, tzinfo=timezone.utc)
+            else "before"
+        )
+        assert f" {side} the moment " in str(excinfo.value)  # and it says which way it is off
         assert _record(repo)["status"] == "creating"
+
+
+@pytest.mark.parametrize("batch_total", [3, 5], ids=["adopted", "refused"])
+def test_adopt_holds_the_lock_for_its_lookup_and_always_releases_it(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, batch_total: int
+) -> None:
+    _fail_to_create(repo)
+    client = _FakeClient()
+    client.batches.request_total = batch_total
+    held: list[bool] = []
+    real = triage._retrieve_batch
+
+    def _watching(api: Any, batch_id: str) -> Any:
+        held.append(_lock_path(repo).exists())
+        return real(api, batch_id)
+
+    monkeypatch.setattr(triage, "_retrieve_batch", _watching)
+
+    with contextlib.suppress(triage.TriageError):
+        triage.adopt("msgbatch_found01", repo_root=repo, client=client)
+
+    assert held == [True]  # nobody else can submit while the record is looked at
+    assert not _lock_path(repo).exists()
 
 
 def test_adopt_will_not_guess_when_it_cannot_compare_times(repo: Path) -> None:

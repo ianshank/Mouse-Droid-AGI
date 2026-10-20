@@ -49,8 +49,9 @@ written, nothing is sent. If the call fails, what happens depends on what is kno
   counting against the workstream cap, and every later ``submit`` refuses (exit 3) until
   you have looked at the Console's Batches page and either run
   ``submit --adopt <batch_id>`` (the batch is there: it must hold as many requests as the
-  record, have been created within an hour of it, and be owned by no other record; the
-  record then becomes ``submitted``) or deleted the record file (no batch was made).
+  record, have been created after it (five minutes of clock skew aside) and within an
+  hour, and be owned by no other record; the record then becomes ``submitted``) or
+  deleted the record file (no batch was made).
   ``--dry-run`` only warns. A record file that cannot be read as JSON blocks the same
   way, because it may hide a batch.
 
@@ -173,9 +174,11 @@ _REFUSED_STATUSES = frozenset({400, 401, 403, 404, 413, 422, 429})
 #: the SDK's ``APIConnectionError`` carries the transport's error as its ``__cause__``.
 _CONNECT_FAILURES = frozenset({"ConnectError", "ConnectTimeout"})
 _MAX_CAUSE_DEPTH = 6
-#: How far apart in time a batch and the ``creating`` record it is adopted into may be:
-#: wide enough for clock skew and a slow create call, far short of "an earlier batch".
+#: How far a batch may be from the ``creating`` record it is adopted into. The record is
+#: written just BEFORE the create call, so the batch follows it (a slow create call: an
+#: hour at most) and never precedes it, bar clock skew between this machine and the API.
 _ADOPT_WINDOW = timedelta(hours=1)
+_ADOPT_CLOCK_SKEW = timedelta(minutes=5)
 #: Exclusively created in ``batches_dir`` while a real submit (or an adopt) runs.
 _LOCK_NAME = ".submit.lock"
 #: The per-state counts of a ``MessageBatch``; their sum is how many requests it holds.
@@ -2129,10 +2132,12 @@ def _parse_stamp(text: object) -> datetime | None:
 
 
 def _check_batch_age(batch: Any, batch_id: str, record: Mapping[str, Any], name: str) -> None:
-    """Refuse a batch made long before or after the record was written.
+    """Refuse a batch made before the record was written, or long after.
 
     The size check cannot tell this plan's batch from an earlier batch of the same plan;
-    the clock can. Both times are UTC; a naive time from the API is read as UTC too.
+    the clock can: the record is written before the create call, so the batch it was
+    making is never older than it (clock skew aside). Both times are UTC; a naive time
+    from the API is read as UTC too.
     """
     made = getattr(batch, "created_at", None)
     written = _parse_stamp(record.get("created_at"))
@@ -2143,12 +2148,13 @@ def _check_batch_age(batch: Any, batch_id: str, record: Mapping[str, Any], name:
         )
     if made.tzinfo is None:
         made = made.replace(tzinfo=timezone.utc)
-    gap = abs(made - written)
-    if gap > _ADOPT_WINDOW:
+    after = made - written  # the record comes first, so a real batch is later than it
+    if after > _ADOPT_WINDOW or after < -_ADOPT_CLOCK_SKEW:
+        side = "after" if after > timedelta(0) else "before"
         raise TriageError(
-            f"batch {batch_id} was created {made.strftime(_TIMESTAMP_FORMAT)}, {gap} from the "
-            f"moment {name} was written ({record.get('created_at')}): it is not the batch that "
-            "submit was creating; the record was not changed"
+            f"batch {batch_id} was created {made.strftime(_TIMESTAMP_FORMAT)}, {abs(after)} "
+            f"{side} the moment {name} was written ({record.get('created_at')}): it is not the "
+            "batch that submit was creating; the record was not changed"
         )
 
 
@@ -2178,8 +2184,9 @@ def adopt(
 
     The operator found the batch in the Console after a create call timed out or crashed.
     The batch is retrieved; its size must equal the record's request count, it must have
-    been created within an hour of the record, and no other record may already own its id
-    (the likeliest mix-up is an earlier batch of the same plan). Nothing is created and
+    been created after the record (five minutes of clock skew aside) and within an hour,
+    and no other record may already own its id (the likeliest mix-up is an earlier batch
+    of the same plan). Nothing is created and
     nothing is charged: the record's estimate was counting against the cap all along, and
     ``collect`` records the real cost.
 
