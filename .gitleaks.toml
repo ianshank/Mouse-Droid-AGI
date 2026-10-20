@@ -40,4 +40,6 @@ regexes = [
     '''(?i)telemetry_token=changeme''',
     '''test-api-key-abc123''',
     '''valid-key-123''',
+    # PR-O (F-059 WS-C): a retired test fixture, in history only (e67956c7); built at runtime since 8b9bf17.
+    '''\babcd1234efgh5678ijkl\b''',
 ]
