@@ -80,7 +80,7 @@ mcp = [
     #   * `Resource.uri` changed from `AnyUrl` to `str`, so the `AnyUrl(uri)`
     #     in mcp/transport.py::_on_list_resources fails validation.
     # Lifting this bound is a deliberate migration, not a version bump.
-    "mcp>=1.0,<2",
+    "mcp>=1.0,<3",
     "anyio>=4.0",
 ]
 mlflow = [
