@@ -400,3 +400,273 @@ def test_multi_config_csv_does_not_break_system_subcommand(tmp_path: Path) -> No
     assert "Smoke Test Summary" in result.stdout
     assert "SKIP: torch.cuda.is_available" in result.stdout
     assert result.returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# F-059: the motor/power stages stack the bench ESP32 overlay
+# ---------------------------------------------------------------------------
+
+# One stub serves both stages, and each stage greps the output for the PASSED line of its own
+# test(s): a bare exit 0 proves nothing, because pytest exits 0 when every test skips. Each
+# stage's output (SMOKE_STUB_MOTOR_OUTPUT, SMOKE_STUB_POWER_OUTPUT) and the stub's exit status
+# (SMOKE_STUB_RC) can be replaced to script a skip or a failure; unset, everything passes.
+_STUB_PYTHON = """#!/usr/bin/env bash
+if [[ "$1" == "-m" && "$2" == "pytest" && "$3" == "--version" ]]; then echo "pytest 0"; exit 0; fi
+printf '%s\\n' "${MOUSEDROID_JETSON_CONFIGS:-}" >> "${SMOKE_STUB_CAPTURE}"
+motor_passed="tests/hardware/test_esp32_loopback.py::test_send_velocity_moves_encoders PASSED
+tests/hardware/test_esp32_loopback.py::test_emergency_stop_latency PASSED"
+power_passed="tests/hardware/test_power_chain_smoke.py::test_power_chain_within_budget PASSED"
+echo "${SMOKE_STUB_MOTOR_OUTPUT-${motor_passed}}"
+echo "${SMOKE_STUB_POWER_OUTPUT-${power_passed}}"
+exit "${SMOKE_STUB_RC:-0}"
+"""
+_BENCH = f"{_REPO_ROOT}/config/jetson_bench_esp32.yaml"
+_PROD = f"{_REPO_ROOT}/config/jetson_production.yaml"
+
+
+@_BASH_AVAILABLE
+@pytest.mark.parametrize(
+    ("given", "extra", "expected"),
+    [
+        ("", {}, f"{_PROD},{_BENCH}"),
+        (
+            "/etc/mousedroid/a.yaml,/etc/mousedroid/b.yaml",
+            {},
+            f"/etc/mousedroid/a.yaml,/etc/mousedroid/b.yaml,{_BENCH}",
+        ),
+        (f"{_PROD},{_BENCH}", {}, f"{_PROD},{_BENCH}"),  # no double append
+        # The singular var is the base when the CSV is empty (parity with the Python loaders) ...
+        (
+            "",
+            {"MOUSEDROID_JETSON_CONFIG": "/etc/mousedroid/single.yaml"},
+            f"/etc/mousedroid/single.yaml,{_BENCH}",
+        ),
+        # ... and the CSV wins when both are set (same precedence as tests/_jetson_hardware.py).
+        (
+            "/etc/mousedroid/a.yaml",
+            {"MOUSEDROID_JETSON_CONFIG": "/etc/mousedroid/single.yaml"},
+            f"/etc/mousedroid/a.yaml,{_BENCH}",
+        ),
+        # Any other value of the override var is that file.
+        (
+            _PROD,
+            {"MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY": "/etc/mousedroid/other.yaml"},
+            f"{_PROD},/etc/mousedroid/other.yaml",
+        ),
+    ],
+    ids=[
+        "default-base",
+        "csv-appended",
+        "already-stacked",
+        "singular-base",
+        "csv-beats-singular",
+        "override-path",
+    ],
+)
+@pytest.mark.parametrize(
+    ("stage", "pass_line", "stage_env"),
+    [
+        ("motor", "PASS: motor loopback smoke", {"MOUSEDROID_SMOKE_ALLOW_MOTION": "1"}),
+        ("power", "PASS: power chain smoke", {}),
+    ],
+    ids=["motor", "power"],
+)
+def test_esp32_stages_stack_the_bench_overlay(
+    tmp_path: Path,
+    stage: str,
+    pass_line: str,
+    stage_env: dict[str, str],
+    given: str,
+    extra: dict[str, str],
+    expected: str,
+) -> None:
+    """Both ESP32-owned stages hand pytest the config stack plus the bench overlay, once."""
+    stub = tmp_path / "python"
+    stub.write_text(_STUB_PYTHON, encoding="utf-8")
+    stub.chmod(0o755)
+    capture = tmp_path / "configs.txt"
+    result = _run_smoke(
+        stage,
+        env_extra={
+            "MOUSEDROID_SMOKE_PYTHON": str(stub),
+            "SMOKE_STUB_CAPTURE": str(capture),
+            "MOUSEDROID_JETSON_CONFIGS": given,
+            **stage_env,
+            **extra,
+        },
+    )
+    assert pass_line in result.stdout, result.stdout
+    assert capture.read_text(encoding="utf-8").splitlines() == [expected]
+
+
+# What the stages record when the operator opts out of the overlay (a run with no chassis).
+_OPT_OUT_REASON = (
+    "bench ESP32 overlay opted out (MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY is empty): "
+    "no chassis declared, stage not run"
+)
+
+
+@_BASH_AVAILABLE
+@pytest.mark.parametrize(
+    ("stage", "name", "stage_env"),
+    [
+        ("motor", "motor loopback smoke", {"MOUSEDROID_SMOKE_ALLOW_MOTION": "1"}),
+        ("power", "power chain smoke", {}),
+    ],
+    ids=["motor", "power"],
+)
+def test_esp32_stages_skip_when_the_bench_overlay_is_opted_out(
+    tmp_path: Path, stage: str, name: str, stage_env: dict[str, str]
+) -> None:
+    """MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY set to empty declares "no chassis" (ruling 31).
+
+    The stage records SKIP with that reason and returns before pytest runs: on the production
+    stack (esp32.enabled: false) pytest would only measure MockESP32Driver, and with the overlay
+    stacked it would FAIL for want of a board. Either is wrong for a run that declared no chassis,
+    so a health-only run stays green and honest. The stage never computes a config stack, which
+    is why the opt-out has no row in the stacking test above.
+    """
+    stub = tmp_path / "python"
+    stub.write_text(_STUB_PYTHON, encoding="utf-8")
+    stub.chmod(0o755)
+    capture = tmp_path / "configs.txt"
+    result = _run_smoke(
+        stage,
+        env_extra={
+            "MOUSEDROID_SMOKE_PYTHON": str(stub),
+            "SMOKE_STUB_CAPTURE": str(capture),
+            "MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY": "",
+            **stage_env,
+        },
+    )
+    assert f"SKIP: {name} {_OPT_OUT_REASON}" in result.stdout, result.stdout
+    assert f"PASS: {name}" not in result.stdout, result.stdout
+    assert "Failed:  0" in result.stdout, result.stdout
+    assert not capture.exists(), "pytest ran for an opted-out stage; it must return before it"
+    assert result.returncode == 0, result.stdout
+
+
+# What `pytest -ra -v` prints for the power test when it skips: the run still exits 0.
+_POWER_SKIP_REASON = (
+    "esp32.enabled=false routes to MockESP32Driver; "
+    "stack config/jetson_bench_esp32.yaml or unset MOUSEDROID_ESP32__ENABLED "
+    "to probe the board"
+)
+_POWER_SKIPPED_OUTPUT = (
+    "tests/hardware/test_power_chain_smoke.py::test_power_chain_within_budget SKIPPED [100%]\n"
+    f"SKIPPED [1] tests/hardware/test_power_chain_smoke.py:21: {_POWER_SKIP_REASON}\n"
+    "1 skipped in 0.01s"
+)
+
+
+@_BASH_AVAILABLE
+@pytest.mark.parametrize(
+    ("power_output", "reason"),
+    [
+        (_POWER_SKIPPED_OUTPUT, _POWER_SKIP_REASON),
+        ("1 deselected in 0.01s", "power chain test did not pass"),
+    ],
+    ids=["skipped", "neither-passed-nor-skipped"],
+)
+def test_power_stage_fails_unless_its_test_passes(
+    tmp_path: Path, power_output: str, reason: str
+) -> None:
+    """A clean pytest exit is not a measurement: the power stage needs its test to PASS (R3-2).
+
+    pytest exits 0 when every test skips, and an exported MOUSEDROID_ESP32__ENABLED=false beats
+    the bench overlay, so the power test skips with its remedy. The stage must not record PASS:
+    it records FAIL and carries the skip reason (or a generic one) into the line.
+    """
+    stub = tmp_path / "python"
+    stub.write_text(_STUB_PYTHON, encoding="utf-8")
+    stub.chmod(0o755)
+    result = _run_smoke(
+        "power",
+        env_extra={
+            "MOUSEDROID_SMOKE_PYTHON": str(stub),
+            "SMOKE_STUB_CAPTURE": str(tmp_path / "configs.txt"),
+            "SMOKE_STUB_POWER_OUTPUT": power_output,
+        },
+    )
+    assert f"FAIL: power chain smoke {reason}" in result.stdout, result.stdout
+    assert "PASS: power chain smoke" not in result.stdout, result.stdout
+    assert result.returncode == 1, result.stdout
+
+
+# What the motor stage sees when its pytest run exits non-zero. The traceback echoes the failing
+# statement's source BEFORE the E line, and the -ra FAILED summary truncates the message, so the
+# stage must take the full E line (or the -ra SKIPPED reason), not the first line that matches.
+_MOTOR_ASSERT_DETAIL = (
+    "no FEEDBACK_BASE_INFO frame after 0.05 m/s on /dev/ttyUSB0 (command_set='legacy') "
+    "in 5 poll(s); the encoder-less criterion needs waveshare_stock and a live board"
+)
+_MOTOR_ASSERTION_OUTPUT = (
+    "tests/hardware/test_esp32_loopback.py::test_send_velocity_moves_encoders FAILED [ 50%]\n"
+    ">           assert enc.imu_valid, (\n"
+    '                f"no FEEDBACK_BASE_INFO frame after {test_vel:.2f} m/s on "\n'
+    f"E           AssertionError: {_MOTOR_ASSERT_DETAIL}\n"
+    "E           assert False\n"
+    "FAILED tests/hardware/test_esp32_loopback.py::test_send_velocity_moves_encoders - "
+    "AssertionError: no FEEDBACK_BASE_INFO frame after 0.05 m/s on /dev/ttyUSB0 (command_set=...\n"
+    "=== 1 failed, 1 passed in 3.21s ==="
+)
+_MOTOR_INACTIVE_REASON = (
+    "encoder loopback inactive; ensure rover power, motor/encoder wiring and both motion gates"
+)
+_MOTOR_INACTIVE_OUTPUT = (
+    "tests/hardware/test_esp32_loopback.py::test_send_velocity_moves_encoders SKIPPED [ 50%]\n"
+    "tests/hardware/test_esp32_loopback.py::test_emergency_stop_latency FAILED [100%]\n"
+    f"SKIPPED [1] tests/hardware/test_esp32_loopback.py:160: {_MOTOR_INACTIVE_REASON}\n"
+    "=== 1 failed, 1 skipped in 1.04s ==="
+)
+_MOTOR_NO_DEVICE_REASON = (
+    "ESP32 serial device '/dev/ttyUSB0' not found. "
+    "Set MOUSEDROID_ESP32_SERIAL_PORT or update esp32.serial_port in config."
+)
+_MOTOR_NO_DEVICE_OUTPUT = (
+    f"SKIPPED [2] tests/hardware/test_esp32_loopback.py:70: {_MOTOR_NO_DEVICE_REASON}\n"
+    "=== 1 failed, 2 skipped in 0.92s ==="
+)
+
+
+@_BASH_AVAILABLE
+@pytest.mark.parametrize(
+    ("motor_output", "detail"),
+    [
+        (_MOTOR_ASSERTION_OUTPUT, _MOTOR_ASSERT_DETAIL),
+        (_MOTOR_INACTIVE_OUTPUT, _MOTOR_INACTIVE_REASON),
+        (_MOTOR_NO_DEVICE_OUTPUT, _MOTOR_NO_DEVICE_REASON),
+        ("=== 1 failed, 1 passed in 1.00s ===\nE       assert 0.5 <= 0.1", ""),
+    ],
+    ids=[
+        "assertion-e-line",
+        "encoder-loopback-inactive",
+        "serial-device-missing",
+        "no-known-cause",
+    ],
+)
+def test_motor_stage_names_the_cause_when_pytest_exits_nonzero(
+    tmp_path: Path, motor_output: str, detail: str
+) -> None:
+    """A non-zero pytest exit still carries its diagnosis into the FAIL line (review minor 3).
+
+    The reason grep used to run only on a clean exit, where an assertion failure can never land:
+    a silent encoder-less board then read as a bare "1 test(s) failed". Without a known cause the
+    line stays exactly what it was.
+    """
+    stub = tmp_path / "python"
+    stub.write_text(_STUB_PYTHON, encoding="utf-8")
+    stub.chmod(0o755)
+    result = _run_smoke(
+        "motor",
+        env_extra={
+            "MOUSEDROID_SMOKE_PYTHON": str(stub),
+            "SMOKE_STUB_CAPTURE": str(tmp_path / "configs.txt"),
+            "MOUSEDROID_SMOKE_ALLOW_MOTION": "1",
+            "SMOKE_STUB_MOTOR_OUTPUT": motor_output,
+            "SMOKE_STUB_RC": "1",
+        },
+    )
+    expected = "FAIL: motor loopback smoke 1 test(s) failed" + (f": {detail}" if detail else "")
+    assert f"  {expected}\n" in result.stdout, result.stdout
+    assert result.returncode == 1, result.stdout
