@@ -41,6 +41,19 @@ so does `motor` behind `MOUSEDROID_SMOKE_ALLOW_MOTION=1`. `scripts/jetson_full_v
 motion off, so there `motor` SKIPs and `power` is the stage that measures the board; its failure is
 recorded as a non-blocking warning.
 
+### Fixed — preflight reported the ESP32 healthy without ever talking to it (S-4)
+
+The `esp32` check only built the driver and reported OK, so a mocked or absent board passed
+(`esp32.enabled=false` makes the factory return `MockESP32Driver`). It now calls
+`collect_esp32_probe` through the public driver protocol: connect (arming the heartbeat), up to
+`esp32.max_consecutive_timeouts` polls for a `FEEDBACK_BASE_INFO` frame, a battery read, and a
+disconnect that always runs. `esp32.enabled=false` and the legacy command set report WARN, never OK;
+a silent board FAILs, as does a connect error, with its message. The trend timer is pinned never to
+run exclusive-device checks (`test_trend_unit_never_runs_exclusive_device_checks`). **A journal
+whose last run was ok sees `overall status downgraded ok -> degraded` once**, and enabling the board
+later may add `check 'esp32' slowed`; re-run once to re-baseline. Also,
+`test_sse_transport_bearer_enforcement` is skipped on Windows (ProactorEventLoop + uvicorn).
+
 ### Fixed — the nightly Spec Harness, red every night since 2026-09-08
 
 `validate-slow` runs `--strict-git`, which needs every `done` feature's `implemented_in` to resolve.
