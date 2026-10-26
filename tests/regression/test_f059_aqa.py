@@ -11,12 +11,14 @@ import pytest
 import yaml
 
 from mousedroid.config.loader import load_settings
+from mousedroid.config.schema import WAVESHARE_STOCK_BAUD
 from mousedroid.validation.preflight import PreflightStatus, _check_esp32
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CONFIG_DIR = _REPO_ROOT / "config"
 _PROD = _CONFIG_DIR / "jetson_production.yaml"
 _BENCH = _CONFIG_DIR / "jetson_bench_esp32.yaml"
+_LIDAR_ONLY = _CONFIG_DIR / "jetson_lidar_only.yaml"
 
 
 def _features() -> dict[str, dict]:
@@ -298,3 +300,65 @@ def test_trend_unit_never_runs_exclusive_device_checks() -> None:
     assert declared, "default check list must be an Environment= line"
     listed = {name for value in declared for name in value.split(",")}
     assert not {"esp32", "lidar", "camera"} & listed
+
+
+def test_production_overlay_speaks_stock_firmware_on_an_encoder_less_chassis() -> None:
+    """D-2 / audit R3: the shipped rover speaks stock firmware on an encoder-less chassis."""
+    cfg = load_settings(_PROD, config_dir=_CONFIG_DIR)
+    assert cfg.esp32.command_set == "waveshare_stock"
+    assert cfg.esp32.serial_baud == WAVESHARE_STOCK_BAUD
+    assert cfg.esp32.chassis_has_wheel_encoders is False
+    assert cfg.esp32.enabled is False  # the flip to true lives only in the bench overlay
+
+
+def test_production_overlay_arms_battery_thresholds_and_the_power_gate_has_no_floor() -> None:
+    """CF-1 / R-6: thresholds are live; the runtime screens 0.0 V, the smoke gate does not."""
+    cfg = load_settings(_PROD, config_dir=_CONFIG_DIR)
+    assert (cfg.safety.battery_warn_v, cfg.safety.battery_critical_v) == (10.5, 9.5)
+    # runtime screens 0.0 V
+    assert 0.0 < cfg.safety.battery_implausible_below_v < cfg.safety.battery_critical_v
+    power = (_REPO_ROOT / "tests" / "hardware" / "test_power_chain_smoke.py").read_text(
+        encoding="utf-8"
+    )
+    # R-6: the gate compares straight against the critical threshold and has no
+    # plausibility floor of its own, so it is stricter than the runtime.
+    assert "battery_voltage_v >= jetson_settings.safety.battery_critical_v" in power
+    assert "battery_implausible_below_v" not in power
+
+
+def test_latch_is_armed_on_production_and_explicitly_off_on_the_lidar_only_stack() -> None:
+    """CF-2 / R-7: production latches an e-stop; the lidar-only stack opts out explicitly."""
+    assert load_settings(_PROD, config_dir=_CONFIG_DIR).safety.emergency_latch.enabled is True
+    # jetson_validate.sh's default stack.
+    stack = load_settings(_PROD, _LIDAR_ONLY, config_dir=_CONFIG_DIR)
+    # Premise: this is the stack that would latch.
+    assert stack.safety.lidar_unavailable_policy == "emergency"
+    assert stack.safety.emergency_latch.enabled is False
+    raw = yaml.safe_load(_LIDAR_ONLY.read_text(encoding="utf-8"))
+    assert raw["safety"]["emergency_latch"]["enabled"] is False  # explicit, not inherited (R-7)
+
+
+_REARM_CONFIG = "--config /etc/mousedroid/jetson_production.yaml"
+
+
+def test_runbooks_point_operators_at_the_rearm_cli() -> None:
+    """CF-2 / Ruling 36: every documented re-arm names the production overlay.
+
+    The CLI reads no environment to find its overlay. Without ``--config`` it loads
+    ``default.yaml``, where the latch is off, prints "nothing to clear" and exits 0: a silent
+    no-op on the production container that looks exactly like a clear rover. So the flag must
+    sit on the command line of every invocation, not merely somewhere in the runbook.
+    """
+    for name in ("jetson-rover-smoke.md", "jetson-full-bringup.md", "emergency-stop-rearm.md"):
+        text = (_REPO_ROOT / "docs" / "runbooks" / name).read_text(encoding="utf-8")
+        assert re.search(
+            r"mousedroid\.cli\.rearm --config /etc/mousedroid/jetson_production\.yaml", text
+        ), name
+        # Not one good command among bad ones: join the shell continuations, then check each
+        # invocation. The boot log's quoted ``rearm_cmd`` hint is source output, not a command.
+        joined = text.replace("\\\n", " ")
+        for match in re.finditer(r"mousedroid\.cli\.rearm([^`\n]*)", joined):
+            line_start = joined.rfind("\n", 0, match.start()) + 1
+            args = " ".join(match.group(1).split())
+            if args and "rearm_cmd=" not in joined[line_start : match.start()]:
+                assert args.startswith(_REARM_CONFIG), (name, match.group(0))

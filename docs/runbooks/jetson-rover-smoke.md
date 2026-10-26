@@ -121,8 +121,9 @@ everything skips, so a clean exit is not a PASS.
 `ESP32Config.command_set` selects the wire protocol: `legacy` (default,
 the historical private JSON) or `waveshare_stock` (stock `General_Driver`
 firmware — `CMD_ROS_CTRL` velocity, `CMD_HEART_BEAT_SET` failsafe armed at
-connect, telemetry from `FEEDBACK_BASE_INFO`). Until
-`deployments/jetson-image.json` is re-pinned, opt in via env only:
+connect, telemetry from `FEEDBACK_BASE_INFO`). `waveshare_stock` is shipped in
+`config/jetson_production.yaml` since F-059; the env var stays the per-host
+override, and the lever for any overlay that does not declare it:
 
 ```bash
 MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock bash scripts/jetson_smoke_test.sh serial
@@ -131,10 +132,15 @@ MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock bash scripts/jetson_smoke_test.sh 
 Selecting stock also derives `serial_baud=115200`, so the command set is
 the only lever you need to set. The derivation is suppressed **only** by a
 *non-default* baud pin; an explicit pin that happens to equal the schema
-default still derives 115200, which matters because both shipped overlays
-pin exactly that value. Keying the rule on "is it pinned at all" instead
+default still derives 115200, which matters because `default.yaml` pins
+exactly that value. Keying the rule on "is it pinned at all" instead
 would leave the rover at the legacy 1 Mbaud, where stock firmware reads as
 line noise — which is how a live board gets diagnosed dead (audit R2).
+
+The derivation runs one way only. A per-host `MOUSEDROID_ESP32__COMMAND_SET=legacy`
+on `jetson_production.yaml` (a legacy-firmware board) must also set
+`MOUSEDROID_ESP32__SERIAL_BAUD=1000000`: the overlay pins 115200 explicitly and
+`legacy` derives nothing, so the port would otherwise open at 115200.
 
 The serial probe follows the selector (stock probes with `{"T":130}`, a
 read that elicits a reply); `SMOKE_SERIAL_PROBE_JSON` overrides it for
@@ -147,13 +153,14 @@ bench experiments.
 | `usbc` FAIL | `ls /dev/serial/by-id/` — confirm both CP2102N (rover) and CP2102 (lidar) cables are seated and not held by another process. |
 | `serial` FAIL after `usbc` PASS | Container may be holding the port. Restart with `docker compose -f docker-compose.jetson.yml restart mousedroid`. |
 | `motor` FAIL `encoder loopback inactive` | First: is `chassis_has_wheel_encoders` right for this chassis? The WAVE ROVER is encoder-less (audit R3): with the flag `false` the stage requires a T:1001 frame (`EncoderReading.imu_valid`) instead of wheel velocity, and a silent board FAILS (the FAIL reason reads `no FEEDBACK_BASE_INFO frame after ... in N poll(s)`, with the traceback in `motor.log`; check the command-set/baud row below before the wiring). A reason of `esp32.enabled=false` means the stage never reached the board: stack `config/jetson_bench_esp32.yaml` or unset `MOUSEDROID_ESP32__ENABLED`. On an encoder-bearing chassis: rover power; motor/encoder wiring; rover firmware version. Re-run with `MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION=true` only after lifting the rover off the ground. |
-| `serial` WARN no response on a presumed-live board | Command-set/baud mismatch (audit R1/R2): stock firmware ignores legacy commands and runs 115 200 baud. Retry with `MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock` before declaring the board dead. |
+| `serial` WARN no response on a presumed-live board | Command-set/baud mismatch (audit R1/R2): stock firmware ignores legacy commands and runs 115 200 baud. `waveshare_stock` is shipped on `config/jetson_production.yaml` since F-059, so on that stack first confirm the running code honoured the key (`esp32_driver_built` in the log shows the `command_set` in force); on a config that does not declare it, retry with `MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock` before declaring the board dead. |
 | `power` FAIL on e-stop latency | `ESP32Config.emergency_stop_budget_ms` may need re-tuning OR the UART is congested — check `command_dispatch` log volume in `power.log`. |
 | `power` FAIL on battery voltage | **Check whether the reading is real before touching the pack.** Grep the stage log for `esp32_battery_reading_unavailable` (WARN-once per connection) and `battery_reading_implausible`: either means no valid voltage came back and the number is not a measurement — chase a command-set/baud mismatch (row above), not the battery. Only when a plausible reading is present does the pack matter: charge it or raise the rail; threshold is `safety.battery_critical_v`, and the "is this even a reading" floor is `safety.battery_implausible_below_v`. |
 | `lidar` FAIL | `udevadm info /dev/serial/by-id/usb-Silicon_Labs_CP2102_*` to confirm the LD19 sits on the lidar bridge, not the rover bridge. |
 | `e2e` FAIL with camera reason | See `verify_sensors.py`'s `_diagnose_camera_host` output — surfaced in `e2e.log`. |
 | `voice` FAIL | `SUMMARY.md` emits a "Rocky voice prerequisites" remediation section listing the specific Piper / model-path / device issue. |
 | `preflight (real)` FAIL `exit=1` once after upgrading to F-059, with `overall status downgraded ok -> degraded` under `Trend:` in `phase2_preflight.log` | Expected, not a rover fault: the `esp32` check went `ok -> warn` (it used to report a vacuous OK; it now reports WARN while `esp32.enabled=false` or under the legacy command set) and `cli.preflight --trend` counts an aggregate downgrade as a regression. Re-run once to re-baseline the journal. A second consecutive downgrade, or any `newly FAILing` line, is a real finding. The first `--trend` run after the board is enabled on `waveshare_stock` also reports `check 'esp32' slowed <prev>s -> <curr>s (+<delta>s)` (its `elapsed_s` grows from milliseconds to connect-plus-poll time, past the `--trend-slow-floor-s` and `--trend-slow-ratio` thresholds) and may report `total elapsed slowed <prev>s -> <curr>s (+<delta>s)`; same remedy, re-run once to re-baseline the journal. |
+| Rover boots but will not move; `estop_latch_active_at_boot` in the container log (a log line, not a `SUMMARY.md` stage result) | A latched emergency stop, not a dead board: `config/jetson_production.yaml` arms `safety.emergency_latch` (F-059 CF-2). Look first with `python -m mousedroid.cli.rearm --config /etc/mousedroid/jetson_production.yaml --status` (exit `1` = latched). Once the hazard is gone and the path is clear, `python -m mousedroid.cli.rearm --config /etc/mousedroid/jetson_production.yaml --operator <you> --confirm-area-clear`, then restart the service. **Never drop `--config`**: the CLI reads no environment to find the overlay, so without it it loads `default.yaml`, where the latch is off, says there is nothing to clear and exits `0` whether or not the rover is latched. `exit 1` = latched therefore holds only with `--config`, and a clear without it is a silent no-op. On a container deployment run both inside the service (`docker compose -f docker-compose.jetson.yml exec mousedroid ...`); the bare-metal form and the reasoning are in [`emergency-stop-rearm.md`](emergency-stop-rearm.md). |
 
 ## Reading the logs
 
