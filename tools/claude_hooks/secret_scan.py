@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import IO, Any
 
@@ -77,6 +78,7 @@ def scan_content(
     *,
     repo_root: Path,
     target: str | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> ScanOutcome:
     """Scan ``content`` with the configured scanner.
 
@@ -88,6 +90,9 @@ def scan_content(
         cfg: Workforce configuration.
         repo_root: Repository root, used to resolve the allowlist config.
         target: The edit's target path, used only to pick a temp-file suffix.
+        env: The scanner process's environment. ``None`` (the hooks' case) inherits the
+            caller's; a caller that holds credentials the scanner has no use for (the
+            Agent-SDK reviewer) passes a scrubbed copy.
 
     Returns:
         The :class:`ScanOutcome`.
@@ -135,6 +140,7 @@ def scan_content(
                 text=True,
                 timeout=cfg.secret_scan.timeout_s,
                 check=False,
+                env=None if env is None else dict(env),
             )
         except subprocess.TimeoutExpired:
             return ScanOutcome(

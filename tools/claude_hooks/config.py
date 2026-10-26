@@ -15,6 +15,7 @@ load time instead of silently disabling a gate.
 from __future__ import annotations
 
 import math
+import re
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
@@ -26,6 +27,29 @@ from tools.claude_hooks.paths import resolve_repo_root
 DEFAULT_CONFIG_RELPATH = ".claude/workforce.yaml"
 
 _STRICT = ConfigDict(extra="forbid")
+
+#: A model alias or id as the Claude CLI takes it (`--model <value>`): it must not
+#: start with `-`, or it would read as another option.
+MODEL_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+
+#: The extensions a wildcard file part (``*.<ext>``) of a reviewer glob may use unless the
+#: base ref's ``workforce.yaml`` says otherwise: source and text files. Whether a wildcard
+#: can reach a secret-file name is not a question a finite sample of names can settle (the
+#: secret patterns ``.env.*`` and ``docker.env*`` end in ``*``, so every extension overlaps
+#: them), so which extensions the reviewer may search by is a fixed list.
+DEFAULT_GLOB_EXTENSIONS: tuple[str, ...] = (
+    "py",
+    "md",
+    "toml",
+    "json",
+    "yml",
+    "yaml",
+    "txt",
+    "sh",
+    "cfg",
+    "ini",
+    "rst",
+)
 
 
 class ConfigError(RuntimeError):
@@ -420,6 +444,144 @@ class CreditConfig(BaseModel):
         return value
 
 
+def _require_repo_relative(value: str) -> str:
+    """Return ``value`` if it is a non-empty path that stays inside the checkout.
+
+    Rejects blank, absolute (POSIX or Windows drive-letter), ``~`` and
+    ``..``-traversing values. Checks both flavours of "absolute" for the reason
+    :class:`FreezeConfig` documents: ``Path.is_absolute()`` depends on the host OS.
+    """
+    p = Path(value)
+    if (
+        not value.strip()
+        or p.is_absolute()
+        or PurePosixPath(value).is_absolute()
+        or PureWindowsPath(value).is_absolute()
+        or value.startswith("~")
+        or ".." in p.parts
+    ):
+        raise ValueError("must be a non-empty repo-relative path without '..' traversal")
+    return value
+
+
+class AgentReviewerConfig(BaseModel):
+    """Settings for the F-059 WS-B read-only Agent-SDK peer reviewer.
+
+    Consumed by ``tools/agent_reviewer/``. It holds what an operator may tune: the
+    credit workstream the spend is charged to, the model alias to request, the
+    turn cap, and where the reviewer's inputs and outputs live. It deliberately
+    does NOT hold what an operator must not be able to loosen -- the tool
+    allowlist, the Bash guard, the forced mock-hardware MCP environment and the
+    secret-file refusals are policy, pinned in ``tools/agent_reviewer/policy.py``
+    and by its tests rather than exposed as configuration.
+
+    Every field defaults, so a repository whose ``workforce.yaml`` predates the
+    block still loads (invariant I-1). The spend caps themselves live in
+    :class:`CreditConfig`, not here.
+    """
+
+    model_config = _STRICT
+
+    ws: str = Field(
+        default="B",
+        pattern=r"^[A-Za-z0-9_-]{1,16}$",
+        description=(
+            "Credit workstream the reviewer's spend is charged to: a key of "
+            "credit.caps_usd (B = the Agent-SDK reviewer in the F-059 plan). Letters, "
+            "digits, `_` and `-` only: it is used to build run ids and file names."
+        ),
+    )
+    model: str = Field(
+        default="opus",
+        pattern=MODEL_ID_PATTERN,
+        description=(
+            "Model alias to request. Resolved to a model id at run time "
+            "(client.models.retrieve); an id is never a literal in the code. It is passed "
+            "to the CLI as `--model <value>`, so it may not start with `-`."
+        ),
+    )
+    max_turns: int = Field(
+        default=40,
+        ge=1,
+        description=(
+            "Turn cap passed to the SDK as max_turns. At least 1: the SDK reads "
+            "0 as 'no turn limit', which would silently remove the cap."
+        ),
+    )
+    agent_file: str = Field(
+        default=".claude/agents/peer-reviewer.md",
+        description=(
+            "Repo-relative subagent definition whose body (front-matter stripped) "
+            "becomes the reviewer's system prompt."
+        ),
+    )
+    mcp_config: str = Field(
+        default=".mcp.json",
+        description=("Repo-relative MCP config the reviewer's mock-hardware server is built from."),
+    )
+    artifact_dir: str = Field(
+        default="reports/agent_reviewer",
+        description="Repo-relative directory the review artifacts are written under, per date.",
+    )
+    resolve_timeout_s: float = Field(
+        default=15.0,
+        gt=0.0,
+        allow_inf_nan=False,
+        description="Seconds to wait for the model-id lookup before using the configured alias.",
+    )
+    run_timeout_s: float = Field(
+        default=1800.0,
+        gt=0.0,
+        allow_inf_nan=False,
+        description=(
+            "Wall-clock limit on one review, in seconds. The turn and budget caps bound "
+            "work and spend; this bounds a stalled connection."
+        ),
+    )
+    max_prompt_chars: int = Field(
+        default=200_000,
+        ge=1_000,
+        description=(
+            "Refuse a run whose system and task prompts together are longer than this many "
+            "characters, before any spend. The agent file comes from the base ref, so this is "
+            "a sanity bound on what leaves the machine, not a defence; the default is "
+            "generous (about 50k tokens)."
+        ),
+    )
+    glob_extensions: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_GLOB_EXTENSIONS),
+        description=(
+            "Extensions a wildcard file part of a Grep/Glob pattern (`*.<ext>`) may use, "
+            "without the dot: the reviewer refuses `*.c` unless `c` is listed. Anything else "
+            "is refused, so a wildcard can only reach files of these kinds. Letters, digits, "
+            "`_`, `+` and `-`; case does not matter; an empty list allows no wildcard file "
+            "part at all (literal file names still work)."
+        ),
+    )
+
+    @field_validator("agent_file", "mcp_config", "artifact_dir")
+    @classmethod
+    def _reject_unsafe_path(cls, value: str) -> str:
+        """Keep every path inside the checkout (they are joined onto the repo root)."""
+        return _require_repo_relative(value)
+
+    @field_validator("glob_extensions")
+    @classmethod
+    def _bare_extensions(cls, value: list[str]) -> list[str]:
+        """Each entry is a bare extension (``py``, not ``.py`` or ``*.py``), lower-cased, once."""
+        cleaned: list[str] = []
+        for entry in value:
+            word = entry.strip().lower()
+            if not re.fullmatch(r"[a-z0-9_+-]{1,16}", word):
+                raise ValueError(
+                    f"glob_extensions entry {entry!r} must be a bare extension of letters, "
+                    "digits, `_`, `+` or `-` (for example `py`), at most 16 characters"
+                )
+            if word not in cleaned:
+                cleaned.append(word)
+        return cleaned
+
+
 class WorkforceConfig(BaseModel):
     """Root workforce configuration."""
 
@@ -435,6 +597,7 @@ class WorkforceConfig(BaseModel):
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     ratchet_budgets: RatchetBudgetsConfig = Field(default_factory=RatchetBudgetsConfig)
     credit: CreditConfig = Field(default_factory=CreditConfig)
+    agent_reviewer: AgentReviewerConfig = Field(default_factory=AgentReviewerConfig)
 
 
 def load_config(
@@ -470,20 +633,41 @@ def load_config(
     except OSError as exc:
         raise ConfigError(f"cannot read workforce config {config_path}: {exc}") from exc
 
+    return parse_config_text(raw_text, source=str(config_path))
+
+
+def parse_config_text(raw_text: str, *, source: str) -> WorkforceConfig:
+    """Parse and validate workforce configuration from its YAML text.
+
+    :func:`load_config` is this plus reading the file. It is separate so a caller that
+    must not trust the working tree (the Agent-SDK reviewer reads the config from the
+    BASE ref, ``git cat-file blob <base>:.claude/workforce.yaml``) validates the text it
+    was given with exactly the same schema and messages.
+
+    Args:
+        raw_text: The YAML document.
+        source: What to call it in error messages (a path, or ``<sha>:<path>``).
+
+    Returns:
+        The validated configuration; an empty document yields schema defaults.
+
+    Raises:
+        ConfigError: The text is not YAML, is not a mapping, or fails schema validation
+            (including unknown keys).
+    """
     try:
         parsed: Any = yaml.safe_load(raw_text)
     except yaml.YAMLError as exc:
-        raise ConfigError(f"invalid YAML in workforce config {config_path}: {exc}") from exc
+        raise ConfigError(f"invalid YAML in workforce config {source}: {exc}") from exc
 
     if parsed is None:
         return WorkforceConfig()
     if not isinstance(parsed, dict):
         raise ConfigError(
-            f"workforce config {config_path} must contain a YAML mapping, "
-            f"got {type(parsed).__name__}"
+            f"workforce config {source} must contain a YAML mapping, got {type(parsed).__name__}"
         )
 
     try:
         return WorkforceConfig.model_validate(parsed)
     except ValidationError as exc:
-        raise ConfigError(f"invalid workforce config {config_path}: {exc}") from exc
+        raise ConfigError(f"invalid workforce config {source}: {exc}") from exc

@@ -1,0 +1,340 @@
+"""A thin adapter between the reviewer and ``tools/credit_ledger.py`` (F-059 WS-B / WS-D).
+
+* :func:`locate` - where the ledger file is, and the refusal to use one that is not where
+  it must be: the spend history lives in the CONTROLLER's (trusted) checkout, never in the
+  head under review, and is never a symbolic link or a path that leaves that checkout.
+* :func:`precheck` - ``credit_ledger.charge`` for the reviewer's workstream, called
+  BEFORE the SDK is touched. It reads the ledger and never writes it. The spend it finds
+  is floored by what the BASE ref's committed copy of the ledger records, so a ledger that
+  lost rows (a head that deleted them, a stale checkout) cannot widen the cap. The cap is
+  per workstream, not per head worktree: every review charges the same ledger.
+* :func:`account_run` - turns what a run produced (or failed to produce) into the
+  numbers and the status that go in the row.
+* :func:`record_run` - ``credit_ledger.record`` with those numbers.
+
+How a run is costed
+-------------------
+The cost is ``ResultMessage.total_cost_usd`` - the CLI's own whole-tree figure
+(subagents included), present on success AND on error results. When there is no
+trustworthy number the row is charged the worst case, not zero:
+
+============================================  ===========  =====================
+situation                                     cost_usd     cost_source
+============================================  ===========  =====================
+result with a usable ``total_cost_usd``       that number  ``ResultMessage.total_cost_usd``
+result whose cost is missing / NaN / negative the run cap  ``cap_assumed``
+result reporting 0 after a session crash, or  the run cap  ``cap_assumed``
+with token usage beside it
+no result, the run had started (crash, ^C,    the run cap  ``cap_assumed``
+timeout)
+no result, nothing had started                0.0          ``not_started``
+============================================  ===========  =====================
+
+A reported 0 is the one number that can silently defeat a cap, so it is believed only
+when nothing contradicts it: the CLI zeroes every cost field after a session crash
+(``error_during_execution``), and a model missing from its price table can report 0 for
+a run that moved tokens. In both cases the 0 means "unknown".
+
+"The run cap" is the ``--cap-usd`` the operator authorised, which is also the SDK's
+``max_budget_usd``: a run cannot have knowingly spent more than it, so charging it
+only over-counts, and an over-count is corrected by the operator reading the
+console while an under-count lets the next run overspend.
+
+Token columns come from ``ResultMessage.model_usage`` (all models, subagents
+included) and fall back to ``usage`` (the main loop only). Cache-creation tokens are
+newly processed prompt tokens and are folded into ``input_tokens``; the ledger has no
+column for them.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import math
+import os
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Final
+
+from tools import credit_ledger
+from tools.agent_reviewer import policy
+from tools.claude_hooks.config import WorkforceConfig
+
+COST_SOURCE_SDK: Final = "ResultMessage.total_cost_usd"
+COST_SOURCE_ASSUMED: Final = "cap_assumed"
+COST_SOURCE_NOT_STARTED: Final = "not_started"
+
+STATUS_OK: Final = "ok"
+STATUS_ERROR: Final = "error"
+STATUS_ERROR_API: Final = "error_api"
+STATUS_INTERRUPTED: Final = "interrupted"
+STATUS_TIMEOUT: Final = "timeout"
+STATUS_NO_RESULT: Final = "error:no_result"
+STATUS_OUTPUT_WITHHELD: Final = "output_withheld"
+
+_RESULT_SUCCESS: Final = "success"
+_CRASH_SUBTYPE: Final = "error_during_execution"
+_TERMINAL_API_ERROR: Final = "api_error"
+
+
+class LedgerLocationError(credit_ledger.LedgerError):
+    """The spend ledger is not where it must be (a symlink, or outside its root)."""
+
+
+class LedgerWriteError(RuntimeError):
+    """The spend row could not be written after the money was spent.
+
+    Attributes:
+        entry: The row that was meant to be appended (without the fields the ledger
+            computes itself: ``ts``, ``cap_usd``, ``cumulative_ws_usd``).
+    """
+
+    def __init__(self, entry: dict[str, Any], cause: Exception) -> None:
+        """Keep the entry and describe the cause."""
+        super().__init__(f"{type(cause).__name__}: {cause}")
+        self.entry = entry
+
+
+@dataclass(frozen=True)
+class RunAccounting:
+    """What one run cost and how it ended, ready for the ledger row."""
+
+    cost_usd: float
+    cost_source: str
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
+    status: str
+
+
+def locate(cfg: WorkforceConfig, ledger_root: Path) -> Path:
+    """Return the ledger file under ``ledger_root``, or refuse to use it.
+
+    The spend history belongs to the controller's checkout, whose files the head under
+    review cannot touch. A ledger that is a symbolic link, or whose real path leaves the
+    root, would let something else decide what was spent.
+
+    Raises:
+        LedgerLocationError: The root is not a directory, the ledger is a symbolic link,
+            or it resolves outside the root.
+    """
+    if not ledger_root.is_dir():
+        raise LedgerLocationError(f"the ledger root {ledger_root} is not a directory")
+    path = ledger_root / cfg.credit.ledger
+    if path.is_symlink():
+        raise LedgerLocationError(f"the spend ledger {path} is a symbolic link; refusing to use it")
+    if not policy.path_is_inside(os.path.realpath(path), os.path.realpath(ledger_root)):
+        raise LedgerLocationError(f"the spend ledger {path} resolves outside {ledger_root}")
+    return path
+
+
+def _floor_of(cfg: WorkforceConfig, floor_text: str | None, floor_source: str) -> float:
+    """What the trusted copy of the ledger records for the reviewer's workstream."""
+    if floor_text is None:
+        return 0.0
+    return credit_ledger.spent_usd_in_text(cfg.agent_reviewer.ws, floor_text, source=floor_source)
+
+
+def precheck(
+    cfg: WorkforceConfig,
+    cap_usd: float,
+    *,
+    ledger_root: Path,
+    floor_text: str | None = None,
+    floor_source: str = "the base ref's ledger",
+) -> credit_ledger.Headroom:
+    """Authorise a run of up to ``cap_usd`` for the reviewer's workstream, or raise.
+
+    Call this BEFORE any client is built or any API call is made.
+
+    Args:
+        cfg: The workforce config (from the base ref).
+        cap_usd: The run's budget.
+        ledger_root: The controller's checkout, which holds the ledger.
+        floor_text: The ledger as the base ref commits it (``None``: the base has none).
+            Its recorded spend is a lower bound on what the file may claim.
+        floor_source: What to call ``floor_text`` in messages.
+
+    Raises:
+        LedgerLocationError: The ledger is not where it must be (see :func:`locate`).
+        credit_ledger.CapExceeded: Recorded spend plus ``cap_usd`` would pass the cap.
+        credit_ledger.LedgerError: The ledger is unreadable or damaged.
+        ValueError: ``cap_usd`` is negative, not finite or not a number.
+    """
+    locate(cfg, ledger_root)
+    return credit_ledger.charge(
+        cfg.agent_reviewer.ws,
+        cap_usd,
+        config=cfg.credit,
+        repo_root=ledger_root,
+        floor_usd=_floor_of(cfg, floor_text, floor_source),
+    )
+
+
+def _usable_cost(value: object) -> float | None:
+    """Return ``value`` as a float if it is a finite, non-negative number, else ``None``."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not math.isfinite(value) or value < 0:
+        return None
+    return float(value)
+
+
+def _count(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return value
+
+
+def _tokens_from_model_usage(model_usage: Mapping[str, Any]) -> tuple[int, int, int] | None:
+    entries = [entry for entry in model_usage.values() if isinstance(entry, Mapping)]
+    if not entries:
+        return None
+    return (
+        sum(
+            _count(e.get("inputTokens")) + _count(e.get("cacheCreationInputTokens"))
+            for e in entries
+        ),
+        sum(_count(e.get("outputTokens")) for e in entries),
+        sum(_count(e.get("cacheReadInputTokens")) for e in entries),
+    )
+
+
+def _tokens_of(result: Any | None) -> tuple[int, int, int]:
+    if result is None:
+        return 0, 0, 0
+    model_usage = getattr(result, "model_usage", None)
+    if isinstance(model_usage, Mapping):
+        totals = _tokens_from_model_usage(model_usage)
+        if totals is not None:
+            return totals
+    usage = getattr(result, "usage", None)
+    if isinstance(usage, Mapping):
+        return (
+            _count(usage.get("input_tokens")) + _count(usage.get("cache_creation_input_tokens")),
+            _count(usage.get("output_tokens")),
+            _count(usage.get("cache_read_input_tokens")),
+        )
+    return 0, 0, 0
+
+
+def _zero_is_credible(result: Any, tokens: tuple[int, int, int]) -> bool:
+    """Whether a reported cost of 0 can be believed (see the module docstring)."""
+    if getattr(result, "subtype", None) == _CRASH_SUBTYPE:
+        return False
+    return sum(tokens) == 0
+
+
+def _cost_of(
+    result: Any | None, *, started: bool, cap_usd: float, tokens: tuple[int, int, int]
+) -> tuple[float, str]:
+    if result is not None:
+        reported = _usable_cost(getattr(result, "total_cost_usd", None))
+        if reported is not None and (reported > 0 or _zero_is_credible(result, tokens)):
+            return reported, COST_SOURCE_SDK
+        return cap_usd, COST_SOURCE_ASSUMED
+    if not started:
+        return 0.0, COST_SOURCE_NOT_STARTED
+    return cap_usd, COST_SOURCE_ASSUMED
+
+
+def _result_status(result: Any) -> str:
+    subtype = getattr(result, "subtype", None)
+    if isinstance(subtype, str) and subtype and subtype != _RESULT_SUCCESS:
+        return subtype
+    if getattr(result, "is_error", False):
+        if getattr(result, "terminal_reason", None) == _TERMINAL_API_ERROR:
+            return STATUS_ERROR_API
+        return STATUS_ERROR
+    return STATUS_OK
+
+
+def _error_status(error: BaseException | None) -> str:
+    if error is None:
+        return STATUS_NO_RESULT
+    if isinstance(error, (KeyboardInterrupt, asyncio.CancelledError)):
+        return STATUS_INTERRUPTED
+    if isinstance(error, (TimeoutError, asyncio.TimeoutError)):
+        return STATUS_TIMEOUT
+    return f"error:{type(error).__name__}"
+
+
+def account_run(
+    result: Any | None,
+    *,
+    started: bool,
+    cap_usd: float,
+    error: BaseException | None,
+) -> RunAccounting:
+    """Work out what a run cost and how it ended.
+
+    Args:
+        result: The SDK's ``ResultMessage`` (duck-typed), or ``None`` if none arrived.
+        started: Whether the CLI produced any message, i.e. the session began and
+            may have spent money.
+        cap_usd: The run's authorised budget, charged when the true cost is unknown.
+        error: The exception that ended the run, if any.
+
+    Returns:
+        The cost, where it came from, the token counts and a status.
+    """
+    tokens = _tokens_of(result)
+    cost_usd, cost_source = _cost_of(result, started=started, cap_usd=cap_usd, tokens=tokens)
+    input_tokens, output_tokens, cache_read_tokens = tokens
+    status = _result_status(result) if result is not None else _error_status(error)
+    return RunAccounting(
+        cost_usd=cost_usd,
+        cost_source=cost_source,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cache_read_tokens=cache_read_tokens,
+        status=status,
+    )
+
+
+def record_run(
+    cfg: WorkforceConfig,
+    *,
+    accounting: RunAccounting,
+    run_id: str,
+    target: str,
+    model_requested: str,
+    model_resolved: str,
+    resolved_via: str,
+    artifact: str,
+    ledger_root: Path,
+    floor_text: str | None = None,
+    floor_source: str = "the base ref's ledger",
+) -> dict[str, Any]:
+    """Append this run's row to the ledger and return it as written.
+
+    Raises:
+        LedgerWriteError: The row could not be appended (a damaged ledger, a failed
+            validation, a disk error). The money is already spent, so the error carries
+            the entry for the operator to append by hand.
+    """
+    entry: dict[str, Any] = {
+        "ws": cfg.agent_reviewer.ws,
+        "run_id": run_id,
+        "target": target,
+        "model_requested": model_requested,
+        "model_resolved": model_resolved,
+        "resolved_via": resolved_via,
+        "input_tokens": accounting.input_tokens,
+        "output_tokens": accounting.output_tokens,
+        "cache_read_tokens": accounting.cache_read_tokens,
+        "cost_usd": accounting.cost_usd,
+        "cost_source": accounting.cost_source,
+        "artifact": artifact,
+        "status": accounting.status,
+    }
+    try:
+        locate(cfg, ledger_root)
+        return credit_ledger.record(
+            entry,
+            config=cfg.credit,
+            repo_root=ledger_root,
+            floor_usd=_floor_of(cfg, floor_text, floor_source),
+        )
+    except (credit_ledger.LedgerError, ValueError, OSError) as exc:
+        raise LedgerWriteError(entry, exc) from exc

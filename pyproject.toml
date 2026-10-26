@@ -155,6 +155,19 @@ cfc = [
 anthropic = [
     "anthropic>=0.40",
 ]
+# Read-only Agent-SDK peer reviewer (F-059 WS-B / WS-D, tools/agent_reviewer/).
+# Workstation-only: the SDK bundles the Claude Code CLI (a ~100 MB wheel) and nothing
+# in the rover's hot loop may import it (tests/regression/test_hot_loop_import_purity.py).
+# Deliberately NOT in [dev]: CI installs [dev,telemetry,mcp], so the real-SDK pins in
+# tests/unit/tools/test_agent_reviewer.py importorskip there and run wherever this extra
+# is installed. Pinned to <0.3 because the option names the reviewer uses were
+# verified against 0.2.168 and a 0.x minor may rename them -- lifting the pin is a
+# deliberate re-verification, not a version bump. tomli: the reviewer reads
+# .gitleaks.toml, and stdlib tomllib only exists from Python 3.11.
+agent_reviewer = [
+    "claude-agent-sdk>=0.2.168,<0.3",
+    'tomli>=2.0 ; python_version < "3.11"',
+]
 # External agent frameworks — strictly off-loop, workstation/cloud only.
 # Never installed on the Jetson; the factory returns None when disabled.
 adk = [

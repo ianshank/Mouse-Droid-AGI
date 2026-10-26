@@ -135,6 +135,130 @@ moves the scanner-absent case into the deny column for operators who want it.
 | **Local structlog binding** | `logging_setup.py` | Uses `wrap_logger`, not `structlog.configure()`, so importing a hook never mutates the process-global config the test suite pins. |
 | **Gate self-disables** | `freeze_gate.py` | When F-008 reaches `done` the freeze lifts with no code change and no redeploy. |
 
+## Agent-SDK peer reviewer (F-059 WS-B / WS-D)
+
+`tools/agent_reviewer/` is the one component in this document that **spends money and
+reaches a third party**: it drives the Claude Agent SDK to run an adversarial review of a
+change set (`--base...--head`) and writes the review into the repository. It is workstation
+tooling like everything else here - never on the rover, never imported by it - but it adds an
+external dependency and an egress path, so its trust boundary is drawn explicitly.
+
+```mermaid
+flowchart TB
+    Operator(["Operator\n(after the API key is rotated)"])
+
+    subgraph Reviewer["tools/agent_reviewer/ (workstation only)"]
+        Run["run_review.py\n--base --head --cap-usd [--dry-run]"]
+        Policy["policy.py\nallowlist, Bash guard, read guard,\nmock MCP config, SDK options"]
+        Prompt["prompt.py\nsystem prompt,\nsecret-file refusals"]
+        LedgerAdapter["ledger.py\npre-check, cost accounting"]
+    end
+
+    subgraph Workforce["Existing workforce primitives"]
+        Config["claude_hooks/config.py\nagent_reviewer + credit blocks"]
+        Credit["credit_ledger.py\ncharge() / record()"]
+        SecretScan["claude_hooks/secret_scan.py\ngitleaks wrapper"]
+    end
+
+    subgraph Sdk["External dependency: claude-agent-sdk (extra)"]
+        Query["query(prompt, options)"]
+        Cli["bundled Claude Code CLI\nsubprocess, dontAsk mode"]
+    end
+
+    Api[("Anthropic API\nthe only egress")]
+    Mcp["mousedroid MCP server\nMOUSEDROID_MOCK_HARDWARE=true\nactuation tools hidden"]
+    Shell["git diff, log, show\nliteral pathspecs\nno interpreter, no pytest"]
+    BaseRef[("trusted base ref\nworkforce.yaml, agent file,\n.mcp.json, MCP config,\n.gitleaks.toml, file list")]
+    Artifact[("reports/agent_reviewer/date/wsb-NNNN.md")]
+    LedgerFile[("controller's checkout\nreports/credit/ledger.jsonl")]
+
+    Operator --> Run
+    Run --> Policy
+    Run --> Prompt
+    Run --> LedgerAdapter
+    Run -.reads.-> Config
+    Run -.reads at the base SHA.-> BaseRef
+    LedgerAdapter --> Credit
+    Prompt -.delegates to gitleaks with.-> SecretScan
+    Run -->|"after charge() passes"| Query
+    Query --> Cli
+    Cli -->|"HTTPS"| Api
+    Cli -.PreToolUse hooks.-> Policy
+    Cli --> Mcp
+    Cli --> Shell
+    Run -->|"always, however the run ended"| Artifact
+    Credit --> LedgerFile
+```
+
+**What is new.** `claude-agent-sdk` (the `agent_reviewer` extra: not in `[dev]`, not installed by
+CI), the Claude Code CLI it bundles and spawns as a subprocess, and an HTTPS call to the
+Anthropic API - the one egress. `anthropic` (the `anthropic` extra) is optional and only resolves
+the model alias with `models.retrieve`; `gitleaks` is optional and only adds a scan of the
+assembled prompt and of the review before it is saved.
+
+**Threat model: the head may be hostile.** The reviewer runs with an API key in its environment
+against a change set whose head commit controls every file in the working tree. So the trust boundary
+is the **base** ref: nothing the head controls may reach an exec sink, a process that holds the key,
+or the reviewer's own configuration and instructions. Everything the reviewer configures itself from
+is therefore read from the base commit with `git cat-file blob <base-sha>:<path>` and `git ls-tree -r
+<base-sha>`, never from the working tree: `.claude/workforce.yaml` (it selects the agent file, the MCP
+declaration, the secret-scan program and its policy file, the caps, and where the review and the ledger
+row are written), the reviewer's instructions (`.claude/agents/peer-reviewer.md`), the MCP declaration
+(`.mcp.json`), the MCP server's configuration (`config/default.yaml`), the secret policy
+(`.gitleaks.toml`) and the list of files `git show <commit>:<path>` may name. What the head does control
+(the diff; what `Read` and `Grep` return) reaches the model as data, with no exec sink behind it. The one
+exception is deliberate: the spend ledger is the history of past runs, so it is read from the **controller's**
+checkout (the one the reviewer's own code runs from, or `--ledger-root`) - never the head's, never a symbolic
+link, never a path that leaves that checkout - and floored by the base ref's committed copy.
+
+**Containment, in the order the SDK applies it.** Each layer is a pure function or a constant in
+`policy.py` (or the runner's trust check), pinned by `tests/unit/tools/test_agent_reviewer.py` without
+the SDK or a network:
+
+| # | Layer | What it guarantees |
+|---|---|---|
+| 1 | `tools=` base set | The model is shown only `Read`, `Grep`, `Glob`, `Bash`: no `Write`, `Edit`, web or subagent tool exists for it. |
+| 2 | PreToolUse hook `deny_non_readonly_bash` | Runs first. A whitelist: `git diff\|log\|show` as one plain command and nothing else - no interpreter and no `pytest` (`--collect-only` still imports the head's `conftest.py`, and an `@argfile` argument can inject options). Refuses the options that write a file (`--output`), run a program or read outside the repo (`--no-index`, `--ext-diff`, `--textconv`), widen the search to every ref (`--all`, `--reflog`, `--branches`, `--remotes`) or print blob ids (`--raw`, `--abbrev`); a bundle of short options with a capital `O` in it (`-O<file>` and `-pO<file>` both make git read a file); shell syntax; unquoted globs. Pathspecs follow `--` and are literal: none contains `* ? [ :` or starts with `-`. **A revision must be one of the two pinned commits** (the resolved base and head ids) with `^` / `~N` suffixes, alone or as `A..B`: a bare blob or tree id, an abbreviation, `HEAD` or a ref name could name an object whatever its path, so none is accepted, and an option's value is attached to it (`-n5`). `git show <commit>:<path>` is accepted only for a non-secret file tracked at the base ref. Silent when it has no objection, so it can only tighten. Fails closed. |
+| 2b | PreToolUse hook `ReadGuard` (matcher `Read\|Grep\|Glob`) | Registered beside the Bash guard. The CLI's deny rules are cwd-relative screens, so this hook `realpath`s every path the tool is given (`file_path` and `path`: the CLI reads a Grep `file_path` as its `path`; symlinks, junctions and 8.3 short names are followed) and requires it to be **inside the checkout under review**; it refuses `.git` internals, secret-file and private-key names after the link is followed, Windows device names, paths the shell would expand (`~`, `$VAR`, `%VAR%`), NTFS data streams, glob characters in a path and a path or glob that starts with `-` (a search command would read `-g` or `--no-ignore` as an option). **A glob is judged by a strict grammar, not by rewriting it**: the CLI splits a Grep `glob` on whitespace and commas and ripgrep reads classes, braces, `?`, `!` and escapes, so only letters, digits, `. _ @ + -`, `/` and `*` are accepted, directory parts are literal names, `*` or `**`, the file part is a literal name or `*.<extension>` **with the extension on a fixed list** (`agent_reviewer.glob_extensions` of the base ref, default `py md toml json yml yaml txt sh cfg ini rst`; a wildcard cannot be shown clear of `.env.*` and `docker.env*`, which end in `*`, so a list decides, not a sample of names), the file part is also matched (`fnmatch`) against concrete names made from the secret patterns and - when the glob can step through `.git`, with no directory part or a wildcard one - against git's own file names (`config`, `HEAD`, `index`, `*.pack`, ...), and the literal start of the glob is resolved against the search directory and must stay inside the checkout. The hook refuses rather than rewrites a call, answers with a reason and does not raise. A shell profile, another worktree or a `~/.claude/projects` transcript is unreachable. Silent when it has no objection. Fails closed. |
+| 3 | `disallowed_tools` deny rules | Evaluated even if the hook failed: writes, web, subagents, every actuation tool by name (a superset of `MCPConfig.actuation_tools`, pinned by a test), and reads of `*.env`, `docker.env*`, credential directories and `.git` (`Read(**/.git/**)`). The CLI applies `Read()` deny rules to Grep and Glob as ripgrep exclusions placed after the model's own globs, so whatever the hook accepts, `.git` and the secret files stay out of what they find. |
+| 4 | `permission_mode="dontAsk"` | Anything not pre-approved is denied; a headless run has nobody to ask. |
+| 5 | `allowed_tools` | The allowlist: the read tools, the three git patterns, and `system_info` / `lidar_diagnostics` / `esp32_diagnostics`. |
+| 6 | MCP entry | Only the `mousedroid` server, **built in code** from constants: `sys.executable -I -c <fixed bootstrap> <config>` with a fixed minimal environment (`MOUSEDROID_MOCK_HARDWARE=true`, `MOUSEDROID_MCP__EXPOSE_ACTUATION_TOOLS=false`, every credential variable blanked). `-I` keeps the working directory and every `PYTHON*` variable off the import path on any Python; the bootstrap (the CLI's stdio schema has no `cwd`) changes to a scratch directory outside the checkout and then does what `python -m mousedroid --config <file>` does, with a copy of the BASE ref's `config/default.yaml`. Nothing is passed through from `.mcp.json`: the copy at the base ref only has to *confirm* the pinned command and arguments, and any mismatch raises - there is no fallback. `strict_mcp_config` so the CLI loads no other server (the `github` entry of `.mcp.json` carries a token and can write). |
+| 7 | `setting_sources=[]` | No user, project or local settings file can widen any of the above, and the head's `.claude/settings.json` hooks never run. |
+| 8 | Process environment (`process_env`) | The environment the reviewer adds for the CLI is an allowlist - `PATH`, `HOME`, `LANG` - plus forced constants (`GIT_LITERAL_PATHSPECS=1`, `GIT_OPTIONAL_LOCKS=0`, `MOUSEDROID_MOCK_HARDWARE=true`, `NoDefaultCurrentDirectoryInExePath=1`). No credential is copied into it, whatever the parent holds. The children the reviewer starts itself - its `git`, its `gitleaks` - get the parent's environment minus every variable that can hold a credential (`policy.scrubbed_environ`: any name with `KEY`, `TOKEN`, `SECRET`, `PASSWORD` or `CREDENTIAL(S)` as one of its words, plus `AWS_SECRET_ACCESS_KEY` and the password variables the rule cannot see). The SDK lays it over the CLI's inherited environment, so it cannot remove the key the CLI itself needs: the key is kept from the head's code by never starting a process the head can steer (layers 2, 6, 9 and 10), not by scrubbing. |
+| 9 | Whose code runs beside the key | Three pieces of code run in or beside the process that holds the key: the reviewer's own modules, the interpreter's environment (its `site-packages` and `.pth` files run at startup, even under `-I`) and the `mousedroid` package the MCP server imports (the checkout's own source under an editable install). Each is the head's when it lives inside the checkout under review and the checkout is not at the base commit; so is the **spend ledger** (`--ledger-root` inside such a checkout is a file the head can rewrite). The plan prints where each comes from (`trust_controller`, `trust_interpreter`, `trust_package`, `trust_ledger`) and the run is refused before any spend unless `--trust-checkout` accepts it. An interpreter environment inside the checkout in which the head *tracks* files (`git ls-tree` at the head, `git ls-files` for the index) is refused whatever the flag says. The safe setup keeps the three outside the checkout under review (see the README). |
+| 10 | Program lookup | `git` and `gitleaks` are looked up in the absolute directories of `PATH` only (`policy.resolve_executable`). `shutil.which` and Windows' `CreateProcess` both look in the working directory first, so a `git.exe` committed to the head would run in the reviewer's own process, with the key in its environment. The CLI looks up more programs by bare name than we can wrap, so a head (or checkout) that tracks a root file named like one of them - `git`, `bash`, `sh`, `claude`, `rg`, `node`, `npm`, `npx`, `gitleaks`, `cmd`, `powershell`, `pwsh`, `python*` - with any Windows executable extension is refused before any spend. So is a head, a checkout or a checkout's index (`git ls-files -s`: a staged link is already on disk) that tracks a symbolic link which can leave the checkout (`git ls-tree -r`, mode `120000`: an absolute target, one above the repository root, or a `..` after a name), because a read tool that follows it would be reading outside. An untracked link or junction is not seen (README, Known limits). |
+
+**Spend.** `--cap-usd` is both the amount `charge()` must find headroom for - it raises `CapExceeded`
+before any client is built - and the SDK's `max_budget_usd`. The row's cost is
+`ResultMessage.total_cost_usd`; when that is unknown the run is charged its cap rather than zero.
+The artifact and the ledger row are written whether the run succeeded, failed, timed out or was
+interrupted. The ledger is the controller's: the spend `charge()` sees is the larger of its file and the sum in
+the base ref's committed copy, so a head cannot delete rows to widen the cap, and the cap is per workstream, not
+per head worktree. `max_turns`, `max_prompt_chars` (a run whose prompts together pass it is refused before any
+spend), the model alias, the caps and the ledger path live in `.claude/workforce.yaml`, read from the base ref.
+
+**Why no `RegexInjectionFilter`.** That filter guards natural language leaving the *rover* toward an
+actuation-bearing translation (CHARTER section 3). The reviewer holds no actuation or write tool,
+runs against a mock-hardware MCP, and a human reads its output before merge; an injection in
+repository text can at worst produce a wrong paragraph in an advisory review. The allowlist is the
+control, not a text filter.
+
+**Not claimed.** Inside the checkout `Read` and `Grep` are a screen, not a sandbox: `ReadGuard` keeps them in the
+checkout, but a secret file under a name neither it nor the deny rules recognise is readable there, and a glob is
+screened by its spelling, not proven. The CLI that holds the API key keeps it in its own environment: the SDK merges the `env`
+it is given over the inherited one, so credentials are withheld from child processes by what is
+allowed to run, not by scrubbing. The CLI has a switch that strips credentials from its
+subprocesses (`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`); it is not enabled, because it is tied to the
+CLI's permission-mode handling and subprocess sandbox, which cannot be rehearsed without spending.
+`git log -p` shows any secret ever committed in the pinned history. The base ref itself is trusted,
+and so is the controller's checkout: the head cannot edit the ledger there and the base's committed copy is its
+floor, but whoever can write to that checkout still decides the cumulative total, so the workstream cap guards
+against the operator's own mistakes while the per-run `--cap-usd` (also the SDK's hard stop) bounds each run. `git` runs with the operator's own configuration, so a diff or
+text-conversion driver defined there and named by the head's `.gitattributes` would run. If the SDK
+wheel lacks its bundled CLI the SDK searches `PATH` for `claude`. The aim is that a hostile head can
+mislead a review and spend up to its cap, but gets no code execution and no process that holds the key.
+
 ## Why this shape
 
 **Hooks carry policy only.** The five primitives (`config`, `paths`, `hookio`,
@@ -189,4 +313,6 @@ scripts on Unix. The AQA gate verifies the helper exists and branches on
 - `docs/runbooks/secret-scanning.md` — the CI-side gitleaks gate (F-015)
 - `docs/architecture/ADR-013-f-number-namespaces.md` — F-number allocation
 - `openspec/changes/mouse-droid-claude-workforce/` — the change bundle and its peer review
+- `tools/agent_reviewer/README.md` — what the Agent-SDK reviewer may touch, what it never does, how to run the first review
+- `tests/unit/tools/test_agent_reviewer.py` — the reviewer's containment pins (allowlist, Bash guard, MCP config, ledger)
 - `tests/regression/test_cross_platform_portability_aqa.py` — portability invariant pins

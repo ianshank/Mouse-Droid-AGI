@@ -12,7 +12,8 @@ between them and the cap the operator set in ``.claude/workforce.yaml``
   ONE JSON object to the ledger (one per line, append-only, LF endings) and fills
   in the fields only the ledger can know: ``ts``, ``cap_usd`` and
   ``cumulative_ws_usd``.
-* :func:`spent_usd` - the recorded spend of one workstream.
+* :func:`spent_usd` - the recorded spend of one workstream; :func:`spent_usd_in_text` is
+  the same for ledger text that is not a file on disk (for example a git blob).
 * ``python -m tools.credit_ledger status`` - cap / spent / remaining per
   workstream; exits 1 when one is over its cap or the ledger is unreadable.
 
@@ -143,25 +144,32 @@ def _decimal(value: object, *, what: str, error: type[Exception]) -> Decimal:
     return number
 
 
-def _read_rows(path: Path) -> list[dict[str, Any]]:
-    """Parse the ledger. A missing file is an empty ledger; a damaged one is an error."""
-    if not path.is_file():
-        return []
+def _parse_rows(text: str, source: str) -> list[dict[str, Any]]:
+    """Parse ledger text (one JSON object per line); ``source`` names it in errors."""
     rows: list[dict[str, Any]] = []
-    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for number, line in enumerate(text.splitlines(), start=1):
         if not line.strip():
             continue
         try:
             row = json.loads(line)
         except json.JSONDecodeError as exc:
-            raise LedgerError(f"{path}:{number}: not valid JSON ({exc.msg})") from exc
+            raise LedgerError(f"{source}:{number}: not valid JSON ({exc.msg})") from exc
         if not isinstance(row, dict):
-            raise LedgerError(f"{path}:{number}: expected a JSON object, got {type(row).__name__}")
+            raise LedgerError(
+                f"{source}:{number}: expected a JSON object, got {type(row).__name__}"
+            )
         rows.append(row)
     return rows
 
 
-def _spent(rows: Sequence[Mapping[str, Any]], ws: str, path: Path) -> Decimal:
+def _read_rows(path: Path) -> list[dict[str, Any]]:
+    """Parse the ledger. A missing file is an empty ledger; a damaged one is an error."""
+    if not path.is_file():
+        return []
+    return _parse_rows(path.read_text(encoding="utf-8"), str(path))
+
+
+def _spent(rows: Sequence[Mapping[str, Any]], ws: str, path: Path | str) -> Decimal:
     """Sum ``cost_usd`` over the rows of workstream ``ws``."""
     total = Decimal(0)
     for index, row in enumerate(rows, start=1):
@@ -193,12 +201,25 @@ def spent_usd(
     return float(_spent(_read_rows(path), ws, path))
 
 
+def spent_usd_in_text(ws: str, text: str, *, source: str = "<ledger text>") -> float:
+    """Return the USD that ledger ``text`` records for workstream ``ws``.
+
+    For a ledger that is not a file on disk - the copy a git ref holds, say - so a caller
+    can use it as a floor (see ``floor_usd`` of :func:`charge`).
+
+    Raises:
+        LedgerError: The text is damaged; ``source`` names it in the message.
+    """
+    return float(_spent(_parse_rows(text, source), ws, source))
+
+
 def charge(
     ws: str,
     estimate_usd: float,
     *,
     config: CreditConfig | None = None,
     repo_root: Path | None = None,
+    floor_usd: float = 0.0,
 ) -> Headroom:
     """Authorise one API call of about ``estimate_usd`` for workstream ``ws``.
 
@@ -210,6 +231,9 @@ def charge(
         estimate_usd: Upper-bound estimate of the call's cost in USD.
         config: Credit config; loaded from the repo's workforce config when omitted.
         repo_root: Repository root; resolved when omitted.
+        floor_usd: A lower bound on the recorded spend: the larger of this and the
+            ledger file's own sum is used. A caller that does not fully trust the file
+            (it could have lost rows) passes what a trusted copy of it records.
 
     Returns:
         The :class:`Headroom` found, so the caller can log it.
@@ -217,14 +241,15 @@ def charge(
     Raises:
         CapExceeded: ``spent + estimate`` would exceed the cap, the workstream is
             already over it, or it has no configured cap (fail closed).
-        ValueError: ``estimate_usd`` is negative, not finite, or not a number.
+        ValueError: ``estimate_usd`` or ``floor_usd`` is negative, not finite, or not a number.
         LedgerError: The ledger is unreadable or damaged.
         ConfigError: The workforce config is unreadable or invalid.
     """
     estimate = _decimal(estimate_usd, what="estimate_usd", error=ValueError)
+    floor = _decimal(floor_usd, what="floor_usd", error=ValueError)
     cfg, path = _resolve(config, repo_root)
     cap = _cap_of(cfg, ws, CapExceeded)
-    spent = _spent(_read_rows(path), ws, path)
+    spent = max(_spent(_read_rows(path), ws, path), floor)
     if spent + estimate > cap:
         raise CapExceeded(
             f"workstream {ws!r} would exceed its ${cap} cap: ${spent} already recorded "
@@ -271,6 +296,7 @@ def record(
     *,
     config: CreditConfig | None = None,
     repo_root: Path | None = None,
+    floor_usd: float = 0.0,
 ) -> dict[str, Any]:
     """Append one run to the ledger and return the row as written.
 
@@ -287,6 +313,8 @@ def record(
             ``cost_source``, ``artifact``, ``status`` (and optionally ``ts``).
         config: Credit config; loaded from the repo's workforce config when omitted.
         repo_root: Repository root; resolved when omitted.
+        floor_usd: A lower bound on the spend before this run, as for :func:`charge`;
+            ``cumulative_ws_usd`` is the larger of it and the file's sum, plus this run.
 
     Returns:
         The row appended, in :data:`LEDGER_FIELDS` order.
@@ -302,7 +330,8 @@ def record(
     ws = fields["ws"]
     cap = _cap_of(cfg, ws, ValueError)
     cost = _decimal(fields["cost_usd"], what="cost_usd", error=ValueError)
-    cumulative = _spent(_read_rows(path), ws, path) + cost
+    floor = _decimal(floor_usd, what="floor_usd", error=ValueError)
+    cumulative = max(_spent(_read_rows(path), ws, path), floor) + cost
 
     fields.setdefault("ts", datetime.now(timezone.utc).strftime(_TIMESTAMP_FORMAT))
     fields["cap_usd"] = float(cap)

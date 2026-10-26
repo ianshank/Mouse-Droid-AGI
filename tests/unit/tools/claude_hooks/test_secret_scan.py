@@ -148,6 +148,26 @@ def test_extra_args_are_forwarded(tmp_path: Path, scanner_path: Path) -> None:
     assert "--verbose" in outcome.detail
 
 
+def test_the_scanner_environment_is_the_callers_unless_one_is_given(
+    tmp_path: Path, scanner_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reviewer holds an API key the scanner has no use for and passes a scrubbed env."""
+    _make_stub(
+        tmp_path / "bin",
+        "env-scanner",
+        "import os, sys; print(os.environ.get('SCAN_CANARY', 'absent')); sys.exit(1)",
+    )
+    monkeypatch.setenv("SCAN_CANARY", "inherited")
+    cfg = _config(command="env-scanner")
+
+    inherited = secret_scan.scan_content("x", cfg, repo_root=tmp_path)
+    scrubbed_env = {k: v for k, v in os.environ.items() if k != "SCAN_CANARY"}
+    scrubbed = secret_scan.scan_content("x", cfg, repo_root=tmp_path, env=scrubbed_env)
+
+    assert "inherited" in inherited.detail
+    assert "absent" in scrubbed.detail
+
+
 @pytest.mark.parametrize(
     ("target", "expected_suffix"),
     [("src/a.py", ".py"), ("notes.md", ".md"), (None, ".txt"), ("noext", ".txt")],

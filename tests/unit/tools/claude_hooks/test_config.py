@@ -13,9 +13,11 @@ from pathlib import Path
 import pytest
 from tools.claude_hooks.config import (
     DEFAULT_CONFIG_RELPATH,
+    DEFAULT_GLOB_EXTENSIONS,
     ConfigError,
     WorkforceConfig,
     load_config,
+    parse_config_text,
 )
 
 
@@ -109,6 +111,37 @@ def test_non_mapping_document_is_rejected(tmp_path: Path) -> None:
     _write_config(tmp_path, "- just\n- a\n- list\n")
     with pytest.raises(ConfigError, match="must contain a YAML mapping"):
         load_config(repo_root=tmp_path)
+
+
+def test_parse_config_text_is_what_load_config_applies_to_a_file(tmp_path: Path) -> None:
+    """The reviewer reads the config from a git blob; the schema and messages must not differ."""
+    body = "freeze:\n    feature_key: F-777\ncredit:\n    caps_usd:\n        B: 5\n"
+    _write_config(tmp_path, body)
+    from_file = load_config(repo_root=tmp_path)
+    from_text = parse_config_text(body, source="abc123:.claude/workforce.yaml")
+    assert from_text == from_file
+    assert from_text.freeze.feature_key == "F-777"
+    assert from_text.credit.caps_usd == {"B": 5.0}
+
+
+@pytest.mark.parametrize("body", ["", "# only a comment\n", "---\n"])
+def test_parse_config_text_of_an_empty_document_is_the_defaults(body: str) -> None:
+    assert parse_config_text(body, source="x") == WorkforceConfig()
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        ("freeze: [unclosed\n", "invalid YAML"),
+        ("- a\n- list\n", "must contain a YAML mapping"),
+        ("unknown_section:\n    a: 1\n", "unknown_section"),
+        ("coverage:\n    tools_line_min: 101\n", "invalid workforce config"),
+    ],
+)
+def test_parse_config_text_names_the_source_in_every_failure(body: str, message: str) -> None:
+    with pytest.raises(ConfigError, match=message) as excinfo:
+        parse_config_text(body, source="deadbeef:.claude/workforce.yaml")
+    assert "deadbeef:.claude/workforce.yaml" in str(excinfo.value)
 
 
 def test_unreadable_file_is_rejected(tmp_path: Path) -> None:
@@ -487,3 +520,208 @@ def test_repo_config_declares_the_credit_block() -> None:
     cfg = load_config(repo_root=repo_root)
     assert cfg.credit.caps_usd, "credit.caps_usd must be declared in .claude/workforce.yaml"
     assert all(cap > 0 for cap in cfg.credit.caps_usd.values())
+
+
+# ---------------------------------------------------------------------------
+# agent_reviewer (F-059 WS-B: the read-only Agent-SDK peer reviewer)
+# ---------------------------------------------------------------------------
+
+
+def test_agent_reviewer_defaults(tmp_path: Path) -> None:
+    """No ``agent_reviewer:`` block => the planned reviewer settings."""
+    reviewer = load_config(repo_root=tmp_path).agent_reviewer
+    assert reviewer.ws == "B"
+    assert reviewer.model == "opus"
+    assert reviewer.max_turns == 40
+    assert reviewer.agent_file == ".claude/agents/peer-reviewer.md"
+    assert reviewer.mcp_config == ".mcp.json"
+    assert reviewer.artifact_dir == "reports/agent_reviewer"
+    assert reviewer.resolve_timeout_s > 0
+    assert reviewer.run_timeout_s > 0
+    assert reviewer.max_prompt_chars == 200_000
+    assert reviewer.glob_extensions == list(DEFAULT_GLOB_EXTENSIONS)
+
+
+def test_agent_reviewer_block_round_trips(tmp_path: Path) -> None:
+    _write_config(
+        tmp_path,
+        "agent_reviewer:\n"
+        "    ws: C\n"
+        "    model: sonnet\n"
+        "    max_turns: 7\n"
+        "    agent_file: agents/x.md\n"
+        "    mcp_config: cfg/mcp.json\n"
+        "    artifact_dir: out/reviews\n"
+        "    resolve_timeout_s: 3.5\n"
+        "    run_timeout_s: 90\n"
+        "    max_prompt_chars: 5000\n",
+    )
+    reviewer = load_config(repo_root=tmp_path).agent_reviewer
+    assert (reviewer.ws, reviewer.model, reviewer.max_turns) == ("C", "sonnet", 7)
+    assert reviewer.agent_file == "agents/x.md"
+    assert reviewer.mcp_config == "cfg/mcp.json"
+    assert reviewer.artifact_dir == "out/reviews"
+    assert reviewer.resolve_timeout_s == 3.5
+    assert reviewer.run_timeout_s == 90.0
+    assert reviewer.max_prompt_chars == 5000
+
+
+def test_agent_reviewer_partial_block_keeps_the_other_defaults(tmp_path: Path) -> None:
+    _write_config(tmp_path, "agent_reviewer:\n    max_turns: 12\n")
+    reviewer = load_config(repo_root=tmp_path).agent_reviewer
+    assert reviewer.max_turns == 12
+    assert reviewer.model == "opus"
+    assert reviewer.artifact_dir == "reports/agent_reviewer"
+
+
+def test_agent_reviewer_does_not_disturb_other_sections(tmp_path: Path) -> None:
+    _write_config(tmp_path, "agent_reviewer:\n    max_turns: 12\n")
+    cfg = load_config(repo_root=tmp_path)
+    assert cfg.freeze.feature_key == "F-008"
+    assert cfg.credit.caps_usd == {}
+
+
+def test_agent_reviewer_unknown_key_is_rejected(tmp_path: Path) -> None:
+    _write_config(tmp_path, "agent_reviewer:\n    max_turn: 12\n")
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(repo_root=tmp_path)
+    assert "max_turn" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("turns", ["0", "-3"])
+def test_agent_reviewer_max_turns_must_be_positive(tmp_path: Path, turns: str) -> None:
+    """The SDK reads ``max_turns=0`` as "no limit", so 0 must never reach it."""
+    _write_config(tmp_path, f"agent_reviewer:\n    max_turns: {turns}\n")
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+@pytest.mark.parametrize("field", ["ws", "model"])
+def test_agent_reviewer_blank_identifiers_are_rejected(tmp_path: Path, field: str) -> None:
+    _write_config(tmp_path, f"agent_reviewer:\n    {field}: ' '\n")
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+@pytest.mark.parametrize("ws", ["../x", "a b", "B/C", "B.md", "x" * 17])
+def test_agent_reviewer_ws_is_a_plain_name(tmp_path: Path, ws: str) -> None:
+    """The workstream builds run ids and file names, so it may not carry a path."""
+    _write_config(tmp_path, f"agent_reviewer:\n    ws: '{ws}'\n")
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+@pytest.mark.parametrize("model", ["-x", "--dangerously-skip-permissions", "a b", "opus;x"])
+def test_agent_reviewer_model_cannot_look_like_a_cli_option(tmp_path: Path, model: str) -> None:
+    """The alias is passed as ``--model <value>``; a leading dash would read as an option."""
+    _write_config(tmp_path, f"agent_reviewer:\n    model: '{model}'\n")
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+@pytest.mark.parametrize("model", ["opus", "claude-opus-5-5", "anthropic.claude-x:0"])
+def test_agent_reviewer_model_accepts_aliases_and_ids(tmp_path: Path, model: str) -> None:
+    _write_config(tmp_path, f"agent_reviewer:\n    model: '{model}'\n")
+    assert load_config(repo_root=tmp_path).agent_reviewer.model == model
+
+
+@pytest.mark.parametrize("field", ["agent_file", "mcp_config", "artifact_dir"])
+@pytest.mark.parametrize("path", ["/etc/x", "C:/x", "../x", " "])
+def test_agent_reviewer_paths_must_stay_inside_the_repo(
+    tmp_path: Path, field: str, path: str
+) -> None:
+    _write_config(tmp_path, f"agent_reviewer:\n    {field}: '{path}'\n")
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+@pytest.mark.parametrize("field", ["resolve_timeout_s", "run_timeout_s"])
+@pytest.mark.parametrize("value", ["0", "-1", ".nan", ".inf"])
+def test_agent_reviewer_timeouts_must_be_positive_and_finite(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    _write_config(tmp_path, f"agent_reviewer:\n    {field}: {value}\n")
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+@pytest.mark.parametrize("value", ["999", "0", "-1", "1.5", "'many'", "true"])
+def test_agent_reviewer_max_prompt_chars_must_be_a_sane_whole_number(
+    tmp_path: Path, value: str
+) -> None:
+    """Below 1000 no real prompt fits; a bool or a fraction is not a length."""
+    _write_config(tmp_path, f"agent_reviewer:\n    max_prompt_chars: {value}\n")
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+def test_agent_reviewer_max_prompt_chars_accepts_its_lower_bound(tmp_path: Path) -> None:
+    _write_config(tmp_path, "agent_reviewer:\n    max_prompt_chars: 1000\n")
+    assert load_config(repo_root=tmp_path).agent_reviewer.max_prompt_chars == 1000
+
+
+def test_the_default_glob_extensions_are_source_and_text_files() -> None:
+    assert DEFAULT_GLOB_EXTENSIONS == (
+        "py",
+        "md",
+        "toml",
+        "json",
+        "yml",
+        "yaml",
+        "txt",
+        "sh",
+        "cfg",
+        "ini",
+        "rst",
+    )
+
+
+def test_agent_reviewer_glob_extensions_round_trip_lower_cased_and_once(tmp_path: Path) -> None:
+    _write_config(tmp_path, "agent_reviewer:\n    glob_extensions: [PY, c, py, ' H++ ', rst-2]\n")
+    reviewer = load_config(repo_root=tmp_path).agent_reviewer
+    assert reviewer.glob_extensions == ["py", "c", "h++", "rst-2"]
+
+
+def test_agent_reviewer_glob_extensions_may_be_empty(tmp_path: Path) -> None:
+    """No wildcard file part at all: literal file names only."""
+    _write_config(tmp_path, "agent_reviewer:\n    glob_extensions: []\n")
+    assert load_config(repo_root=tmp_path).agent_reviewer.glob_extensions == []
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "'.py'",
+        "'*.py'",
+        "'py,md'",
+        "'p y'",
+        "'p/y'",
+        "''",
+        "' '",
+        "'py;'",
+        "'" + "x" * 17 + "'",
+        "7",
+    ],
+)
+def test_agent_reviewer_glob_extensions_must_be_bare_extensions(tmp_path: Path, entry: str) -> None:
+    _write_config(tmp_path, f"agent_reviewer:\n    glob_extensions: [{entry}]\n")
+    with pytest.raises(ConfigError, match="glob_extensions"):
+        load_config(repo_root=tmp_path)
+
+
+def test_agent_reviewer_glob_extensions_must_be_a_list(tmp_path: Path) -> None:
+    _write_config(tmp_path, "agent_reviewer:\n    glob_extensions: py\n")
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+def test_repo_config_declares_the_agent_reviewer_block() -> None:
+    """The checked-in workforce.yaml states the reviewer's turn cap and model alias."""
+    repo_root = Path(__file__).resolve().parents[4]
+    raw = (repo_root / DEFAULT_CONFIG_RELPATH).read_text(encoding="utf-8")
+    assert "\nagent_reviewer:" in raw, "agent_reviewer must be declared in .claude/workforce.yaml"
+    reviewer = load_config(repo_root=repo_root).agent_reviewer
+    assert reviewer.max_turns == 40
+    assert reviewer.model == "opus"
+    assert reviewer.max_prompt_chars == 200_000
+    assert reviewer.glob_extensions == list(DEFAULT_GLOB_EXTENSIONS)
