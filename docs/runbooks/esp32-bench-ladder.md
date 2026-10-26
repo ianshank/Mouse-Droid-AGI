@@ -27,8 +27,8 @@ Applies to every step:
 |---|---|---|
 | `ROVER_HOST` | The Jetson's USB device-mode address, reached over the USB-C cable in the Jetson's device port | Your environment: see your `~/.mousedroid/jetson_host` |
 | `ROVER_USER` | The login on the Jetson | Your environment: `MOUSEDROID_REMOTE_USER` (the scripts also read `SSH_USER`) |
-| `SHA` | The trunk commit deployed in 3.3 | Recorded in 3.0 |
-| `BENCH_CFG` | Production overlay plus bench overlay, comma-separated; forwarded as `MOUSEDROID_JETSON_CONFIGS` on every direct `docker exec` | Rover shell, set in 3.4 |
+| `SHA` | The commit deployed in 3.3: the tip of `claude/f059-bench-integration` until the F-059 lane PRs merge, trunk's tip after | Recorded in 3.0 |
+| `BENCH_CFG` | Production overlay plus bench overlay, comma-separated; forwarded as `MOUSEDROID_JETSON_CONFIGS` on the smoke-stage `docker exec`s of 3.10. `cli.preflight` does not read it: 3.6 passes the two overlays as `--config` flags | Rover shell, set in 3.4 |
 | `ESP_PORT` | The canonical CP2102N bridge's device node, resolved from `/dev/serial/by-id` | Rover shell, set in 3.5 |
 
 ```bash
@@ -50,13 +50,15 @@ ESP_PORT=$(readlink -f /dev/serial/by-id/usb-Silicon_Labs_CP2102N_USB_to_UART_Br
 
 Tick a box only when the expected output was seen.
 
-- [ ] **3.0 Pre-flight (PC, before the Jetson arrives, 60 min).** Key, host and login for the repo scripts (CF-3: they default the login to `jetson`), and the trunk SHA to deploy.
+- [ ] **3.0 Pre-flight (PC, before the Jetson arrives, 60 min).** Key, host and login for the repo scripts (CF-3: they default the login to `jetson`), and the SHA to deploy.
 
 ```bash
 ssh-keygen -t ed25519 -f ~/.ssh/mousedroid_ed25519 -N ""
 mkdir -p ~/.mousedroid && printf '%s\n' "$ROVER_HOST" > ~/.mousedroid/jetson_host
 export MOUSEDROID_REMOTE_USER=$ROVER_USER SSH_USER=$ROVER_USER
-git fetch origin && git rev-parse origin/claude/markdown-implementation-plan-aVJ2l
+git ls-remote origin claude/f059-bench-integration
+# once the lane PRs have merged, deploy trunk's tip instead:
+#   git fetch origin && git rev-parse origin/claude/markdown-implementation-plan-aVJ2l
 ```
 
 Also add this alias to `~/.ssh/config` (substitute the `ROVER_HOST` and `ROVER_USER` values):
@@ -68,9 +70,9 @@ Host rover
     IdentityFile ~/.ssh/mousedroid_ed25519
 ```
 
-Keep the SHA printed above as `SHA`: it must contain PR-B/C/D (bench overlay, probe, loopback gate, stock flip), plus PR-G (hash-pinned flasher and firmware record) if 3.9 may be needed. Stage firmware per task 2.5 step 5 (never `combine/target.bin`).
+Keep the SHA printed above as `SHA` (the first column of the `ls-remote` line; the branch moves, so print it again on bench day, before 3.3). While the lane PRs are unmerged, `claude/f059-bench-integration` (trunk plus those PRs) is what you deploy. The SHA must contain PR-B/C/D (bench overlay, probe, loopback gate, stock flip), plus PR-G (hash-pinned flasher and firmware record) if 3.9 may be needed. Stage firmware per task 2.5 step 5 (never `combine/target.bin`).
 
-- **Contingency** if any is unmerged: replace `BENCH_CFG` below with `-e MOUSEDROID_ESP32__ENABLED=true -e MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock` on every direct `docker exec`, and skip 3.10d.
+- **Hard prerequisite, no contingency.** PR-B/C/D must be in the deployed SHA before 3.4, the CLI form of 3.6, any of 3.10 and the closeout. Env overrides (`MOUSEDROID_ESP32__ENABLED=true`, `MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock`) cannot stand in for them: they change the driver, not the tests. The pre-PR-B loopback test still commands a fraction of `esp32.max_velocity_mps` behind `MOUSEDROID_SMOKE_ALLOW_MOTION` alone, with neither PR-B's second motion gate (`esp32.smoke_test_allow_motion`) nor its velocity ceiling (`esp32.smoke_test_velocity_mps`), and nothing replaces PR-C's liveness probe; a motor run would be under-gated and its evidence would not count toward F-008. A SHA without them gets only the raw non-motion diagnostics 3.5–3.8 (the heredoc form of 3.6 needs no trunk code): no `jetson_smoke_test.sh motor` or `power`, no `validate.py --check F-008`, no PR-H.
 - Install Windows "Flash Download Tool 3.9.5" as the fallback flasher (COM port; offsets `0x1000/0x8000/0xE000/0x10000`; 115200).
 
 - [ ] **3.1 First contact (10 min).** USB-C to the Jetson device port, then (PC; on Windows `ping.exe` counts with `-n`):
@@ -96,16 +98,15 @@ docker inspect -f '{{.State.Health.Status}}' mousedroid
 docker exec -w /opt/mousedroid mousedroid python3 -m mousedroid.main --health-check
 ```
 
-→ `healthy`; exit 0. **This runs against the mock**: it proves the brain and the rollback anchor, not the chassis. Run the no-chassis smoke with the bench overlay opted out (`power`, and `camera` too: F-008's `validation_command` is `all`, so an open F-007 (`/dev/video0` missing, 2026-05-12) blocks the closeout regardless of the ESP32 — decide at 3.10e whether to narrow the catalog command):
+→ `healthy`; exit 0. **This runs against the mock**: it proves the brain and the rollback anchor, not the chassis. Then the `camera` smoke stage (F-008's `validation_command` is `all`, so an open F-007 (`/dev/video0` missing, 2026-05-12) blocks the closeout regardless of the ESP32 — decide at 3.10e whether to narrow the catalog command):
 
 ```bash
-docker exec -w /opt/mousedroid -e MOUSEDROID_MOCK_HARDWARE=false -e MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY= mousedroid bash scripts/jetson_smoke_test.sh power
-docker exec -w /opt/mousedroid -e MOUSEDROID_MOCK_HARDWARE=false -e MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY= mousedroid bash scripts/jetson_smoke_test.sh camera
+docker exec -w /opt/mousedroid -e MOUSEDROID_MOCK_HARDWARE=false mousedroid bash scripts/jetson_smoke_test.sh camera
 ```
 
-`power` → `SKIP: power chain smoke` with the reason `bench ESP32 overlay opted out (MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY is empty): no chassis declared, stage not run` — with the bench overlay explicitly opted out the stage records SKIP without running pytest (nothing here measures the chassis; a mock PASS would be a green that measures nothing). The checkpoint's substance is the health check and `camera`.
+Do not run `power` here. This checkpoint comes before 3.3 deploys PR-B, and the script now on the rover predates it: it ignores `MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY`, so a `power` run could PASS against the mock. The no-chassis opt-out is asserted at Checkpoint A′, after the deploy. The checkpoint's substance is the health check and `camera`.
 
-- [ ] **3.3 Deploy trunk via git-fetch (20–30 min; CF-4 fallback is the primary path today).** From the PC:
+- [ ] **3.3 Deploy trunk via git-fetch (20–30 min; CF-4 fallback is the primary path today).** From the PC (the `fetch` names the integration branch while the lane PRs are unmerged; once they have merged, name the trunk branch, `claude/markdown-implementation-plan-aVJ2l`, instead):
 
 ```bash
 ssh $ROVER_USER@$ROVER_HOST "find /opt/mousedroid -not -user $ROVER_USER | wc -l"          # ~6400 expected (ownership drift)
@@ -114,7 +115,7 @@ ssh $ROVER_USER@$ROVER_HOST 'git -C /opt/mousedroid status --porcelain | head'  
 mkdir -p ~/.mousedroid/rover-wip && ssh $ROVER_USER@$ROVER_HOST 'bash -s -- preserve /opt/mousedroid --archive -' \
     < scripts/rover_wip_guard.sh > ~/.mousedroid/rover-wip/rover-wip-$(date -u +%Y%m%dT%H%M%SZ).tar.gz
 ssh $ROVER_USER@$ROVER_HOST 'git -C /opt/mousedroid rev-parse HEAD > ~/rollback-commit.txt; docker tag mousedroid:jetson mousedroid:jetson-rollback-$(date -u +%Y%m%d)'
-ssh $ROVER_USER@$ROVER_HOST "git -C /opt/mousedroid fetch origin && git -C /opt/mousedroid checkout --detach ${SHA}"   # "HEAD is now at …"
+ssh $ROVER_USER@$ROVER_HOST "git -C /opt/mousedroid fetch origin claude/f059-bench-integration && git -C /opt/mousedroid checkout --detach ${SHA}"   # "HEAD is now at …"
 ssh $ROVER_USER@$ROVER_HOST 'docker exec -w /opt/mousedroid mousedroid python3 -c "import mousedroid.main, mousedroid.factory, mousedroid.validation.runtime; print(\"import ok\")"'
 ```
 
@@ -156,6 +157,14 @@ docker exec -w /opt/mousedroid mousedroid python3 -m mousedroid.main --health-ch
 docker logs mousedroid --since 2m | grep esp32_driver_built
 ```
 
+Then the no-chassis opt-out, which could not run at Checkpoint A: PR-B's script is on the rover now.
+
+```bash
+docker exec -w /opt/mousedroid -e MOUSEDROID_MOCK_HARDWARE=false -e MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY= mousedroid bash scripts/jetson_smoke_test.sh power
+```
+
+→ `SKIP: power chain smoke` with the reason `bench ESP32 overlay opted out (MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY is empty): no chassis declared, stage not run` — with the bench overlay explicitly opted out the stage records SKIP without running pytest (nothing here measures the chassis; a mock PASS would be a green that measures nothing). A PASS, or any pytest output, means the pre-PR-B script is still the one deployed: re-check the deploy, and until it is fixed only the raw non-motion diagnostics (3.5–3.8, see 3.0) may run.
+
 - [ ] **3.4 Bench overlay (5 min).** On the rover:
 
 ```bash
@@ -163,7 +172,7 @@ BENCH_CFG=/opt/mousedroid/config/jetson_production.yaml,/opt/mousedroid/config/j
 docker exec -w /opt/mousedroid -e MOUSEDROID_MOCK_HARDWARE=false mousedroid python3 -c "from pathlib import Path; from mousedroid.config.loader import load_settings; c=load_settings(Path('config/jetson_production.yaml'), Path('config/jetson_bench_esp32.yaml')); print(c.esp32.enabled, c.esp32.command_set, c.esp32.serial_baud, c.esp32.smoke_test_allow_motion)"
 ```
 
-→ `True waveshare_stock 115200 False`. Nothing is copied to `/etc/mousedroid`; the overlay is forwarded per command.
+→ `True waveshare_stock 115200 False`. A `FileNotFoundError` naming `jetson_bench_esp32.yaml` means PR-B is not in the deployed SHA: only the raw non-motion diagnostics (3.5–3.8, see 3.0) may run. Nothing is copied to `/etc/mousedroid`; the overlay is passed with each command.
 
 - [ ] **3.5 Chassis power-up, passive signs of life (15 min).** Lift; plug the rover USB-C into the Jetson; power on. Watch: OLED banner within 3 s; WiFi SSID `UGV_*`/`WAVE_ROVER_*`; then on the rover:
 
@@ -189,10 +198,13 @@ PY
 
 Alive: `rst:0x1 (POWERON_RESET)` banner and/or `{"T":1001,…}` frames. Silent: `BYTES=0`.
 
-- [ ] **3.6 Active USB-C probe (5 min).** Same heredoc with `s.write(b'{"T":130}\n')` and three `s.readline()` attempts (2 s timeout) → expect a line with `"T":1001` carrying `L`,`R`,`v`. Trunk equivalent (on the rover):
+- [ ] **3.6 Active USB-C probe (5 min).** Same heredoc with `s.write(b'{"T":130}\n')` and three `s.readline()` attempts (2 s timeout) → expect a line with `"T":1001` carrying `L`,`R`,`v`. Trunk equivalent (on the rover; it needs PR-C in the deployed SHA, 3.0). `cli.preflight` takes its overlays only as repeated `--config` flags, production first and bench second (later overlays win), and does not read `MOUSEDROID_JETSON_CONFIGS` (the smoke stages do), so both overlays are spelled out here instead of forwarding `BENCH_CFG`:
 
 ```bash
-docker exec -w /opt/mousedroid -e MOUSEDROID_MOCK_HARDWARE=false -e MOUSEDROID_JETSON_CONFIGS="$BENCH_CFG" mousedroid python3 -m mousedroid.cli.preflight --checks esp32 --json
+docker exec -w /opt/mousedroid -e MOUSEDROID_MOCK_HARDWARE=false mousedroid python3 -m mousedroid.cli.preflight \
+    --config /opt/mousedroid/config/jetson_production.yaml \
+    --config /opt/mousedroid/config/jetson_bench_esp32.yaml \
+    --checks esp32 --json
 ```
 
 → `"status": "ok"`, `FEEDBACK_BASE_INFO after 1 poll(s)`. The probe runs cold by construction here: the container holds the mock, and the serial driver takes no exclusive lock until task 4.1, so nothing contends for the frames. Answer → **skip 3.7–3.9, go to 3.10**.
@@ -240,7 +252,7 @@ docker exec -w /opt/mousedroid mousedroid bash scripts/flash_esp32.sh --port "$E
 
 → `Hash of data verified` ×4 and a clean `verify_flash`. Power-cycle; repeat 3.5 and 3.6. Then once: heredoc with `s.write(b'{"T":900,"main":2,"module":2}\n')`; power-cycle; confirm the OLED reports WAVE ROVER and 130→1001 answers.
 
-- [ ] **3.10 Smoke ladder.** Rover lifted. Each stage below is this `docker exec`, with the stage command in place of `…`:
+- [ ] **3.10 Smoke ladder.** Rover lifted, and PR-B/C/D in the deployed SHA (3.0): none of 3.10 runs without them. Each stage below is this `docker exec`, with the stage command in place of `…`:
 
 ```bash
 docker exec -w /opt/mousedroid -e MOUSEDROID_MOCK_HARDWARE=false -e MOUSEDROID_JETSON_CONFIGS="$BENCH_CFG" mousedroid …

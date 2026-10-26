@@ -542,7 +542,9 @@ and passes, recorded as such.~~ → **(fix round 1, Ruling 31)** with the bench 
 opted out (`MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY=`) the `motor` and `power` stages record **SKIP
 without running pytest** — a mock PASS would be a green that measures nothing — and with the overlay
 stacked a test that skips is a stage **FAIL** (`57d6996`). The checkpoint's substance is the health
-check and the `camera` stage. The board is first measured at 3.5/3.6, with the bench overlay
+check and the `camera` stage; the opt-out itself is asserted at Checkpoint A′ (after step 3.3's deploy
+and restart), because Checkpoint A comes first and the script then on the rover ignores the variable
+and could PASS against the mock (PR #261 review). The board is first measured at 3.5/3.6, with the bench overlay
 forwarded per command. After step 3.3's git-fetch delivery the restart follows the rule (Rulings
 39/40): with the unit enabled, or its `ActiveState` anything but `inactive` (`active`, `activating`,
 `failed`, unreadable), restart **through the unit** and accept the recreate — an in-place restart of
@@ -657,8 +659,8 @@ the board.~~ *(revision 2 never named a flip; R-1 and R-6 presupposed one — R3
 board. `scripts/jetson_smoke_test.sh` gains `esp32_stage_configs_csv()`: unset
 `MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY` → append the repo default overlay to the stage's config CSV
 (no double append); set-but-empty → the two ESP32 stages record **SKIP without running pytest** (the
-no-chassis checkpoint uses this — Ruling 31; a mock PASS would measure nothing); any path → that
-file; the singular `MOUSEDROID_JETSON_CONFIG` is the base when the CSV is empty (`4706338`). With the
+no-chassis Checkpoint A′, after the 3.3 deploy, uses this — Ruling 31; a mock PASS would measure
+nothing); any path → that file; the singular `MOUSEDROID_JETSON_CONFIG` is the base when the CSV is empty (`4706338`). With the
 overlay stacked, a test that skips (board configured off, pytest exit 0) is a stage **FAIL**:
 `test_power` requires `test_power_chain_within_budget PASSED` exactly as `test_motor` requires its
 own test (`57d6996`). `test_motor` and `test_power` pass the result as `MOUSEDROID_JETSON_CONFIGS`;
@@ -696,7 +698,9 @@ YAML).
 **Lands in** task 1.1 (PR-B — landed `bbbda25`, `4706338` and the opt-out SKIP `df5bcd3` (Ruling 31:
 the reason reads `bench ESP32 overlay opted out (MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY is empty): no chassis declared, stage not run`) on `claude/f059-pr-b-gate-measures-board`; tip `44e4a17`,
 open as PR #258, base PR-0's branch). Bench use: `BENCH_CFG=…/jetson_production.yaml,…/jetson_bench_esp32.yaml`
-forwarded per `docker exec`; nothing is copied to `/etc/mousedroid`.
+forwarded per `docker exec` as `MOUSEDROID_JETSON_CONFIGS` to the smoke stages (`cli.preflight` takes
+repeated `--config` flags and does not read the variable — PR #261 review); nothing is copied to
+`/etc/mousedroid`.
 
 ## D-12 — Catalog edge and the F-050/F-051 deferral (EX-2, EX-3)
 
