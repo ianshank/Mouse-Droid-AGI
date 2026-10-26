@@ -12,9 +12,11 @@ keeps this module a thin composition root.
 from __future__ import annotations
 
 import copy
+from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 
-from pydantic import Field, model_validator
+from pydantic import Field, PrivateAttr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from mousedroid.config.migration import (
@@ -460,6 +462,38 @@ class Settings(BaseSettings):
         None,
         description="Hardware constraints baseline config (None=disabled, backwards compatible)",
     )
+
+    # Provenance, deliberately NOT a field: see :attr:`overlay_paths`.
+    _overlay_paths: tuple[Path, ...] = PrivateAttr(default=())
+
+    @property
+    def overlay_paths(self) -> tuple[Path, ...]:
+        """The overlay YAMLs ``load_settings`` merged to build this instance.
+
+        Provenance, not configuration: a private attribute behind a read-only property
+        rather than a schema field, so it cannot be set from YAML or the environment,
+        stays out of ``model_dump()``, and leaves every existing config loading
+        unchanged (invariant 6). Empty for a ``Settings`` built directly (tests,
+        embedders). The orchestrator's ``estop_latch_active_at_boot`` hint reads it to
+        name the overlay stack this process was started with.
+
+        Returns:
+            Absolute overlay paths in the order they were applied, excluding the
+            implicit ``default.yaml`` and ``baselines.yaml``.
+        """
+        return self._overlay_paths
+
+    def record_overlay_paths(self, paths: Iterable[Path]) -> None:
+        """Remember which overlay files this instance was loaded from.
+
+        Called by ``load_settings``, the single load entry. Stored absolute so a command
+        copied from the boot log still resolves from whatever directory the operator is
+        standing in, not the one the service happened to start in.
+
+        Args:
+            paths: Overlay files in the order they were applied.
+        """
+        self._overlay_paths = tuple(Path(path).absolute() for path in paths)
 
     @model_validator(mode="before")
     @classmethod

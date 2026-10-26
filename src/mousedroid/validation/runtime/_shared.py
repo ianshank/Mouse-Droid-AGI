@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import os
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final, Literal
 
 from mousedroid.config.loader import load_settings
 from mousedroid.logging.setup import get_logger
@@ -24,9 +25,78 @@ if TYPE_CHECKING:
 _CONFIG_LIST_ENV_VARS = ("MOUSEDROID_CONFIGS", "MOUSEDROID_JETSON_CONFIGS")
 _CONFIG_SINGLE_ENV_VARS = ("MOUSEDROID_CONFIG", "MOUSEDROID_JETSON_CONFIG")
 
+RUNTIME_CONFIG_ENV_VARS: Final[tuple[str, ...]] = _CONFIG_LIST_ENV_VARS + _CONFIG_SINGLE_ENV_VARS
+"""Every variable :func:`resolve_runtime_config` reads, in precedence order.
+
+Public so a caller that has to *tell an operator* which variables would have supplied an
+overlay (the re-arm CLI's "no overlay" note) derives the list from the resolver instead of
+keeping a copy that drifts.
+"""
+
+RuntimeConfigSource = Literal["cli", "env_csv", "env_single", "default"]
+"""Where a resolved overlay stack came from.
+
+``cli``: the caller passed paths explicitly (every in-repo caller forwards ``--config``).
+``env_csv``: a comma-separated list variable. ``env_single``: a single-path variable.
+``default``: nothing was supplied, so the caller loads ``default.yaml`` alone.
+"""
+
 # Named constants for paths and phrases used in validation helpers.
 _ARGUS_SOCKET_PATH: str = "/tmp/argus_socket"  # noqa: S108 — fixed NVIDIA Argus socket path, not a temp write
 _DEFAULT_SMOKE_PHRASE: str = "Hello hello! Rocky ready!"
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeConfigResolution:
+    """The overlay stack a process should load, and where that answer came from."""
+
+    paths: tuple[Path, ...]
+    source: RuntimeConfigSource
+    env_var: str | None = None
+    """The variable that supplied ``paths`` when ``source`` is an ``env_*`` source."""
+
+
+def resolve_runtime_config(
+    config_paths: Sequence[Path | str] | None = None,
+) -> RuntimeConfigResolution:
+    """Resolve runtime config overlays and report where the answer came from.
+
+    Precedence:
+        1. Explicit ``config_paths`` passed by the caller (``source="cli"``).
+        2. CSV lists in ``MOUSEDROID_CONFIGS`` or ``MOUSEDROID_JETSON_CONFIGS``
+           (``source="env_csv"``).
+        3. Single-path ``MOUSEDROID_CONFIG`` or legacy ``MOUSEDROID_JETSON_CONFIG``
+           (``source="env_single"``).
+        4. Nothing supplied (``source="default"``): the caller loads ``default.yaml``
+           alone, which is almost never the deployed configuration.
+
+    Blank values never count as supplied: a set-but-empty variable falls through to the
+    next tier rather than resolving to an empty stack.
+
+    Args:
+        config_paths: Explicit config overlay paths.
+
+    Returns:
+        The normalized paths in precedence order, with their source.
+    """
+    explicit = tuple(Path(str(path)) for path in (config_paths or ()) if str(path).strip())
+    if explicit:
+        return RuntimeConfigResolution(explicit, "cli")
+
+    for env_var in _CONFIG_LIST_ENV_VARS:
+        raw_value = os.getenv(env_var, "").strip()
+        if not raw_value:
+            continue
+        csv_paths = tuple(Path(part.strip()) for part in raw_value.split(",") if part.strip())
+        if csv_paths:
+            return RuntimeConfigResolution(csv_paths, "env_csv", env_var)
+
+    for env_var in _CONFIG_SINGLE_ENV_VARS:
+        single_path = os.getenv(env_var, "").strip()
+        if single_path:
+            return RuntimeConfigResolution((Path(single_path),), "env_single", env_var)
+
+    return RuntimeConfigResolution((), "default")
 
 
 def resolve_runtime_config_paths(
@@ -34,10 +104,8 @@ def resolve_runtime_config_paths(
 ) -> tuple[Path, ...]:
     """Resolve runtime config overlays from explicit args or environment.
 
-    Precedence:
-        1. Explicit ``config_paths`` passed by the caller.
-        2. CSV lists in ``MOUSEDROID_CONFIGS`` or ``MOUSEDROID_JETSON_CONFIGS``.
-        3. Single-path ``MOUSEDROID_CONFIG`` or legacy ``MOUSEDROID_JETSON_CONFIG``.
+    The paths of :func:`resolve_runtime_config`, which owns the precedence; this is
+    defined in terms of it so the two entry points cannot disagree.
 
     Args:
         config_paths: Explicit config overlay paths.
@@ -45,24 +113,7 @@ def resolve_runtime_config_paths(
     Returns:
         Normalized config paths in precedence order.
     """
-    resolved = tuple(Path(str(path)) for path in (config_paths or ()) if str(path).strip())
-    if resolved:
-        return resolved
-
-    for env_var in _CONFIG_LIST_ENV_VARS:
-        raw_value = os.getenv(env_var, "").strip()
-        if not raw_value:
-            continue
-        csv_paths = [Path(part.strip()) for part in raw_value.split(",") if part.strip()]
-        if csv_paths:
-            return tuple(csv_paths)
-
-    for env_var in _CONFIG_SINGLE_ENV_VARS:
-        single_path = os.getenv(env_var, "").strip()
-        if single_path:
-            return (Path(single_path),)
-
-    return ()
+    return resolve_runtime_config(config_paths).paths
 
 
 def load_runtime_settings(config_paths: Sequence[Path | str] | None = None) -> Settings:

@@ -7,8 +7,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import shlex
 import time
-from typing import Any
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Any, Final
 
 from mousedroid.common.async_utils import cancel_and_drain, spawn_tracked
 from mousedroid.common.signals import install_shutdown_handlers
@@ -17,6 +20,45 @@ from mousedroid.orchestrator._state import _OrchestratorState
 from mousedroid.world_model.protocol import WarmableProtocol
 
 _log = get_logger(__name__)
+
+_REARM_COMMAND: Final[str] = "python -m mousedroid.cli.rearm"
+_REARM_STATUS_FLAG: Final[str] = "--status"
+
+# Prose, logged under its own key (``clear_requires``) and never part of the pasteable
+# ``rearm_cmd``. ``--confirm-area-clear`` is the operator's own statement that the area is
+# physically clear -- the human-in-the-loop gate CHARTER section 3 requires -- so a logged
+# command that already carries it would pre-attest for whoever pastes it. The attestation is
+# typed by the operator after looking at the rover (runbook steps 1-2), and ``<you>`` stays a
+# placeholder on purpose. Pinned: this is the only runtime string in this module that may
+# spell the flag (tests/regression/test_rearm_config_resolution_aqa.py).
+_REARM_CLEAR_REQUIRES: Final[str] = (
+    "after steps 1-2 of docs/runbooks/emergency-stop-rearm.md, clear by running the same "
+    "command with --operator <you> --confirm-area-clear in place of --status"
+)
+
+
+def _rearm_status_command(overlay_paths: Sequence[Path]) -> str:
+    """The read-only command an operator should paste, naming this process's overlays.
+
+    The CLI finds the latch under ``experience.path``, which the deployed overlay sets, so
+    a command that omits the overlay can read a clear rover where there is a latched one.
+    This names every overlay ``load_settings`` merged -- from ``Settings.overlay_paths``,
+    not the environment, which can disagree with what the process was started with.
+    Paths are shell-quoted because the string is meant to be pasted into a shell.
+
+    It is only ever the ``--status`` form (Ruling 44): pasting it inspects the latch and
+    changes nothing. Clearing is never logged as a command; see ``_REARM_CLEAR_REQUIRES``.
+
+    Args:
+        overlay_paths: ``Settings.overlay_paths``; empty for settings that were built
+            directly rather than loaded.
+
+    Returns:
+        The status command with one ``--config`` per overlay, or just
+        ``python -m mousedroid.cli.rearm --status`` when there are none.
+    """
+    config_flags = [f"--config {shlex.quote(str(path))}" for path in overlay_paths]
+    return " ".join([_REARM_COMMAND, *config_flags, _REARM_STATUS_FLAG])
 
 
 class _LifecycleMixin(_OrchestratorState):
@@ -482,6 +524,18 @@ class _LifecycleMixin(_OrchestratorState):
         path is the no-motion mode**, so no new branch is needed. This is
         consistent with CHARTER section 3: a latched rover holds the
         default no-motion posture rather than leaving it.
+
+        The logged ``rearm_cmd`` is the ``--status`` form and names every overlay this
+        process was started with (:func:`_rearm_status_command`), so pasting it inspects
+        the latch this rover is holding and changes nothing. A bare command would load
+        ``default.yaml`` and read "nothing to clear" -- the hint reproducing the defect it
+        exists to fix.
+
+        It is deliberately never the clearing form (Ruling 44). ``--confirm-area-clear``
+        is the operator's attestation that the area is physically clear; a logged command
+        that already carries it pre-attests for whoever pastes it, one placeholder
+        substitution away from a clear. What clearing takes is logged as prose under a
+        separate key, ``clear_requires``, so the pasteable field can never carry it.
         """
         if self._emergency_latch is None:
             return
@@ -493,7 +547,8 @@ class _LifecycleMixin(_OrchestratorState):
             reason=record.reason,
             causes=list(record.causes),
             tripped_at_iso=record.tripped_at_iso,
-            rearm_cmd=("python -m mousedroid.cli.rearm --operator <you> --confirm-area-clear"),
+            rearm_cmd=_rearm_status_command(self._cfg.overlay_paths),
+            clear_requires=_REARM_CLEAR_REQUIRES,
         )
 
     async def _persist_emergency_latch(self) -> None:

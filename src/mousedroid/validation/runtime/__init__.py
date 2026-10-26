@@ -56,10 +56,14 @@ from ._shared import (
     _CONFIG_LIST_ENV_VARS,
     _CONFIG_SINGLE_ENV_VARS,
     _DEFAULT_SMOKE_PHRASE,
+    RUNTIME_CONFIG_ENV_VARS,
+    RuntimeConfigResolution,
+    RuntimeConfigSource,
     _collect_configured_runtime_paths,
     _log,
     _subprocess_timeout_s,
     load_runtime_settings,
+    resolve_runtime_config,
     resolve_runtime_config_paths,
 )
 from ._storage import (
@@ -71,6 +75,7 @@ from ._storage import (
 )
 
 __all__ = [
+    "RUNTIME_CONFIG_ENV_VARS",
     "TYPE_CHECKING",
     "_ARGUS_SOCKET_PATH",
     "_CONFIG_LIST_ENV_VARS",
@@ -85,6 +90,8 @@ __all__ = [
     "NDArray",
     "Path",
     "PcieSsdDiagnostics",
+    "RuntimeConfigResolution",
+    "RuntimeConfigSource",
     "Sequence",
     "_collect_configured_runtime_paths",
     "_discover_hef_role_fields",
@@ -122,6 +129,7 @@ __all__ = [
     "play_rocky_voice_phrase",
     "play_speaker_tone",
     "read_lidar_scan",
+    "resolve_runtime_config",
     "resolve_runtime_config_paths",
     "subprocess",
     "time",
