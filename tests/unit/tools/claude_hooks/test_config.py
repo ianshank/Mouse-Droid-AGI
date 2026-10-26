@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from tools.claude_hooks.config import (
     DEFAULT_CONFIG_RELPATH,
+    DEFAULT_GLOB_EXTENSIONS,
     ConfigError,
     WorkforceConfig,
     load_config,
@@ -538,6 +539,7 @@ def test_agent_reviewer_defaults(tmp_path: Path) -> None:
     assert reviewer.resolve_timeout_s > 0
     assert reviewer.run_timeout_s > 0
     assert reviewer.max_prompt_chars == 200_000
+    assert reviewer.glob_extensions == list(DEFAULT_GLOB_EXTENSIONS)
 
 
 def test_agent_reviewer_block_round_trips(tmp_path: Path) -> None:
@@ -658,6 +660,61 @@ def test_agent_reviewer_max_prompt_chars_accepts_its_lower_bound(tmp_path: Path)
     assert load_config(repo_root=tmp_path).agent_reviewer.max_prompt_chars == 1000
 
 
+def test_the_default_glob_extensions_are_source_and_text_files() -> None:
+    assert DEFAULT_GLOB_EXTENSIONS == (
+        "py",
+        "md",
+        "toml",
+        "json",
+        "yml",
+        "yaml",
+        "txt",
+        "sh",
+        "cfg",
+        "ini",
+        "rst",
+    )
+
+
+def test_agent_reviewer_glob_extensions_round_trip_lower_cased_and_once(tmp_path: Path) -> None:
+    _write_config(tmp_path, "agent_reviewer:\n    glob_extensions: [PY, c, py, ' H++ ', rst-2]\n")
+    reviewer = load_config(repo_root=tmp_path).agent_reviewer
+    assert reviewer.glob_extensions == ["py", "c", "h++", "rst-2"]
+
+
+def test_agent_reviewer_glob_extensions_may_be_empty(tmp_path: Path) -> None:
+    """No wildcard file part at all: literal file names only."""
+    _write_config(tmp_path, "agent_reviewer:\n    glob_extensions: []\n")
+    assert load_config(repo_root=tmp_path).agent_reviewer.glob_extensions == []
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "'.py'",
+        "'*.py'",
+        "'py,md'",
+        "'p y'",
+        "'p/y'",
+        "''",
+        "' '",
+        "'py;'",
+        "'" + "x" * 17 + "'",
+        "7",
+    ],
+)
+def test_agent_reviewer_glob_extensions_must_be_bare_extensions(tmp_path: Path, entry: str) -> None:
+    _write_config(tmp_path, f"agent_reviewer:\n    glob_extensions: [{entry}]\n")
+    with pytest.raises(ConfigError, match="glob_extensions"):
+        load_config(repo_root=tmp_path)
+
+
+def test_agent_reviewer_glob_extensions_must_be_a_list(tmp_path: Path) -> None:
+    _write_config(tmp_path, "agent_reviewer:\n    glob_extensions: py\n")
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
 def test_repo_config_declares_the_agent_reviewer_block() -> None:
     """The checked-in workforce.yaml states the reviewer's turn cap and model alias."""
     repo_root = Path(__file__).resolve().parents[4]
@@ -667,3 +724,4 @@ def test_repo_config_declares_the_agent_reviewer_block() -> None:
     assert reviewer.max_turns == 40
     assert reviewer.model == "opus"
     assert reviewer.max_prompt_chars == 200_000
+    assert reviewer.glob_extensions == list(DEFAULT_GLOB_EXTENSIONS)

@@ -63,8 +63,22 @@ _TOKENS = [
     "\x00",
     "é",
     "¹",
+    "-",
+    "-g",
+    "--no-ignore",
+    chr(0xA0),
+    chr(0xFEFF),
 ]
 _near_misses = st.lists(st.sampled_from(_TOKENS), max_size=8).map("".join)
+_WHITE_SPACE = " " + chr(9) + chr(10) + chr(13) + chr(0xA0) + chr(0xFEFF)
+_WHERE_THE_TOOL_TAKES_A_NAME = [
+    ("Read", "file_path"),
+    ("Grep", "file_path"),
+    ("Grep", "path"),
+    ("Glob", "path"),
+    ("Grep", "glob"),
+    ("Glob", "pattern"),
+]
 _values = st.one_of(_near_misses, st.text(max_size=60))
 _PLAIN_GLOB = re.compile(r"[A-Za-z0-9_.@+*/-]+")
 _CREDENTIAL_WORD = re.compile(
@@ -93,7 +107,10 @@ def checkout() -> Iterator[Path]:
 def test_the_checks_answer_for_any_text_without_leaning_on_the_catch_all(
     checkout: Path, tool: str, field: str, value: str
 ) -> None:
-    result = policy._check_read_access(tool, {field: value}, root=str(checkout))
+    extensions = frozenset(policy.DEFAULT_GLOB_EXTENSIONS)
+    result = policy._check_read_access(
+        tool, {field: value}, root=str(checkout), extensions=extensions
+    )
     assert result is None or isinstance(result, str)
 
 
@@ -132,10 +149,27 @@ def test_a_glob_the_guard_accepts_is_plain_and_cannot_match_a_secret_name(
         assert ".git" not in [segment.lower() for segment in segments], (tool, value)
         assert not any(segment.startswith("..") for segment in segments), (tool, value)
         file_part = segments[-1].lower()
+        if "*" in file_part:  # a wildcard file part is *.<extension> with a listed extension
+            assert file_part.startswith("*."), (tool, value)
+            assert file_part[2:] in policy.DEFAULT_GLOB_EXTENSIONS, (tool, value)
+        reaches_git = len(segments) == 1 or any(part in ("*", "**") for part in segments[:-1])
+        for probe in policy._GIT_INTERNAL_PROBES:
+            assert not (reaches_git and fnmatch.fnmatchcase(probe, file_part)), (tool, value)
         for probe in policy._SECRET_PROBES:
             assert not fnmatch.fnmatchcase(probe, file_part), (tool, value, probe)
         assert policy.read_secret_reason(file_part) is None, (tool, value)
         assert policy._device_name_in(value) is None, (tool, value)
+
+
+@given(where=st.sampled_from(_WHERE_THE_TOOL_TAKES_A_NAME), value=_values)
+@settings(max_examples=300, deadline=None)
+def test_nothing_the_guard_accepts_reads_as_an_option_to_a_search_command(
+    checkout: Path, where: tuple[str, str], value: str
+) -> None:
+    tool, field = where
+    reason = policy.check_read_access(tool, {field: value}, root=str(checkout))
+    if reason is None:
+        assert not value.lstrip(_WHITE_SPACE).startswith("-"), (tool, field, value)
 
 
 _env_names = st.text(

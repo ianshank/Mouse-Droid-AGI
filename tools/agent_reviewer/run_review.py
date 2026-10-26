@@ -288,7 +288,10 @@ class Plan:
     @property
     def read_guard(self) -> policy.ReadGuard:
         """The hook that keeps Read, Grep and Glob inside the checkout under review."""
-        return policy.ReadGuard(root=str(self.repo_root))
+        return policy.ReadGuard(
+            root=str(self.repo_root),
+            glob_extensions=tuple(self.cfg.agent_reviewer.glob_extensions),
+        )
 
     @property
     def ledger_floor_source(self) -> str:
@@ -525,33 +528,63 @@ async def _tracked_symlinks(repo_root: Path, commit: str) -> list[tuple[str, str
     return links
 
 
+async def _staged_symlinks(repo_root: Path) -> list[tuple[str, str]]:
+    """Return ``(path, blob id)`` for every symbolic link the checkout's index holds.
+
+    The index is what the next commit would hold and what a read can already find on disk, so a
+    link that is staged and not committed (``git add docs/latest``) shows in no ``ls-tree``.
+    ``git ls-files -s`` prints ``<mode> <blob> <stage>``, a tab and the path.
+    """
+    code, out = await _git(repo_root, "ls-files", "-s", "-z")
+    if code != 0:
+        raise RefusalError("cannot list the files the index of the checkout holds")
+    links: list[tuple[str, str]] = []
+    for entry in out.decode("utf-8", "replace").split(chr(0)):
+        meta, _, name = entry.partition("\t")
+        fields = meta.split(" ")
+        if name and len(fields) == 3 and fields[0] == _SYMLINK_MODE:
+            links.append((name, fields[1]))
+    return links
+
+
+async def _refuse_links_that_leave(
+    repo_root: Path, links: list[tuple[str, str]], where: str
+) -> None:
+    """Refuse the run when one of ``links`` (path, blob id) held at ``where`` can leave."""
+    if len(links) > _MAX_TRACKED_SYMLINKS:
+        raise RefusalError(
+            f"{where} tracks {len(links)} symbolic links (more than "
+            f"{_MAX_TRACKED_SYMLINKS}); the reviewer will not follow that many"
+        )
+    for link, blob in links:
+        code, out = await _git(repo_root, "cat-file", "blob", blob)
+        if code != 0:
+            raise RefusalError(f"cannot read the symbolic link {link!r} at {where}")
+        target = out.decode("utf-8", "replace")
+        reason = policy.symlink_escape_reason(link, target)
+        if reason:
+            raise RefusalError(
+                f"{where} tracks the symbolic link {link!r} -> {target!r} ({reason}); "
+                "Read, Grep and Glob would follow it out of the checkout under review"
+            )
+
+
 async def _refuse_escaping_symlinks(repo_root: Path, refs: Refs) -> None:
-    """Refuse a head (or checkout) that tracks a symbolic link which can leave the checkout.
+    """Refuse a head, checkout or index that tracks a symbolic link which can leave the checkout.
 
     Read, Grep and Glob resolve what they are given against the checkout. A link the head
     commits - ``docs/latest -> /etc`` - would be a way out that no pattern shows, so the whole
-    run is refused before any spend (see :func:`policy.symlink_escape_reason`).
+    run is refused before any spend (see :func:`policy.symlink_escape_reason`). The commits are
+    read with ``ls-tree``; the index is read too, because a link that is staged and not yet
+    committed is already on disk. A link that is only untracked is not seen (README, Known
+    limits).
     """
     for commit in dict.fromkeys((refs.head_sha, refs.worktree_sha)):
         if not _SHA_RE.fullmatch(commit):
             continue
         links = await _tracked_symlinks(repo_root, commit)
-        if len(links) > _MAX_TRACKED_SYMLINKS:
-            raise RefusalError(
-                f"{commit[:12]} tracks {len(links)} symbolic links (more than "
-                f"{_MAX_TRACKED_SYMLINKS}); the reviewer will not follow that many"
-            )
-        for link, blob in links:
-            code, out = await _git(repo_root, "cat-file", "blob", blob)
-            if code != 0:
-                raise RefusalError(f"cannot read the symbolic link {link!r} at {commit[:12]}")
-            target = out.decode("utf-8", "replace")
-            reason = policy.symlink_escape_reason(link, target)
-            if reason:
-                raise RefusalError(
-                    f"{commit[:12]} tracks the symbolic link {link!r} -> {target!r} ({reason}); "
-                    "Read, Grep and Glob would follow it out of the checkout under review"
-                )
+        await _refuse_links_that_leave(repo_root, links, commit[:12])
+    await _refuse_links_that_leave(repo_root, await _staged_symlinks(repo_root), "the index")
 
 
 async def _tracked_under(repo_root: Path, refs: Refs, directory: Path) -> list[str]:
@@ -1184,6 +1217,8 @@ def _print_plan(plan: Plan, headroom: credit_ledger.Headroom, sdk_line: str) -> 
         shown = "(from the parent)" if name in policy.PROCESS_ENV_PASSTHROUGH else value
         print(f"  {name}={shown}")
     print(f"read_guard: Read, Grep and Glob confined to {plan.repo_root}")
+    extensions = " ".join(reviewer.glob_extensions) or "(none: no wildcard file part)"
+    print(f"glob_extensions: {extensions} (the base's agent_reviewer.glob_extensions)")
     print(f"system_prompt_chars: {len(plan.system_prompt)}")
     print(f"user_prompt_chars: {len(plan.user_prompt)}")
     print(f"max_prompt_chars: {reviewer.max_prompt_chars} (both prompts together)")

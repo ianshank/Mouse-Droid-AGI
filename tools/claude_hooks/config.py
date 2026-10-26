@@ -15,6 +15,7 @@ load time instead of silently disabling a gate.
 from __future__ import annotations
 
 import math
+import re
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
@@ -30,6 +31,25 @@ _STRICT = ConfigDict(extra="forbid")
 #: A model alias or id as the Claude CLI takes it (`--model <value>`): it must not
 #: start with `-`, or it would read as another option.
 MODEL_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+
+#: The extensions a wildcard file part (``*.<ext>``) of a reviewer glob may use unless the
+#: base ref's ``workforce.yaml`` says otherwise: source and text files. Whether a wildcard
+#: can reach a secret-file name is not a question a finite sample of names can settle (the
+#: secret patterns ``.env.*`` and ``docker.env*`` end in ``*``, so every extension overlaps
+#: them), so which extensions the reviewer may search by is a fixed list.
+DEFAULT_GLOB_EXTENSIONS: tuple[str, ...] = (
+    "py",
+    "md",
+    "toml",
+    "json",
+    "yml",
+    "yaml",
+    "txt",
+    "sh",
+    "cfg",
+    "ini",
+    "rst",
+)
 
 
 class ConfigError(RuntimeError):
@@ -528,12 +548,38 @@ class AgentReviewerConfig(BaseModel):
             "generous (about 50k tokens)."
         ),
     )
+    glob_extensions: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_GLOB_EXTENSIONS),
+        description=(
+            "Extensions a wildcard file part of a Grep/Glob pattern (`*.<ext>`) may use, "
+            "without the dot: the reviewer refuses `*.c` unless `c` is listed. Anything else "
+            "is refused, so a wildcard can only reach files of these kinds. Letters, digits, "
+            "`_`, `+` and `-`; case does not matter; an empty list allows no wildcard file "
+            "part at all (literal file names still work)."
+        ),
+    )
 
     @field_validator("agent_file", "mcp_config", "artifact_dir")
     @classmethod
     def _reject_unsafe_path(cls, value: str) -> str:
         """Keep every path inside the checkout (they are joined onto the repo root)."""
         return _require_repo_relative(value)
+
+    @field_validator("glob_extensions")
+    @classmethod
+    def _bare_extensions(cls, value: list[str]) -> list[str]:
+        """Each entry is a bare extension (``py``, not ``.py`` or ``*.py``), lower-cased, once."""
+        cleaned: list[str] = []
+        for entry in value:
+            word = entry.strip().lower()
+            if not re.fullmatch(r"[a-z0-9_+-]{1,16}", word):
+                raise ValueError(
+                    f"glob_extensions entry {entry!r} must be a bare extension of letters, "
+                    "digits, `_`, `+` or `-` (for example `py`), at most 16 characters"
+                )
+            if word not in cleaned:
+                cleaned.append(word)
+        return cleaned
 
 
 class WorkforceConfig(BaseModel):

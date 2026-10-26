@@ -983,6 +983,31 @@ def test_a_data_stream_or_drive_path_is_refused(checkout: Path, raw: str) -> Non
     assert _read(checkout, "Read", file_path=raw)
 
 
+@pytest.mark.parametrize(("tool", "field"), _READ_FIELDS)
+@pytest.mark.parametrize(
+    "raw", ["-g", "--no-ignore", "-uuu", "-", "--", "-x/app.py", "-g.py", " -g", "  --files"]
+)
+def test_a_path_that_starts_with_a_dash_is_refused(
+    checkout: Path, tool: str, field: str, raw: str
+) -> None:
+    """A search command would read it as an option (``-g``, ``--no-ignore``, ``-uuu``)."""
+    _says(_read(checkout, tool, **{field: raw}), "starts with '-'", (tool, raw))
+
+
+@pytest.mark.parametrize("lead", [" ", "  ", chr(0xA0), chr(0xFEFF), " " + chr(0xFEFF) + " "])
+def test_white_space_in_front_of_a_dash_does_not_hide_it(checkout: Path, lead: str) -> None:
+    """The command line drops white space, and a byte order mark rides in front of text."""
+    fields = (*_READ_FIELDS, ("Grep", "file_path"), ("Grep", "glob"), ("Glob", "pattern"))
+    for tool, field in fields:
+        _says(_read(checkout, tool, **{field: lead + "-g"}), "starts with '-'", (tool, field))
+
+
+@pytest.mark.parametrize("raw", ["./-g", "docs/-g", "src/--no-ignore", "a-b.py", "src/app-1.py"])
+def test_a_dash_that_does_not_lead_the_path_is_fine(checkout: Path, raw: str) -> None:
+    for tool, field in _READ_FIELDS:
+        assert _read(checkout, tool, **{field: raw}) is None, (tool, raw)
+
+
 def test_a_sibling_whose_name_starts_with_the_checkouts_is_outside(checkout: Path) -> None:
     sibling = checkout.parent / (checkout.name + "-evil")
     _write(sibling, "x.txt", "x\n")
@@ -1143,13 +1168,58 @@ def test_even_two_harmless_globs_are_one_too_many_per_call(checkout: Path, glob:
 
 @pytest.mark.parametrize(
     "pattern",
-    ["test_*.py", "*_test.py", "a*b", "**.py", "*.py*", "*.tar.gz", "file.*"],
+    [
+        "test_*.py",
+        "*_test.py",
+        "a*b",
+        "**.py",
+        "*.py*",
+        "*.tar.gz",
+        "file.*",
+        "x*.py",
+        "src/**/x*.py",  # refused by design: the file part is a literal name or *.<extension>
+    ],
 )
 def test_the_file_part_of_a_glob_is_a_literal_name_or_star_dot_extension(
     checkout: Path, pattern: str
 ) -> None:
     for tool, field in (("Glob", "pattern"), ("Grep", "glob")):
         _says(_read(checkout, tool, **{field: pattern}), "file part", (tool, pattern))
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["-g", "--no-ignore", "-uuu", "-", "--", "--files", "-x/*.py", "-g/**/*.py", "-*.py"],
+)
+def test_a_glob_that_starts_with_a_dash_is_refused(checkout: Path, pattern: str) -> None:
+    """``-`` is in the glob alphabet, but ripgrep reads ``-g`` or ``--no-ignore`` as an option."""
+    for tool, field in (("Glob", "pattern"), ("Grep", "glob")):
+        _says(_read(checkout, tool, **{field: pattern}), "starts with '-'", (tool, pattern))
+
+
+@pytest.mark.parametrize(
+    "pattern", ["**/-g", "src/--no-ignore", "docs/-uuu", "**/my-file.py", "src/*.py", "**/*.md"]
+)
+def test_a_dash_that_does_not_lead_the_glob_is_fine(checkout: Path, pattern: str) -> None:
+    assert _read(checkout, "Glob", pattern=pattern) is None, pattern
+    assert _read(checkout, "Grep", pattern="x", glob=pattern) is None, pattern
+
+
+async def test_the_read_hook_refuses_an_option_where_a_glob_or_a_path_goes(
+    checkout: Path,
+) -> None:
+    guard = policy.ReadGuard(root=str(checkout))
+    calls = (
+        {"tool_name": "Grep", "tool_input": {"pattern": "x", "glob": "--no-ignore"}},
+        {"tool_name": "Glob", "tool_input": {"pattern": "-uuu"}},
+        {"tool_name": "Grep", "tool_input": {"pattern": "x", "path": "-g"}},
+        {"tool_name": "Glob", "tool_input": {"pattern": "*.py", "path": "-g"}},
+        {"tool_name": "Read", "tool_input": {"file_path": "-g"}},
+    )
+    for call in calls:
+        denied = await guard(call, "tu", {"signal": None})
+        assert denied["hookSpecificOutput"]["permissionDecision"] == "deny", call
+        assert "starts with '-'" in denied["hookSpecificOutput"]["permissionDecisionReason"], call
 
 
 @pytest.mark.parametrize("pattern", ["src*/a.py", "s*c/a.py", "**x/a.py", "*.d/a.py", "a?/b.py"])
@@ -1162,10 +1232,121 @@ def test_a_directory_part_of_a_glob_is_a_literal_name_star_or_double_star(
 
 @pytest.mark.parametrize(
     "pattern",
+    ["*", "**", "**/*", "src/*", "src/**", "*.*", "x*", ".env*", "docker.env*", "DOCKER.ENV*"],
+)
+def test_a_wildcard_file_part_that_is_not_star_dot_extension_is_refused(
+    checkout: Path, pattern: str
+) -> None:
+    for tool, field in (("Glob", "pattern"), ("Grep", "glob")):
+        _says(_read(checkout, tool, **{field: pattern}), "file part", (tool, pattern))
+
+
+@pytest.mark.parametrize(
+    "pattern",
     [
         "*.env",
-        "docker.env*",
-        ".env*",
+        "*.ENV",
+        "*.local",
+        "*.LOCAL",
+        "*.production",
+        "*.Production",
+        "*.prod",
+        "*.x",
+        "*.X",
+        "*.c",
+        "*.h",
+        "*.pyi",
+        "*.js",
+        "*.lock",
+        "*.pack",
+        "*.idx",
+        "**/*.sample",
+        "src/**/*.conf",
+    ],
+)
+def test_a_wildcard_file_part_may_only_use_a_listed_extension(checkout: Path, pattern: str) -> None:
+    """The decision is a fixed list, not a sample of secret names: ``.env.*`` and
+    ``docker.env*`` end in ``*``, so every extension overlaps them."""
+    for tool, field in (("Glob", "pattern"), ("Grep", "glob")):
+        _says(_read(checkout, tool, **{field: pattern}), "extension", (tool, pattern))
+
+
+@pytest.mark.parametrize("extension", policy.DEFAULT_GLOB_EXTENSIONS)
+def test_every_default_extension_may_be_searched_by(checkout: Path, extension: str) -> None:
+    for pattern in (f"*.{extension}", f"**/*.{extension}", f"src/*.{extension.upper()}"):
+        assert _read(checkout, "Glob", pattern=pattern) is None, pattern
+        assert _read(checkout, "Grep", pattern="x", glob=pattern) is None, pattern
+
+
+def test_the_default_extensions_are_the_ones_the_schema_names() -> None:
+    assert policy.DEFAULT_GLOB_EXTENSIONS == (
+        "py",
+        "md",
+        "toml",
+        "json",
+        "yml",
+        "yaml",
+        "txt",
+        "sh",
+        "cfg",
+        "ini",
+        "rst",
+    )
+    assert policy.ReadGuard(root="x").glob_extensions == policy.DEFAULT_GLOB_EXTENSIONS
+
+
+def test_the_operator_widens_the_list_in_the_base_workforce_yaml(checkout: Path) -> None:
+    guard = policy.ReadGuard(root=str(checkout), glob_extensions=("py", "pyi", "c"))
+    assert guard.check("Glob", {"pattern": "**/*.c"}) is None
+    assert guard.check("Glob", {"pattern": "**/*.PYI"}) is None
+    _says(guard.check("Glob", {"pattern": "**/*.md"}), "extension")  # only what is listed
+    _says(_read(checkout, "Glob", pattern="**/*.c"), "extension")  # the default list has no c
+
+
+def test_an_empty_list_allows_no_wildcard_file_part(checkout: Path) -> None:
+    guard = policy.ReadGuard(root=str(checkout), glob_extensions=())
+    _says(guard.check("Glob", {"pattern": "**/*.py"}), "extension")
+    assert guard.check("Glob", {"pattern": "src/app.py"}) is None
+    assert guard.check("Glob", {"pattern": "Makefile"}) is None
+
+
+def test_the_extension_list_is_matched_without_regard_to_case(checkout: Path) -> None:
+    guard = policy.ReadGuard(root=str(checkout), glob_extensions=("PY",))
+    assert guard.check("Glob", {"pattern": "**/*.py"}) is None
+    assert guard.check("Glob", {"pattern": "**/*.Py"}) is None
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "*.env",
+        "*.ENV",
+        "*.local",
+        "*.LOCAL",
+        "src/**/*.production",
+        "src/**/*.Production",
+        "**/*.pack",
+        "**/*.PACK",
+        "**/*.idx",
+    ],
+)
+def test_the_probe_belt_holds_even_if_the_operator_lists_the_extension(
+    checkout: Path, pattern: str
+) -> None:
+    """The list decides; the concrete-name probes behind it still refuse a listed ``env``."""
+    guard = policy.ReadGuard(
+        root=str(checkout),
+        glob_extensions=("py", "env", "local", "production", "pack", "idx"),
+    )
+    reason = guard.check("Glob", {"pattern": pattern})
+    assert reason is not None, pattern
+    assert "secret-file" in reason or "inside .git" in reason, reason
+    assert guard.check("Glob", {"pattern": "**/*.py"}) is None
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
         ".env",
         "prod.env",
         "docker.env",
@@ -1174,21 +1355,6 @@ def test_a_directory_part_of_a_glob_is_a_literal_name_star_or_double_star(
         "**/.env.local",
         "id_rsa",
         "**/id_ed25519",
-        "*",
-        "**",
-        "**/*",
-        "src/*",
-        "src/**",
-        "*.local",
-        "*.production",
-        "*.prod",
-        "*.x",
-        "*.ENV",
-        "DOCKER.ENV*",
-        "*.*",
-        "x*",
-        "*.LOCAL",
-        "*.Production",
         "config.env",
         "deploy/foo.env",
         "**/config.env",
@@ -1199,12 +1365,87 @@ def test_a_directory_part_of_a_glob_is_a_literal_name_star_or_double_star(
         "**/ID_RSA",
     ],
 )
-def test_a_glob_that_can_match_a_secret_file_name_is_refused(checkout: Path, pattern: str) -> None:
-    """Tested by matching the glob against concrete secret names, not by rewriting the glob."""
+def test_a_literal_secret_file_name_is_refused(checkout: Path, pattern: str) -> None:
     for tool, field in (("Glob", "pattern"), ("Grep", "glob")):
         reason = _read(checkout, tool, **{field: pattern})
         assert reason is not None, (tool, pattern)
-        assert "secret" in reason or "private-key" in reason or "syntax" in reason, reason
+        assert "secret" in reason or "private-key" in reason, reason
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "*/config",
+        "**/HEAD",
+        "**/*.pack",
+        "**/*.idx",
+        "config",
+        "HEAD",
+        "index",
+        "packed-refs",
+        "**/ORIG_HEAD",
+        "*/FETCH_HEAD",
+        "**/COMMIT_EDITMSG",
+        "**/MERGE_HEAD",
+        "**/index",
+        "**/Config",
+        "src/*/config",
+        "**/packed-refs",
+    ],
+)
+def test_a_glob_that_can_reach_git_internals_is_refused(checkout: Path, pattern: str) -> None:
+    """``*/config`` and ``**/HEAD`` reach ``.git/config`` and ``.git/HEAD`` through a wildcard
+    directory part; a glob with no directory part at all is matched at any depth."""
+    for tool, field in (("Glob", "pattern"), ("Grep", "glob")):
+        assert _read(checkout, tool, **{field: pattern}), (tool, pattern)
+
+
+def test_the_reason_for_a_git_internal_glob_says_so(checkout: Path) -> None:
+    _says(_read(checkout, "Glob", pattern="*/config"), "inside .git")
+    _says(_read(checkout, "Glob", pattern="**/HEAD"), "inside .git")
+    _says(_read(checkout, "Grep", pattern="x", glob="index"), "inside .git")
+    _says(_read(checkout, "Grep", pattern="x", glob="src/**/packed-refs"), "inside .git")
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "src/config",
+        "config/default.yaml",
+        "src/index",
+        "docs/index.md",
+        "**/index.md",
+        "**/config.py",
+        "**/HEAD.md",
+        "**/config.yaml",
+        "src/*/index.md",
+        "src/mousedroid/config/*.py",
+    ],
+)
+def test_a_glob_that_cannot_reach_git_internals_is_fine(checkout: Path, pattern: str) -> None:
+    """An anchored glob (every directory part a literal name) cannot get inside ``.git``, and
+    only the exact names of git's files are refused."""
+    assert _read(checkout, "Glob", pattern=pattern) is None
+    assert _read(checkout, "Grep", pattern="x", glob=pattern) is None
+
+
+def test_git_internals_are_denied_to_the_cli_itself() -> None:
+    """Whatever the guard accepts, the CLI is told to leave ``.git`` out of Grep and Glob."""
+    assert policy.GIT_INTERNALS_READ_DENY == ("Read(**/.git/**)",)
+    assert "Read(**/.git/**)" in policy.disallowed_tools()
+
+
+def test_the_built_options_carry_the_git_deny_rule(repo: Path, cfg: WorkforceConfig) -> None:
+    options = policy.reviewer_options(
+        cfg=cfg.agent_reviewer,
+        repo_root=repo,
+        model="opus",
+        system_prompt="s",
+        cap_usd=5.0,
+        mcp_json=_mcp_json(),
+        mcp_config_path=_CONFIG_PATH,
+    )
+    assert "Read(**/.git/**)" in options["disallowed_tools"]
 
 
 @pytest.mark.parametrize(
@@ -1289,8 +1530,6 @@ def test_what_counts_as_a_plain_name_in_a_glob(segment: str, plain: bool) -> Non
         "**/.gitignore",
         "src/mousedroid/**/*.py",
         "*.toml",
-        "**/*.pyi",
-        "**/*.c",
         "a-b/c_d/e@f+g.h",
     ],
 )
@@ -1604,6 +1843,26 @@ async def test_the_read_hook_judges_grep_and_glob_too(checkout: Path) -> None:
     ):
         result = await guard({"tool_name": name, "tool_input": tool_input}, None, None)
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny", (name, tool_input)
+
+
+async def test_the_hook_applies_the_guards_own_extension_list(checkout: Path) -> None:
+    guard = policy.ReadGuard(root=str(checkout), glob_extensions=("c",))
+    listed = {"tool_name": "Glob", "tool_input": {"pattern": "**/*.c"}}
+    unlisted = {"tool_name": "Glob", "tool_input": {"pattern": "**/*.py"}}
+    assert await guard(listed, "tu1", {"signal": None}) == {}
+    denied = await guard(unlisted, "tu2", {"signal": None})
+    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "extension" in denied["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+async def test_the_hook_function_takes_the_extension_list(checkout: Path) -> None:
+    call = {"tool_name": "Grep", "tool_input": {"pattern": "x", "glob": "**/*.c"}}
+    allowed = await policy.deny_unconfined_reads(
+        call, "tu", {"signal": None}, root=str(checkout), glob_extensions=("c",)
+    )
+    assert allowed == {}
+    refused = await policy.deny_unconfined_reads(call, "tu", {"signal": None}, root=str(checkout))
+    assert refused["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 async def test_the_read_hook_leaves_other_tools_to_the_permission_rules(checkout: Path) -> None:
@@ -3113,6 +3372,8 @@ def test_dry_run_constructs_no_client(
         assert rule in text
     for tool in policy.DENIED:
         assert tool in text
+    assert "Read(**/.git/**)" in text, "the CLI is told to leave .git out"
+    assert "glob_extensions: py md toml json yml yaml txt sh cfg ini rst" in text
     assert re.search(r"system_prompt_chars: \d+", text)
     assert "R3-1" in text
     assert "wsb-0001" in text
@@ -3753,6 +4014,66 @@ def test_both_gitleaks_scans_use_the_base_refs_policy(
     for call in seen:
         assert call["env"] is not None
         assert "ANTHROPIC_API_KEY" not in call["env"]
+
+
+# --- the extension list the read guard searches by ---------------------------------------------
+def _read_guard_of(sdk: _FakeSdk) -> policy.ReadGuard:
+    _bash, read = sdk.queries[0]["options"].hooks["PreToolUse"]
+    (guard,) = read.hooks
+    assert isinstance(guard, policy.ReadGuard)
+    return guard
+
+
+def test_the_extension_list_comes_from_the_base_ref(
+    repo: Path, fake_sdk: _FakeSdk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    argv = _argv_with_base_config(repo, _WORKFORCE_YAML + "    glob_extensions: [py, C]\n")
+    _live_env(monkeypatch)
+
+    assert run_review.main(argv) == 0
+
+    guard = _read_guard_of(fake_sdk)
+    assert guard.glob_extensions == ("py", "c"), "normalised to lower case"
+    assert guard.check("Glob", {"pattern": "**/*.c"}) is None
+    _says(guard.check("Glob", {"pattern": "**/*.md"}), "extension")
+
+
+def test_a_tampered_working_tree_extension_list_changes_nothing(
+    repo: Path, fake_sdk: _FakeSdk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The head cannot widen what the reviewer may glob for: the list is the base's."""
+    _write(repo, DEFAULT_CONFIG_RELPATH, _WORKFORCE_YAML + "    glob_extensions: [py, c, env]\n")
+    _live_env(monkeypatch)
+
+    assert run_review.main(_argv(repo)) == 0
+
+    assert _read_guard_of(fake_sdk).glob_extensions == policy.DEFAULT_GLOB_EXTENSIONS
+
+
+def test_the_dry_run_prints_the_extension_list_it_will_enforce(
+    repo: Path, fake_sdk: _FakeSdk, capsys: pytest.CaptureFixture[str]
+) -> None:
+    argv = _argv_with_base_config(repo, _WORKFORCE_YAML + "    glob_extensions: [py, c]\n")
+    assert run_review.main([*argv, "--dry-run"]) == 0
+    assert "glob_extensions: py c (the base's agent_reviewer.glob_extensions)" in (
+        capsys.readouterr().out
+    )
+
+
+def test_an_empty_list_in_the_base_is_printed_as_no_wildcards(
+    repo: Path, fake_sdk: _FakeSdk, capsys: pytest.CaptureFixture[str]
+) -> None:
+    argv = _argv_with_base_config(repo, _WORKFORCE_YAML + "    glob_extensions: []\n")
+    assert run_review.main([*argv, "--dry-run"]) == 0
+    assert "glob_extensions: (none: no wildcard file part)" in capsys.readouterr().out
+
+
+def test_a_base_extension_list_that_is_not_bare_extensions_refuses_the_run(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    argv = _argv_with_base_config(repo, _WORKFORCE_YAML + "    glob_extensions: ['*.py']\n")
+    assert run_review.main([*argv, "--dry-run"]) == run_review.EXIT_REFUSED
+    assert "glob_extensions" in capsys.readouterr().err
 
 
 # --- what the MCP server is started with --------------------------------------------------------
@@ -4703,10 +5024,15 @@ def test_a_dot_dot_after_a_name_is_an_escape_even_when_it_would_stay_inside() ->
     assert policy.symlink_escape_reason("d/l", "x/../y")
 
 
-def _track_symlink(repo: Path, path: str, target: str) -> None:
-    """Commit a symbolic link ``path -> target`` without needing the privilege to create one."""
+def _stage_symlink(repo: Path, path: str, target: str) -> None:
+    """Stage (do not commit) a symbolic link ``path -> target``; making one needs no privilege."""
     blob = _git(repo, "hash-object", "-w", "--stdin", stdin=target)
     _git(repo, "update-index", "--add", "--cacheinfo", f"120000,{blob},{path}")
+
+
+def _track_symlink(repo: Path, path: str, target: str) -> None:
+    """Commit a symbolic link ``path -> target`` without needing the privilege to create one."""
+    _stage_symlink(repo, path, target)
     _git(repo, "commit", "-q", "-m", f"track the symbolic link {path}")
     _git(repo, "checkout", "--", path)  # a link (or, without the privilege, a file) on disk too
 
@@ -4811,6 +5137,85 @@ def test_a_symlink_that_cannot_be_read_is_a_refusal(
     refs = run_review.Refs("base", "a" * 40, "head", head, head)
     monkeypatch.setattr(run_review, "_git", blind)
     with pytest.raises(run_review.RefusalError, match="cannot read the symbolic link"):
+        asyncio.run(run_review._refuse_escaping_symlinks(repo, refs))
+
+
+@pytest.mark.parametrize("target", ["/etc/passwd", "../..", "C:/Windows", "docs/../../.."])
+def test_a_staged_symlink_out_of_the_checkout_is_refused_before_any_spend(
+    repo: Path,
+    fake_sdk: _FakeSdk,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    target: str,
+) -> None:
+    """The index holds it, no commit does: ``git add`` is enough to put it on disk."""
+    _stage_symlink(repo, "docs/staged", target)
+    assert "docs/staged" not in _git(repo, "ls-tree", "-r", "--name-only", "HEAD")
+    _live_env(monkeypatch)
+
+    assert run_review.main(_argv(repo)) == run_review.EXIT_REFUSED
+
+    err = capsys.readouterr().err
+    assert "the index tracks the symbolic link 'docs/staged'" in err
+    assert repr(target) in err
+    assert "follow it out of the checkout" in err
+    fake_sdk.query.assert_not_called()
+    assert _ledger_rows(repo) == []
+
+
+def test_a_staged_symlink_that_stays_inside_the_repository_does_not_stop_a_review(
+    repo: Path, fake_sdk: _FakeSdk
+) -> None:
+    _stage_symlink(repo, "docs/staged", "../src_change.py")
+    assert run_review.main(_argv(repo, "--dry-run")) == 0
+
+
+def test_the_index_lists_its_mode_120000_entries_with_their_blobs(repo: Path) -> None:
+    assert asyncio.run(run_review._staged_symlinks(repo)) == []
+    _stage_symlink(repo, "docs/staged", "../src_change.py")
+    blob = _git(repo, "rev-parse", ":docs/staged")
+    assert asyncio.run(run_review._staged_symlinks(repo)) == [("docs/staged", blob)]
+
+
+def test_an_index_git_cannot_list_is_a_refusal(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    real = run_review._git
+
+    async def blind(root: Path, *args: str) -> tuple[int, bytes]:
+        return (1, b"") if args[:1] == ("ls-files",) else await real(root, *args)
+
+    monkeypatch.setattr(run_review, "_git", blind)
+    with pytest.raises(run_review.RefusalError, match="cannot list the files the index"):
+        asyncio.run(run_review._staged_symlinks(repo))
+
+
+def test_more_staged_symlinks_than_the_reviewer_will_follow_are_refused(
+    repo: Path,
+    fake_sdk: _FakeSdk,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _stage_symlink(repo, "one", "src_change.py")
+    _stage_symlink(repo, "two", "src_change.py")
+    monkeypatch.setattr(run_review, "_MAX_TRACKED_SYMLINKS", 1)
+
+    assert run_review.main(_argv(repo, "--dry-run")) == run_review.EXIT_REFUSED
+
+    assert "the index tracks 2 symbolic links" in capsys.readouterr().err
+
+
+def test_a_staged_symlink_that_cannot_be_read_is_a_refusal(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stage_symlink(repo, "docs/staged", "../src_change.py")
+    real = run_review._git
+
+    async def blind(root: Path, *args: str) -> tuple[int, bytes]:
+        return (1, b"") if args[:1] == ("cat-file",) else await real(root, *args)
+
+    head = _git(repo, "rev-parse", "HEAD")
+    refs = run_review.Refs("base", "a" * 40, "head", head, head)
+    monkeypatch.setattr(run_review, "_git", blind)
+    with pytest.raises(run_review.RefusalError, match="symbolic link 'docs/staged' at the index"):
         asyncio.run(run_review._refuse_escaping_symlinks(repo, refs))
 
 
@@ -4928,6 +5333,8 @@ def test_a_live_run_writes_the_artifact_and_one_ledger_row(
     (read_guard,) = read_matcher.hooks
     assert isinstance(read_guard, policy.ReadGuard)
     assert read_guard.root == str(repo.resolve())
+    assert read_guard.glob_extensions == policy.DEFAULT_GLOB_EXTENSIONS
+    assert "Read(**/.git/**)" in options.disallowed_tools
     server = options.mcp_servers["mousedroid"]
     assert server["command"] == sys.executable
     assert server["args"][:3] == ["-I", "-c", policy.MCP_BOOTSTRAP]

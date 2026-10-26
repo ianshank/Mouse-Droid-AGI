@@ -48,16 +48,30 @@ head controls may reach an exec sink, a process that holds the key, or the revie
   backslash escapes; a screen that read the string as one name would be reading something else. So a glob is
   written with letters, digits, `. _ @ + -`, `/` and `*` and nothing else: no `[..]`, `{..}`, `?`, `!`, `\`,
   comma or space (one glob per call). A directory part is a literal name, `*` or `**`; the file part is a
-  literal name or `*.<extension>` (`**/*.py`, `src/**/*.md`, `**/pyproject.toml`; not `test_*.py` or `*`). The
-  file part is then matched against concrete names made from the secret patterns (`.env`, `prod.env`,
-  `docker.env.local`, `.env.production`, `id_rsa`, ...), so `*`, `*.env` and `*.local` are refused and `*.py`
-  is not, and the literal start of the glob (`link` in `link/*.py`) is resolved against the search directory
-  and must stay inside the checkout. The guard refuses rather than rewrites: it adds no exclusion globs to a
-  call, because the CLI already turns the `Read(...)` deny rules into ripgrep exclusions.
+  literal name or `*.<extension>` (`**/*.py`, `src/**/*.md`, `**/pyproject.toml`; not `test_*.py`, `*` or
+  `src/**/x*.py` - a wildcard inside a file name is refused by design: search `src/**/*.py` and narrow in the
+  pattern). A glob or a path that starts with `-` (`-g`, `--no-ignore`, `-uuu`) is refused, because a search
+  command would read it as an option; write a path as `./name`.
+  **The extension must be on a fixed list**, `agent_reviewer.glob_extensions` of the base's `workforce.yaml`
+  (default `py md toml json yml yaml txt sh cfg ini rst`; the plan prints it): a wildcard cannot be shown clear
+  of the secret patterns, because `.env.*` and `docker.env*` end in `*` and overlap every extension, so which
+  extensions the reviewer may search by is decided by a list, not by a sample of names. `*.c` is refused until
+  `c` is listed. Behind the list, as a belt, the file part is matched against concrete names made from the
+  secret patterns (`.env`, `prod.env`, `docker.env.local`, `.env.production`, `id_rsa`, ...), so an operator
+  who lists `env` still finds `*.env` refused. A glob that can step through `.git` - no directory part (ripgrep
+  matches such a glob at any depth) or a wildcard one - may not name git's own files (`config`, `HEAD`,
+  `ORIG_HEAD`, `FETCH_HEAD`, `packed-refs`, `index`, `COMMIT_EDITMSG`, `*.pack`, `*.idx`): `*/config` and
+  `**/HEAD` are refused. The literal start of the glob (`link` in `link/*.py`) is resolved against the search
+  directory and must stay inside the checkout. The guard refuses rather than rewrites a call; and the CLI is
+  told `Read(**/.git/**)` besides the secret-file deny rules, which it applies to Grep and Glob as ripgrep
+  exclusions placed after the model's own globs, so `.git` stays out of what they find whatever the hook accepts.
+  What is left: `*.py` can still match a file called `.env.py` (a secret name by the patterns), which the CLI's
+  exclusion and the read guard refuse to show.
 - **A head that tracks a symbolic link out of the checkout is refused.** `git ls-tree -r` of the head and of
-  the checkout lists the mode-`120000` entries; a target that is absolute, climbs above the repository root, or
-  has a `..` after a name (which only the file system can resolve once links chain) refuses the run before any
-  spend, as a planted program does.
+  the checkout, and `git ls-files -s` of the checkout's index (a link that is staged and not committed is
+  already on disk), list the mode-`120000` entries; a target that is absolute, climbs above the repository
+  root, or has a `..` after a name (which only the file system can resolve once links chain) refuses the run
+  before any spend, as a planted program does.
 - **The reviewer's own `git` and `gitleaks` run without any credential variable** - any name with `KEY`, `TOKEN`,
   `SECRET`, `PASSWORD` or `CREDENTIAL(S)` as one of its words (`API_KEY`, a bare `TOKEN`, `AWS_ACCESS_KEY_ID`,
   `GOOGLE_APPLICATION_CREDENTIALS`, ...), plus `AWS_SECRET_ACCESS_KEY` and the password variables the rule cannot
@@ -80,7 +94,7 @@ head controls may reach an exec sink, a process that holds the key, or the revie
 
 | Surface | Allowed |
 |---|---|
-| Files | `Read`, `Grep`, `Glob` **inside the checkout under review only** (`ReadGuard`), and not `.git`, `*.env`, `docker.env*`; the CLI's deny rules cover the usual credential directories too |
+| Files | `Read`, `Grep`, `Glob` **inside the checkout under review only** (`ReadGuard`), and not `.git`, `*.env`, `docker.env*`; the CLI's deny rules cover `.git` and the usual credential directories too. A wildcard file part is `*.<ext>` with the extension on `agent_reviewer.glob_extensions` |
 | Shell | `git diff`, `git log`, `git show` - one plain command: no pipes, redirection, chaining, substitution, variables or unquoted globs. Commits are the two full ids pinned in the task, with `^`, `^N` or `~N` (`A..B` ranges too): not `HEAD`, a branch, an abbreviation or a blob id. Option values are attached (`-n5`, `--grep=text`). Pathspecs go after `--` and are literal. `git show <commit>:<path>` names only a file tracked at the base (read a file the change adds from the diff). No `--all`, `--reflog`, `--branches`, `--remotes`, `--raw`, `--abbrev`, `--output`, `--no-index`, and no short option bundle that contains a capital `O` (`-O<file>` reads a file; so does `-pO<file>`) |
 | MCP | `system_info`, `lidar_diagnostics`, `esp32_diagnostics` of the mock-hardware `mousedroid` server |
 | Writes | none by the agent. The runner writes one review under `reports/agent_reviewer/<date>/wsb-NNNN.md` in the checkout under review and one row in `reports/credit/ledger.jsonl` of the **controller's** checkout (paths from the base's `workforce.yaml`) |
@@ -181,8 +195,9 @@ that file's sum and the sum in the base ref's committed copy of the ledger (`led
 that lost rows - a stale checkout, a head that deleted them - cannot widen the cap below what the base records.
 
 `max_turns`, `max_prompt_chars` (a run whose system and task prompts together pass it is refused before any
-spend), the model alias, the caps and the ledger path live in `.claude/workforce.yaml` (`agent_reviewer:` and
-`credit:`), never in code - and are read from the base ref.
+spend), `glob_extensions` (the extensions a wildcard glob may use), the model alias, the caps and the ledger
+path live in `.claude/workforce.yaml` (`agent_reviewer:` and `credit:`), never in code - and are read from the
+base ref.
 
 ## Known limits
 
@@ -190,9 +205,10 @@ spend), the model alias, the caps and the ledger path live in `.claude/workforce
   short names before it judges a path. INSIDE the checkout, a `Grep` over a directory can still print lines of a
   secret file whose name neither the CLI's deny rules nor the guard recognise (the secret names are the
   project's patterns and the `ssh-keygen` key names; a glob is matched against concrete names made from them, not
-  proven harmless): a head that *tracks* a secret has it in the diff anyway. A symbolic link made in the checkout
-  after the run starts, or untracked, is not seen. Review from a checkout that holds no real secrets - a fresh
-  `git worktree add --detach` has none.
+  proven harmless): a head that *tracks* a secret has it in the diff anyway. A symbolic link or directory junction that
+  is untracked (in neither the head, the checkout's HEAD nor its index), or made after the run starts, does not
+  refuse the run; a path that goes through one is still resolved and judged. Review from a checkout that holds
+  no real secrets - a fresh `git worktree add --detach` has none.
 - A short option bundle containing a capital `O` is refused wherever it sits (`-pO<file>`), so a pickaxe or regex
   string whose leading letters include one (`-SOrange`, `-GFOO`) is refused too: search for the lower-case part,
   or use `Grep` on the checkout.

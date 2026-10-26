@@ -26,11 +26,17 @@ and head ids, with `^` / `~N`) so a bare blob id cannot print an object whatever
 `git show <commit>:<path>` may name only a non-secret file tracked at the base ref. A second PreToolUse hook
 confines `Read`, `Grep` and `Glob` to the checkout under review: it `realpath`s every path the tool is given
 (symlinks, junctions and 8.3 short names are followed) and refuses anything outside it, `.git`, secret-file and
-private-key names and Windows device names. A glob is not judged by rewriting it into text - the CLI splits a
+private-key names, Windows device names and any path or glob that starts with `-` (a search command would
+read `-g` or `--no-ignore` as an option). A glob is not judged by rewriting it into text - the CLI splits a
 Grep glob on whitespace and commas and ripgrep reads classes, braces and escapes - but by a strict grammar
-(letters, digits, `. _ @ + -`, `/` and `*`; the file part a literal name or `*.<extension>`), by matching it
-against concrete secret names (`.env`, `prod.env`, `docker.env.local`, `id_rsa`, ...) and by resolving its
-literal start inside the checkout; a head that tracks a symbolic link which can leave the checkout is refused. No actuation tool, `Write`/`Edit` or web tool is allowed or reachable. The reviewer's own configuration
+(letters, digits, `. _ @ + -`, `/` and `*`; the file part a literal name or `*.<extension>` with the
+extension on a fixed list, `agent_reviewer.glob_extensions`, because a wildcard cannot be shown clear of
+`.env.*` and `docker.env*`), by matching it against concrete secret and git-internal names (`.env`, `prod.env`,
+`docker.env.local`, `id_rsa`, `config`, `HEAD`, `*.pack`, ...) and by resolving its literal start inside the
+checkout, and the CLI is told `Read(**/.git/**)` so `.git` stays out whatever the hook accepts; a head, a
+checkout or an index (a staged link is already on disk) that tracks a symbolic link which can leave the
+checkout is refused. No actuation tool, `Write`/`Edit` or web tool is allowed or reachable. The reviewer's own
+configuration
 (`.claude/workforce.yaml`, which selects the agent file, the MCP declaration, the secret-scan program and the
 paths and caps), the agent instructions, `.mcp.json`, the MCP server's configuration and `.gitleaks.toml` are
 read from the base ref, never the working tree. The `mousedroid` MCP entry is built in code

@@ -33,22 +33,31 @@ network or a key. The layers, in the order the SDK applies them:
    (``file_path`` and ``path``: the CLI reads a Grep ``file_path`` as its ``path``), requires
    it to be INSIDE the checkout under review (that also resolves 8.3 short names,
    ``::$DATA`` streams and symlink aliases), and refuses ``.git`` internals, secret-file and
-   private-key names, Windows device names (``NUL``, ``COM1``, ...) and glob characters in a
-   path. A GLOB is not judged by rewriting it into text - the CLI splits a Grep glob on
-   whitespace and commas and hands the pieces to ripgrep, which reads classes, braces, ``?``,
-   ``!`` and escapes - but by a strict grammar: letters, digits and ``. _ @ + -``, ``/`` and
-   ``*`` only; directory parts are literal names, ``*`` or ``**``; the file part is a literal
-   name or ``*.<extension>``. The file part is then matched (``fnmatch``) against concrete
-   names made from the secret patterns (``.env``, ``prod.env``, ``docker.env.local``,
-   ``.env.production``, ``id_rsa``, ...), and the literal start of the glob is resolved
-   against the search directory and must stay inside the checkout. The guard never rewrites
-   a call (the CLI already turns the ``Read()`` deny rules into ripgrep exclusions); it
-   refuses, answers with a reason and does not raise. The run itself is refused when the
-   head or the checkout tracks a symbolic link that can leave the checkout
-   (:func:`symlink_escape_reason`). Fails closed.
+   private-key names, Windows device names (``NUL``, ``COM1``, ...), glob characters in a
+   path and a path or glob that starts with ``-`` (a search command would read ``-g`` or
+   ``--no-ignore`` as an option). A GLOB is not judged by rewriting it into text - the CLI
+   splits a Grep glob on whitespace and commas and hands the pieces to ripgrep, which reads
+   classes, braces, ``?``, ``!`` and escapes - but by a strict grammar: letters, digits and
+   ``. _ @ + -``, ``/`` and ``*`` only; directory parts are literal names, ``*`` or ``**``;
+   the file part is a literal name or ``*.<extension>`` whose extension is on the list the
+   base ref's ``workforce.yaml`` gives (``agent_reviewer.glob_extensions``). That list
+   DECIDES: a wildcard cannot be shown clear of the secret patterns (``.env.*`` and
+   ``docker.env*`` end in ``*``, so every extension overlaps them), so which extensions may be
+   searched by is fixed, not sampled. Behind it, as a belt, the file part is matched
+   (``fnmatch``) against concrete names made from the secret patterns (``.env``, ``prod.env``,
+   ``docker.env.local``, ``.env.production``, ``id_rsa``, ...) and, when the glob can step
+   through ``.git`` (no directory part, or a wildcard one: ``*/config``, ``**/HEAD``), against
+   git's own file names; and the literal start of the glob is resolved against the search
+   directory and must stay inside the checkout. The guard never rewrites a call; it refuses,
+   answers with a reason and does not raise. The run itself is refused when the head, the
+   checkout's HEAD or its index (a staged link counts) tracks a symbolic link that can leave
+   the checkout (:func:`symlink_escape_reason`). Fails closed.
 3. :func:`disallowed_tools` (deny rules): evaluated even if the hook were to fail.
    Writes, web access, subagents, every actuation tool by name, and reads of
-   secret files (``*.env``, ``docker.env*``) and credential directories.
+   secret files (``*.env``, ``docker.env*``), credential directories and ``.git``
+   (:data:`GIT_INTERNALS_READ_DENY`): the CLI applies ``Read()`` deny rules to Grep and Glob
+   as ripgrep exclusions added AFTER the model's own globs, so whatever the hook accepts,
+   ``.git`` and the secret files stay out of what they find.
 4. ``permission_mode="dontAsk"``: anything not pre-approved is denied instead of
    prompting - a headless run has nobody to ask.
 5. ``ALLOWED`` (``allowed_tools=``): the allowlist itself.
@@ -100,6 +109,9 @@ Known limits, stated so nobody has to discover them
   INSIDE it a ``Grep`` over a directory can still print lines of a secret file the CLI's
   own deny rules do not catch (an env file under another name). Run the review from a
   checkout that holds no real secrets.
+* A symbolic link or directory junction that is untracked (in neither the head, the
+  checkout's HEAD nor its index), or made after the run starts, does not refuse the run; a
+  path that goes through one is still resolved and judged.
 * The Bash guard is a whitelist over a small character set, not a shell parser.
   It fails closed (an unusual-but-harmless command is refused) because the
   alternative is parsing shell.
@@ -126,7 +138,7 @@ from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import Any, Final
 
-from tools.claude_hooks.config import AgentReviewerConfig
+from tools.claude_hooks.config import DEFAULT_GLOB_EXTENSIONS, AgentReviewerConfig
 
 #: The one MCP server the reviewer may see (a key of ``.mcp.json``'s ``mcpServers``).
 MCP_SERVER: Final = "mousedroid"
@@ -210,6 +222,12 @@ CREDENTIAL_READ_DENY: Final[tuple[str, ...]] = (
     "Read(~/_netrc)",
     "Read(//proc/**)",
 )
+
+#: Keeps ``.git`` out of Grep and Glob whatever the read guard accepts. The CLI applies
+#: ``Read()`` deny rules to Grep and Glob as ripgrep exclusions, added AFTER any glob the
+#: model gives (ripgrep lets a later glob win), so a glob that reaches into ``.git`` through
+#: a wildcard directory part (``*/config``, ``**/HEAD``) still finds nothing there.
+GIT_INTERNALS_READ_DENY: Final[tuple[str, ...]] = ("Read(**/.git/**)",)
 
 # --- The MCP server, pinned ---------------------------------------------------- #
 #: The module the mock MCP server runs (``python -m <module>``): where the interpreter
@@ -430,6 +448,7 @@ def disallowed_tools() -> list[str]:
         *(f"mcp__{MCP_SERVER}__{name}" for name in ACTUATION_TOOLS),
         *(f"Read(**/{glob})" for glob in SECRET_PATH_GLOBS),
         *CREDENTIAL_READ_DENY,
+        *GIT_INTERNALS_READ_DENY,
     ]
 
 
@@ -880,6 +899,22 @@ _DEVICE_NAME: Final = re.compile(
 #: ``ssh-keygen`` outputs (their ``.pub`` halves are public and stay readable).
 PRIVATE_KEY_NAMES: Final[tuple[str, ...]] = ("id_rsa", "id_dsa", "id_ecdsa", "id_ed25519")
 
+#: Files git keeps inside ``.git`` (lower-case, to be matched with ``fnmatch``). A glob
+#: that can step through ``.git`` - no directory part at all (ripgrep matches such a glob at
+#: any depth), or a wildcard one - must not be able to name one of them.
+_GIT_INTERNAL_PROBES: Final[tuple[str, ...]] = (
+    "config",
+    "head",
+    "orig_head",
+    "fetch_head",
+    "merge_head",
+    "packed-refs",
+    "index",
+    "commit_editmsg",
+    "pack-0123456789abcdef.pack",
+    "pack-0123456789abcdef.idx",
+)
+
 #: What ``*`` stands for when a secret-file pattern is turned into concrete names.
 _PROBE_FILLERS: Final[tuple[str, ...]] = (
     "",
@@ -896,6 +931,11 @@ _PROBE_FILLERS: Final[tuple[str, ...]] = (
 #: is outside it, so no glob can mean to the engine what the screen did not see.
 _GLOB_ALPHABET: Final = re.compile(r"[A-Za-z0-9_.@+*/-]+")
 _GLOB_FILE_PART: Final = re.compile(r"\*\.[A-Za-z0-9_+-]+")
+
+#: A path or glob that starts with ``-`` (after any white space a command line would drop) is
+#: read by a search command as an option, not as a name: ``-g``, ``--no-ignore``, ``-uuu``.
+#: ``-`` is in the glob alphabet, so the alphabet does not refuse it; this does.
+_OPTION_LIKE: Final = re.compile(r"[\s\ufeff]*-")
 
 
 def path_is_inside(path: str, root: str) -> bool:
@@ -965,6 +1005,11 @@ def _confined_path_reason(raw: object, root: str) -> str | None:
         return "the tool call names no path."
     if len(raw) > _MAX_PATH_CHARS or any(ord(char) < 32 for char in raw):
         return "the path is too long or contains control characters."
+    if _OPTION_LIKE.match(raw):
+        return (
+            f"{raw!r} starts with '-', which a search command would read as an option "
+            "(-g, --no-ignore, -uuu); write the path as ./name."
+        )
     device = _device_name_in(raw)
     if device is not None:
         return f"{raw!r} names a Windows device ({device!r}); the reviewer reads files only."
@@ -1028,9 +1073,10 @@ def _glob_directories_reason(pattern: str, directories: list[str]) -> str | None
 def _glob_secret_reason(pattern: str, file_part: str) -> str | None:
     """Return why a glob's file part can reach a secret-file name, or ``None``.
 
-    A literal is judged by name. Any file part is also matched (``fnmatch``) against the
-    concrete secret names from :func:`secret_probe_names`, so ``*.env``, ``*.local`` and a
-    bare ``*`` are refused while ``*.py`` is not.
+    The belt behind the extension list, which is what decides: a literal is judged by name,
+    and any file part is matched (``fnmatch``) against the concrete secret names from
+    :func:`secret_probe_names`, so even an operator who lists ``env`` or ``local`` as an
+    extension finds ``*.env`` and ``*.local`` refused.
     """
     reason = read_secret_reason(file_part)
     if reason is None:
@@ -1047,24 +1093,60 @@ def _glob_secret_reason(pattern: str, file_part: str) -> str | None:
     )
 
 
-def _glob_file_part_reason(pattern: str, file_part: str) -> str | None:
-    """Check the file part of a glob: a literal name or ``*.<extension>`` (``*`` and ``**``
-    alone are let through here and stopped by :func:`_glob_secret_reason`)."""
+def _glob_file_part_reason(pattern: str, file_part: str, extensions: frozenset[str]) -> str | None:
+    """Decide the file part of a glob: a literal name, or ``*.<extension>`` with the extension
+    on the list the base ref's ``workforce.yaml`` gives (``agent_reviewer.glob_extensions``).
+
+    Whether a wildcard can reach a secret-file name is not something a sample of names
+    settles - ``.env.*`` and ``docker.env*`` end in ``*``, so every extension overlaps them -
+    so which extensions the reviewer may search by is a fixed list, and anything else
+    (``*``, ``**``, ``*.env``, ``*.c`` unless listed, ``test_*.py``) is refused here.
+    """
     if file_part == "":
         return f"the glob {pattern!r} ends with / and names no file; end it with a name or *.py."
     if file_part.lower() == ".git":
         return f"the glob {pattern!r} names .git; use `git show` for repository content."
-    if (
-        file_part in ("*", "**")
-        or _GLOB_FILE_PART.fullmatch(file_part)
-        or _is_plain_name(file_part)
-    ):
+    if "*" in file_part:
+        if _GLOB_FILE_PART.fullmatch(file_part) is None:
+            return (
+                f"the glob {pattern!r} has the file part {file_part!r}; "
+                "the file part is a literal name or *.<extension> (for example *.py)."
+            )
+        extension = file_part[2:].lower()
+        if extension in extensions:
+            return None
+        return (
+            f"the glob {pattern!r} searches by the extension {extension!r}, which is not one the "
+            f"reviewer may use ({', '.join(sorted(extensions)) or 'none'}); name the file, or add "
+            "the extension to agent_reviewer.glob_extensions in the base's workforce.yaml."
+        )
+    if _is_plain_name(file_part):
         return None
     if file_part.startswith(".."):
         return f"the glob {pattern!r} may not climb out of the checkout."
     return (
         f"the glob {pattern!r} has the file part {file_part!r}; "
         "the file part is a literal name or *.<extension> (for example *.py)."
+    )
+
+
+def _glob_git_reason(pattern: str, directories: list[str], file_part: str) -> str | None:
+    """Refuse a glob that can step through ``.git`` and name one of git's own files.
+
+    ``*/config``, ``**/HEAD`` and a bare ``index`` reach ``.git/config``, ``.git/HEAD`` and
+    ``.git/index`` (the CLI's own glob matching includes hidden directories), and
+    ``**/*.pack`` the packs. A glob whose directory parts are all literal names is anchored
+    and cannot get there: a literal ``.git`` part is refused on its own.
+    """
+    if directories and not any(part in ("*", "**") for part in directories):
+        return None
+    lowered = file_part.lower()
+    probe = next((p for p in _GIT_INTERNAL_PROBES if fnmatch.fnmatchcase(p, lowered)), None)
+    if probe is None:
+        return None
+    return (
+        f"the glob {pattern!r} could match a file inside .git ({probe!r}); "
+        "use `git show` for repository content."
     )
 
 
@@ -1100,9 +1182,12 @@ def _glob_prefix_reason(pattern: str, base: str, root_real: str) -> str | None:
     return None
 
 
-def _glob_reason(pattern: object, *, base: str, root_real: str) -> str | None:
-    """Check a glob: written in the plain alphabet, unable to match a secret-file name, and
-    starting somewhere inside the checkout."""
+def _glob_reason(
+    pattern: object, *, base: str, root_real: str, extensions: frozenset[str]
+) -> str | None:
+    """Check a glob: written in the plain alphabet and not starting with ``-``, searching by a
+    listed extension, unable to name a secret or git-internal file, and starting somewhere
+    inside the checkout."""
     if not isinstance(pattern, str) or not pattern:
         return "a glob must be a non-empty string."
     if len(pattern) > _MAX_PATH_CHARS or any(ord(char) < 32 for char in pattern):
@@ -1110,6 +1195,11 @@ def _glob_reason(pattern: object, *, base: str, root_real: str) -> str | None:
     if pattern.startswith(("/", "~")) or re.match(r"[A-Za-z]:", pattern):
         return (
             f"the glob {pattern!r} is absolute or home-relative; use a pattern inside the checkout."
+        )
+    if _OPTION_LIKE.match(pattern):
+        return (
+            f"the glob {pattern!r} starts with '-', which ripgrep reads as an option "
+            "(-g, --no-ignore, -uuu); start it with a name, * or **."
         )
     if not _GLOB_ALPHABET.fullmatch(pattern):
         return (
@@ -1123,13 +1213,20 @@ def _glob_reason(pattern: object, *, base: str, root_real: str) -> str | None:
     *directories, file_part = pattern.split("/")
     return (
         _glob_directories_reason(pattern, directories)
+        or _glob_file_part_reason(pattern, file_part, extensions)
         or _glob_secret_reason(pattern, file_part)
-        or _glob_file_part_reason(pattern, file_part)
+        or _glob_git_reason(pattern, directories, file_part)
         or _glob_prefix_reason(pattern, base, root_real)
     )
 
 
-def check_read_access(tool_name: object, tool_input: object, *, root: str) -> str | None:
+def check_read_access(
+    tool_name: object,
+    tool_input: object,
+    *,
+    root: str,
+    glob_extensions: Collection[str] = DEFAULT_GLOB_EXTENSIONS,
+) -> str | None:
     """Return why a ``Read`` / ``Grep`` / ``Glob`` call is refused, or ``None``.
 
     It answers and does not raise: a path the checks cannot resolve (an OS error, a name
@@ -1139,14 +1236,19 @@ def check_read_access(tool_name: object, tool_input: object, *, root: str) -> st
         tool_name: The tool (``Read``, ``Grep`` or ``Glob``); anything else is refused.
         tool_input: The call's input (anything, so a malformed payload is refused).
         root: The checkout under review; every path must resolve inside it.
+        glob_extensions: The extensions a wildcard file part may use (``agent_reviewer.
+            glob_extensions`` of the base ref's ``workforce.yaml``).
     """
     try:
-        return _check_read_access(tool_name, tool_input, root=root)
+        extensions = frozenset(extension.lower() for extension in glob_extensions)
+        return _check_read_access(tool_name, tool_input, root=root, extensions=extensions)
     except Exception as exc:  # fail closed: what cannot be checked is refused
         return f"the read could not be checked safely ({type(exc).__name__}); it is refused."
 
 
-def _check_read_access(tool_name: object, tool_input: object, *, root: str) -> str | None:
+def _check_read_access(
+    tool_name: object, tool_input: object, *, root: str, extensions: frozenset[str]
+) -> str | None:
     if not isinstance(tool_name, str) or tool_name not in _READ_TOOLS:
         return f"{tool_name!r} is not a read tool."
     if not isinstance(tool_input, Mapping):
@@ -1166,7 +1268,7 @@ def _check_read_access(tool_name: object, tool_input: object, *, root: str) -> s
     glob = None if glob_field is None else tool_input.get(glob_field)
     if glob is None:
         return None
-    return _glob_reason(glob, base=base, root_real=root_real)
+    return _glob_reason(glob, base=base, root_real=root_real, extensions=extensions)
 
 
 async def deny_unconfined_reads(
@@ -1175,6 +1277,7 @@ async def deny_unconfined_reads(
     context: Any,
     *,
     root: str,
+    glob_extensions: Collection[str] = DEFAULT_GLOB_EXTENSIONS,
 ) -> dict[str, Any]:
     """PreToolUse hook: refuse every Read / Grep / Glob that leaves the checkout.
 
@@ -1187,6 +1290,7 @@ async def deny_unconfined_reads(
         tool_use_id: The tool call id (unused).
         context: The SDK's hook context (unused).
         root: The checkout under review.
+        glob_extensions: The extensions a wildcard file part may use.
     """
     try:
         if not isinstance(input_data, Mapping) or "tool_name" not in input_data:
@@ -1194,7 +1298,9 @@ async def deny_unconfined_reads(
         name = input_data["tool_name"]
         if name not in _READ_TOOLS:
             return {}
-        reason = check_read_access(name, input_data.get("tool_input"), root=root)
+        reason = check_read_access(
+            name, input_data.get("tool_input"), root=root, glob_extensions=glob_extensions
+        )
     except Exception as exc:  # fail closed: a guard that crashes must not wave a call through
         return _deny(f"The read guard failed ({type(exc).__name__}); the call is denied.")
     return {} if reason is None else _deny(reason)
@@ -1207,19 +1313,30 @@ class ReadGuard:
     Attributes:
         root: The checkout under review. Every path ``Read``, ``Grep`` and ``Glob`` would
             open is resolved with ``realpath`` and must be inside it.
+        glob_extensions: The extensions a wildcard file part of a glob may use
+            (``agent_reviewer.glob_extensions`` of the base ref's ``workforce.yaml``).
     """
 
     root: str
+    glob_extensions: tuple[str, ...] = DEFAULT_GLOB_EXTENSIONS
 
     def check(self, tool_name: object, tool_input: object) -> str | None:
         """Return why the call is refused, or ``None``."""
-        return check_read_access(tool_name, tool_input, root=self.root)
+        return check_read_access(
+            tool_name, tool_input, root=self.root, glob_extensions=self.glob_extensions
+        )
 
     async def __call__(
         self, input_data: Mapping[str, Any] | None, tool_use_id: str | None, context: Any
     ) -> dict[str, Any]:
         """Hook entry point: ``{}`` to pass, or a deny payload."""
-        return await deny_unconfined_reads(input_data, tool_use_id, context, root=self.root)
+        return await deny_unconfined_reads(
+            input_data,
+            tool_use_id,
+            context,
+            root=self.root,
+            glob_extensions=self.glob_extensions,
+        )
 
 
 # --------------------------------------------------------------------------- #
