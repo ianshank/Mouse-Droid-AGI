@@ -194,6 +194,24 @@ class TestEsp32RealBranch:
         assert result.status is PreflightStatus.WARN
         assert "esp32.enabled=false" in result.detail
 
+    async def test_disabled_board_remedy_is_followable_on_this_branch(
+        self, real_cfg: Settings
+    ) -> None:
+        """Copilot review on #256: name both env levers; offer a missing overlay conditionally.
+
+        ``config/jetson_bench_esp32.yaml`` ships with the bench-overlay PR, so offering it
+        unconditionally sent operators to a config-load failure. And enabling the shipped
+        production overlay alone trades this WARN for the legacy "no probe" one, so the env
+        route has to carry both variables.
+        """
+        real_cfg.esp32 = real_cfg.esp32.model_copy(update={"enabled": False})
+        detail = (await _check_esp32(real_cfg)).detail
+        assert (
+            "set MOUSEDROID_ESP32__ENABLED=true and MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock"
+            in detail
+        )
+        assert "stack the bench overlay (config/jetson_bench_esp32.yaml) where it ships" in detail
+
     async def test_legacy_warns_without_probing(
         self, real_cfg: Settings, monkeypatch: pytest.MonkeyPatch
     ) -> None:

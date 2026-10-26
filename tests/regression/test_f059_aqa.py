@@ -1,5 +1,8 @@
 # tests/regression/test_f059_aqa.py
-"""AQA pins for F-059 (rover gate closeout). Each test names the round-3 finding it pins."""
+"""AQA pins for F-059 (rover gate closeout).
+
+Each test names the finding it pins: a round-3 R-id, or the PR review that raised it.
+"""
 
 from __future__ import annotations
 
@@ -10,11 +13,17 @@ import pytest
 import yaml
 
 from mousedroid.config.loader import load_settings
+from mousedroid.config.schema.hardware import WAVESHARE_STOCK_BAUD
+from mousedroid.validation import runtime
 from mousedroid.validation.preflight import PreflightStatus, _check_esp32
+from mousedroid.validation.runtime import Esp32ProbeResult
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CONFIG_DIR = _REPO_ROOT / "config"
 _PROD = _CONFIG_DIR / "jetson_production.yaml"
+
+#: One ``MOUSEDROID_ESP32__NAME=value`` assignment, as an operator would copy it.
+_ENV_ASSIGNMENT = re.compile(r"(MOUSEDROID_ESP32__[A-Z_]+)=(\w+)")
 
 
 def _features() -> dict[str, dict]:
@@ -67,6 +76,66 @@ async def test_preflight_esp32_warns_rather_than_ok_when_the_board_is_mocked() -
     cfg = load_settings(_PROD, config_dir=_CONFIG_DIR)
     cfg.mock_hardware = False
     assert (await _check_esp32(cfg)).status is PreflightStatus.WARN
+
+
+async def test_preflight_esp32_disabled_remedy_works_when_followed_literally(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Copilot review on #256: the WARN's own env remedy, applied to the shipped overlay.
+
+    The remedy is operator-facing text, so it is executed rather than string-matched: every
+    ``MOUSEDROID_ESP32__*=value`` it prints is set in the environment, the production overlay
+    is reloaded, and the check must now reach the probe (stubbed -- no wire) and report OK.
+    The stock baud is asserted too: the overlay pins ``serial_baud: 1000000`` and a healthy
+    stock board read at that rate looks dead (F-025 vendor audit R2), so the remedy is only
+    complete if the baud derives.
+    """
+    cfg = load_settings(_PROD, config_dir=_CONFIG_DIR)
+    cfg.mock_hardware = False
+    warned = await _check_esp32(cfg)
+    assert warned.status is PreflightStatus.WARN
+
+    assignments = _ENV_ASSIGNMENT.findall(warned.detail)
+    assert {name for name, _ in assignments} == {
+        "MOUSEDROID_ESP32__ENABLED",
+        "MOUSEDROID_ESP32__COMMAND_SET",
+    }, warned.detail
+    for name, value in assignments:
+        monkeypatch.setenv(name, value)
+    followed = load_settings(_PROD, config_dir=_CONFIG_DIR)
+    followed.mock_hardware = False
+    assert followed.esp32.enabled is True
+    assert followed.esp32.command_set == "waveshare_stock"
+    assert followed.esp32.serial_baud == WAVESHARE_STOCK_BAUD
+
+    probed: list[object] = []
+
+    async def alive(probe_cfg: object) -> Esp32ProbeResult:
+        probed.append(probe_cfg)
+        return Esp32ProbeResult(True, 1001, 11.9, 0.1, "FEEDBACK_BASE_INFO after 1 poll(s)")
+
+    monkeypatch.setattr(runtime, "collect_esp32_probe", alive)
+    result = await _check_esp32(followed)
+    assert result.status is PreflightStatus.OK
+    assert probed == [followed]  # it reached the probe, not a config-level WARN
+
+
+async def test_preflight_esp32_enabling_the_overlay_alone_only_swaps_the_warn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Why the remedy names two variables (Copilot review on #256).
+
+    ``config/jetson_production.yaml`` leaves ``esp32.command_set`` on the schema's
+    ``legacy``, so lifting ``enabled`` alone lands on the "no probe" WARN instead. Should
+    the overlay ever ship ``waveshare_stock`` itself this goes red: shorten the remedy and
+    delete this test.
+    """
+    monkeypatch.setenv("MOUSEDROID_ESP32__ENABLED", "true")
+    cfg = load_settings(_PROD, config_dir=_CONFIG_DIR)
+    cfg.mock_hardware = False
+    result = await _check_esp32(cfg)
+    assert result.status is PreflightStatus.WARN
+    assert "no probe" in result.detail
 
 
 def test_trend_unit_never_runs_exclusive_device_checks() -> None:

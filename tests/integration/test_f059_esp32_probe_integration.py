@@ -14,10 +14,15 @@ UART independently of the production constants that generate it.
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from typing import Any
 
 import pytest
 
+import mousedroid.factory as factory
+from mousedroid.config.schema import Settings
 from mousedroid.config.schema.hardware import WAVESHARE_STOCK_BAUD
+from mousedroid.resilience.retry import RetryExhaustedError
 from mousedroid.validation.runtime import collect_esp32_probe
 from tests.integration.test_f025_integration import FakeSerialPort, _settings
 
@@ -114,3 +119,107 @@ async def test_silent_port_spends_the_poll_budget_then_names_port_and_stock_baud
     assert "no FEEDBACK_BASE_INFO" in result.detail
     assert f"{WAVESHARE_STOCK_BAUD} baud" in result.detail
     assert port.closed
+
+
+def _record_built_drivers(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    """Wrap the factory seam so a test can reach the driver the probe built for itself."""
+    built: list[Any] = []
+    real_build = factory.build_esp32_driver
+
+    def recording(cfg: Settings) -> Any:
+        driver = real_build(cfg)
+        built.append(driver)
+        return driver
+
+    monkeypatch.setattr(factory, "build_esp32_driver", recording)
+    return built
+
+
+async def test_a_port_that_cannot_be_opened_does_not_strand_the_serial_io_executor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Copilot review on #256: a failed ``connect()`` must still reach ``disconnect()``.
+
+    ``SerialESP32Driver._run_io`` starts its single-worker executor before the open call
+    runs, so an unopenable port (node missing, permission denied) left a live worker
+    thread behind unless ``disconnect()`` released it -- and the probe only called that
+    after a *successful* connect. Only the open is faked; the resilient wrapper and the
+    serial driver are the real pair.
+    """
+    from mousedroid.comms import serial_driver as serial_driver_mod
+    from mousedroid.comms.serial_driver import SerialESP32Driver
+
+    monkeypatch.setattr(serial_driver_mod, "_serial_mod", object(), raising=False)
+
+    def refuse(_self: SerialESP32Driver) -> None:
+        msg = "could not open port: [Errno 2] No such file or directory"
+        raise OSError(msg)
+
+    monkeypatch.setattr(SerialESP32Driver, "_open_serial", refuse)
+    built = _record_built_drivers(monkeypatch)
+    cfg = _settings(command_set="waveshare_stock")
+    # One attempt: the default retry policy would sleep through its real backoff delays.
+    cfg.retry = cfg.retry.model_copy(update={"max_attempts": 1})
+
+    with pytest.raises(RetryExhaustedError, match="No such file or directory"):
+        await collect_esp32_probe(cfg)
+
+    (resilient,) = built
+    assert resilient.inner._io_executor is None
+
+
+async def test_discovery_opens_a_by_id_node_but_the_summary_names_the_configured_literal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Why the summary says ``configured`` (Copilot review on #256).
+
+    With USB-C discovery on and a stale literal ``serial_port``, the factory hands the
+    serial driver a copy of the config pointing at the live by-id node. The probe only
+    holds the original ``cfg``, so the configured literal is all it can name; it must
+    not be presented as the port that answered. Discovery is real, over a temp by-id
+    directory; only the serial port is fake.
+    """
+    from mousedroid.comms import serial_driver as serial_driver_mod
+    from mousedroid.comms.serial_driver import SerialESP32Driver
+
+    by_id = tmp_path / "by-id"
+    by_id.mkdir()
+    live = by_id / "usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_AAA-if00-port0"
+    live.touch()
+    stale = "/dev/serial/by-id/stale-literal-that-does-not-exist"
+    frame = json.dumps(
+        {"T": _FEEDBACK_BASE_INFO, "L": 0.0, "R": 0.0, "r": 0.0, "p": 0.0, "y": 0.1, "v": 11.8}
+    )
+    port = FakeSerialPort([frame, frame])
+    opened: list[str] = []
+
+    def open_recording(self: SerialESP32Driver) -> FakeSerialPort:
+        opened.append(self._port)
+        return port
+
+    monkeypatch.setattr(serial_driver_mod, "_serial_mod", object(), raising=False)
+    monkeypatch.setattr(SerialESP32Driver, "_open_serial", open_recording)
+    cfg = Settings.model_validate(
+        {
+            "mock_hardware": False,
+            "ultrasonic": {"trigger_pin": 17, "echo_pin": 27},
+            "esp32": {
+                "protocol": "serial",
+                "enabled": True,
+                "command_set": "waveshare_stock",
+                "serial_port": stale,
+            },
+            "usbc_discovery": {
+                "enabled": True,
+                "by_id_root": str(by_id),
+                "required_endpoints": [{"name": "rover_esp32", "by_id_glob": "*CP2102N*"}],
+            },
+        }
+    )
+
+    result = await collect_esp32_probe(cfg)
+
+    assert result.responded
+    assert opened == [str(live)]  # the driver opened the substituted node, not the literal
+    assert f"configured serial_port={stale}" in result.detail
+    assert str(live) not in result.detail  # the probe cannot see it; it must not imply it

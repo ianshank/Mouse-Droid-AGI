@@ -19,6 +19,7 @@ from mousedroid.comms.protocol import EncoderReading
 from mousedroid.config.schema import Settings
 from mousedroid.validation import runtime
 from mousedroid.validation.runtime import Esp32ProbeResult, collect_esp32_probe
+from mousedroid.validation.runtime import _esp32 as probe_module
 
 #: ``Settings`` refuses ``mock_hardware=false`` without a distance sensor. The
 #: probe never reads it; it only has to make the config valid.
@@ -26,6 +27,9 @@ _ULTRASONIC_CFG = {"trigger_pin": 17, "echo_pin": 27}
 
 #: Poll budget used by the boundary tests (``esp32.max_consecutive_timeouts``).
 _POLL_BUDGET = 3
+
+#: The caveat that keeps the configured port from being read as the endpoint opened.
+_DISCOVERY_NOTE = "USB-C discovery may substitute a by-id path"
 
 
 def _cfg(**esp32: object) -> Settings:
@@ -145,13 +149,74 @@ async def test_disconnects_even_when_the_read_raises(monkeypatch: pytest.MonkeyP
     assert fake.calls == ["connect", "read", "disconnect"]
 
 
-async def test_connect_errors_propagate_without_polling(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_connect_errors_propagate_without_polling_and_still_disconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A port that cannot be opened is cleaned up, not abandoned (Copilot review on #256).
+
+    ``SerialESP32Driver`` starts its single-worker I/O executor before the open call runs, and
+    only ``disconnect()`` releases it, so skipping ``disconnect()`` after a failed ``connect()``
+    strands a worker thread per probe. ``disconnect()`` is safe on a driver that never
+    connected: serial guards on its handle, mock and wifi only flip a flag, and the resilient
+    wrapper swallows ``Exception``.
+    """
     fake = _ConnectRaises([])
     _install(monkeypatch, fake)
     with pytest.raises(OSError, match="no such port"):
         await collect_esp32_probe(_cfg())
-    assert "read" not in fake.calls
-    assert "battery" not in fake.calls
+    assert fake.calls == ["connect", "disconnect"]  # no poll, no battery read, but cleaned up
+
+
+@pytest.mark.parametrize(
+    "readings",
+    [[EncoderReading(imu_valid=True)], []],
+    ids=["board-answers", "board-silent"],
+)
+async def test_summary_names_the_port_as_configured_not_as_opened(
+    monkeypatch: pytest.MonkeyPatch, readings: list[EncoderReading]
+) -> None:
+    """The probe can only report the configured literal, and says so (Copilot review on #256).
+
+    ``build_esp32_driver`` hands the driver a *copy* of the ESP32 config whose ``serial_port``
+    USB-C discovery may have replaced with a by-id path, and ``ESP32CommProtocol`` exposes no
+    accessor for the port in use. An unlabelled ``on /dev/ttyUSB7`` therefore reads as the
+    endpoint that answered (or stayed silent) and can name a path that was never opened.
+    """
+    _install(monkeypatch, _FakeDriver(readings))
+    result = await collect_esp32_probe(_cfg(serial_port="/dev/ttyUSB7"))
+    assert "configured serial_port=/dev/ttyUSB7" in result.detail
+    assert _DISCOVERY_NOTE in result.detail
+    assert "on /dev/ttyUSB7" not in result.detail
+
+
+async def test_silent_board_log_labels_the_port_as_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The structured event carries ``configured_port``, never a bare ``port``.
+
+    Same finding as the summary text (Copilot review on #256): the event is what a log grep
+    finds after the preflight output has scrolled away. The recorder replaces the module's
+    ``_log`` rather than using ``structlog.testing.capture_logs``, which intercepts nothing
+    once an earlier test has cached the bound logger.
+    """
+    events: list[tuple[str, dict[str, object]]] = []
+
+    class _RecordingLog:
+        def info(self, event: str, **kw: object) -> None:
+            events.append((event, kw))
+
+        def warning(self, event: str, **kw: object) -> None:
+            events.append((event, kw))
+
+    monkeypatch.setattr(probe_module, "_log", _RecordingLog())
+    _install(monkeypatch, _FakeDriver([]))
+    await collect_esp32_probe(_cfg(serial_port="/dev/ttyUSB7"))
+
+    # Positive control first: the absence assertion below is only as good as this channel.
+    assert [event for event, _ in events] == ["esp32_probe_complete"]
+    fields = events[0][1]
+    assert fields["configured_port"] == "/dev/ttyUSB7"
+    assert "port" not in fields
 
 
 async def test_zero_volt_sentinel_is_reported_as_no_reading(
