@@ -32,6 +32,9 @@ class Esp32ProbeResult:
         elapsed_s: Seconds from the start of the probe (driver build and
             connect included, disconnect excluded) to the verdict.
         detail: One-line operator-facing summary for preflight and MCP output.
+            It names ``esp32.serial_port`` as the *configured* port: USB-C
+            discovery may have opened a different by-id path, and the driver
+            protocol does not expose the one in use.
     """
 
     responded: bool
@@ -39,6 +42,24 @@ class Esp32ProbeResult:
     battery_v: float | None
     elapsed_s: float
     detail: str
+
+
+def _configured_port_note(serial_port: str) -> str:
+    """Name ``serial_port`` as the configured literal, not as the port that was opened.
+
+    ``build_esp32_driver`` hands the serial driver a *copy* of the ESP32 config whose
+    ``serial_port`` USB-C discovery may have replaced with a by-id path, and
+    ``ESP32CommProtocol`` exposes no accessor for the port in use. The probe therefore
+    knows only what was configured, and says so rather than present it as the endpoint
+    that answered (or stayed silent).
+
+    Args:
+        serial_port: ``cfg.esp32.serial_port``.
+
+    Returns:
+        A fragment for the operator-facing summary.
+    """
+    return f"configured serial_port={serial_port} (USB-C discovery may substitute a by-id path)"
 
 
 async def collect_esp32_probe(cfg: Settings) -> Esp32ProbeResult:
@@ -55,9 +76,11 @@ async def collect_esp32_probe(cfg: Settings) -> Esp32ProbeResult:
     the probe is motion-free but not wire-passive.
 
     A silent or wrong-typed board is an ordinary ``responded=False`` result,
-    not an exception. Driver failures from ``connect()`` propagate to the
-    caller, as do failures from a poll once connected (``disconnect()`` still
-    runs in that case).
+    not an exception. Driver failures from ``connect()`` or from a poll
+    propagate to the caller, and ``disconnect()`` runs either way: the serial
+    driver starts its I/O executor before the open call, so a port that failed
+    to open still has one to release. ``disconnect()`` is safe on a driver that
+    never connected.
 
     Callers must gate on both ``cfg.mock_hardware`` and ``cfg.esp32.enabled``
     before calling: against a mock-backed config the result reads as a silent
@@ -83,8 +106,8 @@ async def collect_esp32_probe(cfg: Settings) -> Esp32ProbeResult:
         raise ValueError(msg)
     t0 = time.monotonic()
     driver = build_esp32_driver(cfg)
-    await driver.connect()
     try:
+        await driver.connect()
         for polls in range(1, esp32.max_consecutive_timeouts + 1):
             if (await driver.read_encoders()).imu_valid:
                 voltage = await driver.get_battery_voltage()
@@ -92,8 +115,8 @@ async def collect_esp32_probe(cfg: Settings) -> Esp32ProbeResult:
                 elapsed = time.monotonic() - t0
                 shown = "unavailable" if battery_v is None else f"{battery_v:.2f}"
                 detail = (
-                    f"FEEDBACK_BASE_INFO after {polls} poll(s) on {esp32.serial_port}; "
-                    f"battery_v={shown}"
+                    f"FEEDBACK_BASE_INFO after {polls} poll(s); battery_v={shown}; "
+                    f"{_configured_port_note(esp32.serial_port)}"
                 )
                 _log.info(
                     "esp32_probe_complete",
@@ -107,14 +130,14 @@ async def collect_esp32_probe(cfg: Settings) -> Esp32ProbeResult:
                 )
         elapsed = time.monotonic() - t0
         detail = (
-            f"no FEEDBACK_BASE_INFO frame in {esp32.max_consecutive_timeouts} polls on "
-            f"{esp32.serial_port} at {esp32.serial_baud} baud"
+            f"no FEEDBACK_BASE_INFO frame in {esp32.max_consecutive_timeouts} polls at "
+            f"{esp32.serial_baud} baud; {_configured_port_note(esp32.serial_port)}"
         )
         _log.warning(
             "esp32_probe_complete",
             responded=False,
             polls=esp32.max_consecutive_timeouts,
-            port=esp32.serial_port,
+            configured_port=esp32.serial_port,
             baud=esp32.serial_baud,
             elapsed_s=elapsed,
         )

@@ -332,8 +332,9 @@ async def _check_esp32(cfg: Settings) -> PreflightCheckResult:
     if not esp32.enabled:
         return _warn(
             "esp32",
-            "esp32.enabled=false: driver is mocked, board not probed; stack "
-            "config/jetson_bench_esp32.yaml or set MOUSEDROID_ESP32__ENABLED=true",
+            "esp32.enabled=false: driver is mocked, board not probed; set "
+            "MOUSEDROID_ESP32__ENABLED=true and MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock, "
+            "or stack the bench overlay (config/jetson_bench_esp32.yaml) where it ships",
             time.monotonic() - t0,
         )
     if esp32.command_set != "waveshare_stock":
