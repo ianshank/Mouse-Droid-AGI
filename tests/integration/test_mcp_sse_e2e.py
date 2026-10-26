@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import socket
+import sys
 
 import pytest
 
@@ -60,6 +61,14 @@ def safe_safety_monitor() -> object:
     return monitor
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason=(
+        "Windows ProactorEventLoop + uvicorn 0.54 closes the connection before httpx "
+        "reads the 401 response (httpx.RemoteProtocolError); the blocking Linux `test` "
+        "job runs this"
+    ),
+)
 @pytest.mark.asyncio
 @pytest.mark.timeout(15)
 async def test_sse_transport_bearer_enforcement(
