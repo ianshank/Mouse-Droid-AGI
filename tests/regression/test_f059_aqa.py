@@ -362,3 +362,40 @@ def test_runbooks_point_operators_at_the_rearm_cli() -> None:
             args = " ".join(match.group(1).split())
             if args and "rearm_cmd=" not in joined[line_start : match.start()]:
                 assert args.startswith(_REARM_CONFIG), (name, match.group(0))
+
+
+def test_serial_driver_exclusive_open_is_a_constant_not_a_config_knob() -> None:
+    """Task 4.1: ``exclusive=`` is fed by a module constant, and no config field can turn it off.
+
+    Two openers on the ESP32 UART must collide loudly, so nothing reachable from YAML or an env
+    var may release the lock. The unit test pins the value the driver passes, through a mock; this
+    pins where that value comes from, which a literal ``exclusive=True`` or a new ESP32Config
+    field would change without failing it.
+    """
+    from mousedroid.config.schema import ESP32Config
+
+    path = _REPO_ROOT / "src" / "mousedroid" / "comms" / "serial_driver.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    constants = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "_SERIAL_EXCLUSIVE"
+    ]
+    assert len(constants) == 1, "serial_driver.py must define _SERIAL_EXCLUSIVE once"
+    assert ast.unparse(constants[0].annotation) == "Final[bool]"
+    assert isinstance(constants[0].value, ast.Constant)
+    assert constants[0].value.value is True
+    opens = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "Serial"
+    ]
+    assert len(opens) == 1, "the driver opens the port in exactly one place"
+    exclusive = {kw.arg: kw.value for kw in opens[0].keywords}.get("exclusive")
+    assert isinstance(exclusive, ast.Name), "exclusive= must be the constant, not a literal"
+    assert exclusive.id == "_SERIAL_EXCLUSIVE"
+    assert not [name for name in ESP32Config.model_fields if "exclusive" in name]
