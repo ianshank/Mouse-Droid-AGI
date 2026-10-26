@@ -305,9 +305,9 @@ async def test_preflight_esp32_disabled_remedy_works_when_followed_literally(
     The remedy is operator-facing text, so it is executed rather than string-matched: every
     ``MOUSEDROID_ESP32__*=value`` it prints is set in the environment, the production overlay
     is reloaded, and the check must now reach the probe (stubbed -- no wire) and report OK.
-    The stock baud is asserted too: the overlay pins ``serial_baud: 1000000`` and a healthy
-    stock board read at that rate looks dead (F-025 vendor audit R2), so the remedy is only
-    complete if the baud derives.
+    The stock baud is asserted too: a stock board read at the schema's legacy 1 Mbaud looks
+    dead (F-025 vendor audit R2), so the remedy is only complete if the config lands on the
+    stock rate -- whether the overlay pins it or the command-set coupling derives it.
     """
     cfg = load_settings(_PROD, config_dir=_CONFIG_DIR)
     cfg.mock_hardware = False
@@ -339,22 +339,63 @@ async def test_preflight_esp32_disabled_remedy_works_when_followed_literally(
     assert probed == [followed]  # it reached the probe, not a config-level WARN
 
 
-async def test_preflight_esp32_enabling_the_overlay_alone_only_swaps_the_warn(
+def _explicit_cfg(command_set: str):
+    """Real-hardware settings with ``enabled`` lifted and ``command_set`` stated outright.
+
+    Nothing is read from ``config/*.yaml``: the two pins below are about the levers the
+    remedy names, and which command set the shipped overlay carries is another PR's to change.
+    """
+    from mousedroid.config.schema import Settings
+
+    return Settings.model_validate(
+        {
+            "mock_hardware": False,
+            "ultrasonic": {"trigger_pin": 17, "echo_pin": 27},
+            "esp32": {"enabled": True, "command_set": command_set},
+        }
+    )
+
+
+async def test_preflight_esp32_enabling_alone_only_swaps_the_warn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Why the remedy names two variables (Copilot review on #256).
 
-    ``config/jetson_production.yaml`` leaves ``esp32.command_set`` on the schema's
-    ``legacy``, so lifting ``enabled`` alone lands on the "no probe" WARN instead. Should
-    the overlay ever ship ``waveshare_stock`` itself this goes red: shorten the remedy and
-    delete this test.
+    ``esp32.enabled=true`` on the ``legacy`` command set lands on the "no probe" WARN, so
+    lifting ``enabled`` alone only swaps one WARN for another and never reaches the board.
     """
-    monkeypatch.setenv("MOUSEDROID_ESP32__ENABLED", "true")
-    cfg = load_settings(_PROD, config_dir=_CONFIG_DIR)
-    cfg.mock_hardware = False
-    result = await _check_esp32(cfg)
+
+    async def never(probe_cfg: object) -> Esp32ProbeResult:
+        msg = "probe must not run under the legacy command set"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(runtime, "collect_esp32_probe", never)
+    result = await _check_esp32(_explicit_cfg("legacy"))
     assert result.status is PreflightStatus.WARN
     assert "no probe" in result.detail
+    assert "MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock" in result.detail  # the missing lever
+
+
+async def test_preflight_esp32_enabled_on_the_stock_command_set_reaches_the_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other half of the remedy: the pair is enough (Copilot review on #256).
+
+    ``enabled=true`` plus ``command_set='waveshare_stock'`` is what the remedy's two
+    assignments produce. The check must reach the probe (stubbed -- no wire) and report its
+    verdict instead of another config-level WARN.
+    """
+    cfg = _explicit_cfg("waveshare_stock")
+    probed: list[object] = []
+
+    async def alive(probe_cfg: object) -> Esp32ProbeResult:
+        probed.append(probe_cfg)
+        return Esp32ProbeResult(True, 1001, 11.9, 0.1, "FEEDBACK_BASE_INFO after 1 poll(s)")
+
+    monkeypatch.setattr(runtime, "collect_esp32_probe", alive)
+    result = await _check_esp32(cfg)
+    assert result.status is PreflightStatus.OK
+    assert probed == [cfg]  # it reached the probe, not a config-level WARN
 
 
 def test_trend_unit_never_runs_exclusive_device_checks() -> None:
