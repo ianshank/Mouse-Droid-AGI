@@ -16,6 +16,22 @@
 #   bash scripts/jetson_smoke_test.sh app           # Run only application health check
 #   bash scripts/jetson_smoke_test.sh pytest        # Run only hardware pytest suite
 #   bash scripts/jetson_smoke_test.sh e2e           # Run only E2E 5-second run
+#
+# Environment:
+#   MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY   (F-059) YAML stacked AFTER the config
+#       stack for the `motor` and `power` stages ONLY. Those stages must talk to
+#       the ESP32, but jetson_production.yaml ships esp32.enabled: false (the
+#       factory then builds MockESP32Driver), so without the overlay they would
+#       measure a mock. The orchestrator's own stack is untouched.
+#         unset       -> <repo>/config/jetson_bench_esp32.yaml
+#         set, empty  -> opt out: `motor` and `power` record SKIP, pytest never runs
+#         <path>      -> that file
+#       Set it empty for a bring-up run with no chassis attached (health only): the
+#       two stages SKIP with that reason instead of failing for want of a board.
+#       With the overlay stacked, a test that skips is a FAIL, never a pass.
+#       The `pytest` stage never stacks it: the whole hardware suite stays on the
+#       orchestrator's stack, because enabling the board there would open the
+#       serial port for every module.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -43,6 +59,30 @@ if [[ -n "${CONFIGS_CSV}" ]]; then
         fi
     done
 fi
+
+# F-059: unset -> repo default overlay; set-but-empty -> the explicit opt-out (the operator
+# declares "no chassis attached", a health-only run); otherwise that file.
+BENCH_ESP32_OVERLAY="${MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY-${PROJECT_DIR}/config/jetson_bench_esp32.yaml}"
+# What `motor` and `power` record when opted out. A SKIP, not a FAIL: nothing was declared to
+# measure. They return before pytest runs, because on the production stack pytest would only
+# measure MockESP32Driver, and with the overlay stacked it would fail for want of a board.
+BENCH_ESP32_OPT_OUT_REASON="bench ESP32 overlay opted out (MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY is empty): no chassis declared, stage not run"
+
+# Prints the config CSV the ESP32-owned stages (motor, power) pass as
+# MOUSEDROID_JETSON_CONFIGS: the orchestrator's stack with the bench overlay
+# appended once. The base resolves in the order the Python loaders use
+# (tests/_jetson_hardware.py): MOUSEDROID_JETSON_CONFIGS, else the singular
+# MOUSEDROID_JETSON_CONFIG, else <repo>/config/jetson_production.yaml.
+# printf '%s' (not echo) so no trailing newline lands in the CSV. The stages SKIP before they
+# get here when the overlay is opted out (empty), so the empty guard only keeps this total.
+esp32_stage_configs_csv() {
+    local base="${CONFIGS_CSV:-${MOUSEDROID_JETSON_CONFIG:-${PROJECT_DIR}/config/jetson_production.yaml}}"
+    if [[ -z "${BENCH_ESP32_OVERLAY}" ]]; then printf '%s' "${base}"; return; fi
+    case ",${base}," in
+        *",${BENCH_ESP32_OVERLAY},"*) printf '%s' "${base}" ;;
+        *) printf '%s,%s' "${base}" "${BENCH_ESP32_OVERLAY}" ;;
+    esac
+}
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -469,6 +509,12 @@ test_motor() {
         return
     fi
 
+    # F-059: the operator declared no chassis (BENCH_ESP32_OVERLAY set empty): nothing to measure.
+    if [[ -z "${BENCH_ESP32_OVERLAY}" ]]; then
+        record_skip "motor loopback smoke" "${BENCH_ESP32_OPT_OUT_REASON}"
+        return
+    fi
+
     if ! "${PYTHON}" -m pytest --version >/dev/null 2>&1; then
         if [[ "${ALLOW_MOTION}" == "1" ]]; then
             record_fail "motor loopback smoke" "pytest not available in selected Python runtime; ${pytest_hint}"
@@ -488,12 +534,16 @@ test_motor() {
         return
     fi
 
+    local esp32_configs
+    esp32_configs="$(esp32_stage_configs_csv)"
+    log_step "ESP32 stage config stack: ${esp32_configs}"
+
     local pytest_output
-    if pytest_output="$(MOUSEDROID_JETSON_CONFIGS="${CONFIGS_CSV}" MOUSEDROID_MOCK_HARDWARE=false "${PYTHON}" -m pytest -m hardware -ra -v "${test_file}" 2>&1)"; then
+    if pytest_output="$(MOUSEDROID_JETSON_CONFIGS="${esp32_configs}" MOUSEDROID_MOCK_HARDWARE=false "${PYTHON}" -m pytest -m hardware -ra -v --color=no "${test_file}" 2>&1)"; then
         echo "${pytest_output}"
         if ! echo "${pytest_output}" | grep -q "test_send_velocity_moves_encoders PASSED"; then
             local motor_reason
-            motor_reason="$(echo "${pytest_output}" | grep -m1 "encoder loopback inactive" | sed 's/^.*encoder loopback inactive/encoder loopback inactive/' || true)"
+            motor_reason="$(echo "${pytest_output}" | grep -m1 -E "encoder loopback inactive|esp32.enabled=false|no FEEDBACK_BASE_INFO|serial device .* not found" | sed 's/^.*encoder loopback inactive/encoder loopback inactive/' || true)"
             if [[ -n "${motor_reason}" ]]; then
                 record_fail "motor loopback smoke" "${motor_reason}"
             else
@@ -508,9 +558,15 @@ test_motor() {
         record_pass "motor loopback smoke"
     else
         echo "${pytest_output}"
-        local failed_count
+        local failed_count failed_detail
         failed_count="$(echo "${pytest_output}" | grep -oP '\d+ failed' | grep -oP '\d+' || echo "?")"
-        record_fail "motor loopback smoke" "${failed_count} test(s) failed"
+        # An assertion failure exits non-zero, so the clean-exit reason grep above never sees it.
+        # Take pytest's full E line (the traceback echoes the statement's source before it, and the
+        # -ra FAILED summary truncates) or the -ra SKIPPED reason, minus pytest's own decoration.
+        failed_detail="$(echo "${pytest_output}" \
+            | grep -m1 -E "^(E +|SKIPPED \[[0-9]+\] ).*(no FEEDBACK_BASE_INFO|encoder loopback inactive|serial device .* not found)" \
+            | sed -E 's/^E +(AssertionError: )?//; s/^SKIPPED \[[0-9]+\] [^ ]+: //' || true)"
+        record_fail "motor loopback smoke" "${failed_count} test(s) failed${failed_detail:+: ${failed_detail}}"
     fi
 }
 
@@ -521,6 +577,13 @@ test_motor() {
 test_power() {
     log_section "Power Chain Smoke"
     log_step "Running power-chain hardware test"
+
+    # F-059: the operator declared no chassis (BENCH_ESP32_OVERLAY set empty): nothing to measure.
+    if [[ -z "${BENCH_ESP32_OVERLAY}" ]]; then
+        record_skip "power chain smoke" "${BENCH_ESP32_OPT_OUT_REASON}"
+        return
+    fi
+
     local test_file="${PROJECT_DIR}/tests/hardware/test_power_chain_smoke.py"
     if [[ ! -f "${test_file}" ]]; then
         record_skip "power chain smoke" "test_power_chain_smoke.py not found"
@@ -532,10 +595,23 @@ test_power() {
         return
     fi
 
+    local esp32_configs
+    esp32_configs="$(esp32_stage_configs_csv)"
+    log_step "ESP32 stage config stack: ${esp32_configs}"
+
     local pytest_output
-    if pytest_output="$(MOUSEDROID_JETSON_CONFIGS="${CONFIGS_CSV}" MOUSEDROID_MOCK_HARDWARE=false \
-            "${PYTHON}" -m pytest -m hardware -ra -v "${test_file}" 2>&1)"; then
+    if pytest_output="$(MOUSEDROID_JETSON_CONFIGS="${esp32_configs}" MOUSEDROID_MOCK_HARDWARE=false \
+            "${PYTHON}" -m pytest -m hardware -ra -v --color=no "${test_file}" 2>&1)"; then
         echo "${pytest_output}"
+        # pytest exits 0 when every test skips (esp32.enabled=false routes to the mock, so the
+        # test skips with its remedy), so a clean exit is not a measurement: the test itself
+        # must have PASSED, exactly as the motor stage requires of its own test.
+        if ! echo "${pytest_output}" | grep -q "test_power_chain_within_budget PASSED"; then
+            local power_reason
+            power_reason="$(echo "${pytest_output}" | grep -m1 -E "^SKIPPED \[" | sed -E 's/^SKIPPED \[[0-9]+\] [^ ]+: //' || true)"
+            record_fail "power chain smoke" "${power_reason:-power chain test did not pass}"
+            return
+        fi
         record_pass "power chain smoke"
     else
         echo "${pytest_output}"

@@ -1,0 +1,8 @@
+# Bench ESP32 overlay (F-059 EX-1). Stack AFTER jetson_production.yaml for the
+# smoke stages that must talk to the board (jetson_smoke_test.sh motor/power do
+# this via esp32_stage_configs_csv). The orchestrator's own stack keeps
+# enabled: false until F-008 is done. Deliberately ONE key —
+# tests/regression/test_f059_aqa.py pins that, and pins that the motion gate
+# (esp32.smoke_test_allow_motion) stays closed.
+esp32:
+  enabled: true

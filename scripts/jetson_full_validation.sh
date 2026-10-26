@@ -412,10 +412,13 @@ phase2() {
         "${HOST_PY}" scripts/verify_sensors.py --sensor all --json
 
     # Smoke stages via jetson_smoke_test.sh single-stage interface (host venv).
-    # ESP32-owned stages (serial/motor/power) are NON-blocking (validate-around
-    # the dead ESP32); motion is FORCED off at the wrapper boundary via both
+    # ESP32-owned stages (serial/motor/power) are NON-blocking. motor and power
+    # stack config/jetson_bench_esp32.yaml (F-059), so on a dead board they FAIL
+    # (a WARN here, being non-blocking) instead of passing against
+    # MockESP32Driver. Motion is FORCED off at the wrapper boundary via both
     # the smoke-script switch AND the ESP32 schema switch — never relying on
-    # wrapper defaults (CodeRabbit PR #117).
+    # wrapper defaults (CodeRabbit PR #117) — so motor SKIPs here and power is
+    # the stage that measures the board.
     local stage
     for stage in usbc gpio camera lidar audio speaker voice pcie_ssd hailo; do
         run_step "smoke:${stage}" yes "${RUN_DIR}/phase2_smoke_${stage}.log" \

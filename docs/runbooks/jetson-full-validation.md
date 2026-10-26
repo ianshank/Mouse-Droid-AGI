@@ -170,6 +170,14 @@ The rover ESP32 is currently non-functional. The pass tolerates this:
   intact), so the loop ticks without the drivetrain.
 - The `smoke:serial`, `smoke:motor`, and `smoke:power` steps are **non-blocking**
   (WARN, not FAIL) — they capture repair diagnostics without failing the gate.
+- `smoke:motor` and `smoke:power` stack `config/jetson_bench_esp32.yaml` (one key,
+  `esp32.enabled: true`) onto the validation's config stack through
+  `esp32_stage_configs_csv` (F-059), so they talk to the board rather than the
+  mock. With motion off `smoke:motor` SKIPs and `smoke:power` is the stage that
+  measures the board: it FAILS (a WARN here) on a dead board, and also when its
+  test skips, e.g. under an exported `MOUSEDROID_ESP32__ENABLED=false`, which
+  beats the overlay. `MOUSEDROID_SMOKE_BENCH_ESP32_OVERLAY=` (set, empty) opts
+  out for a run with no chassis attached: both stages SKIP and pytest never runs.
 - **No motion is ever armed.** The motion double-gate
   (`MOUSEDROID_SMOKE_ALLOW_MOTION` + `MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION`)
   stays off.
