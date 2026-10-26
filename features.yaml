@@ -149,7 +149,7 @@ features:
       - "usbc_endpoint_* / power_chain_probe_complete structlog events present"
     validation_command: "bash scripts/jetson_smoke_test.sh"
     implemented_in: null
-    depends_on: ["F-001"]
+    depends_on: ["F-001", "F-059"]
     notes: "Cannot reach `done` in hosted CI; verify with `validate.py --tier hardware` on the rover."
 
   # F-009..F-014 are intentionally SKIPPED: those IDs are already used by the
@@ -1436,7 +1436,7 @@ features:
       family this change adds a writer for; no onnx_copy_seconds family exists.
     category: "infrastructure"
     priority: "high"
-    status: "in_progress"
+    status: "deferred"
     tier: "fast"
     verification:
       - "build_world_model accepts metrics= and threads it to the ONNX runtime"
@@ -1452,6 +1452,8 @@ features:
     implemented_in: null
     depends_on: ["F-002"]
     notes: >-
+      Deferred 2026-10-17: Phases 5-6 stood down after the task-2.1 ceiling gate;
+      resume after F-008.
       Preconditions recorded in openspec/changes/mouse-droid-jetson-onnx-delivery:
       the production world model loads no trained weights and jetson_production.yaml
       builds plain RSSM (cfc_hidden_dim 0), so latency A/B and parity gates are
@@ -1472,7 +1474,7 @@ features:
       boundary that is already satisfied so it stays that way.
     category: "infrastructure"
     priority: "medium"
-    status: "in_progress"
+    status: "deferred"
     tier: "fast"
     verification:
       - "deploy_remote.sh refuses a dirty target and preserves work before rsync --delete"
@@ -1484,6 +1486,8 @@ features:
     implemented_in: null
     depends_on: ["F-008", "F-050"]
     notes: >-
+      Deferred 2026-10-17: Phases 5-6 stood down after the task-2.1 ceiling gate;
+      resume after F-008.
       Sequenced behind F-008 per the F-024 rule that hardware readiness preempts
       in-flight software streams; the on-rover promotion and rollback drill are
       operator steps. Evidence closes out as a declared local-only chain because
@@ -1619,3 +1623,30 @@ features:
     depends_on: ["F-054", "F-055", "F-056", "F-057"]
     notes: >-
       Factory-first DI wiring for external agent adapters.
+
+  - id: "F-059"
+    epic: "Rover bring-up"
+    name: "Rover gate closeout: valid ESP32 retest preconditions on trunk"
+    description: >-
+      Every software precondition for a VALID F-008 retest: the motor stage tests
+      the chassis (not the mock, not a skipped assertion), preflight probes the
+      board, the stock command set and non-zero battery thresholds ship on the
+      production overlay with the e-stop latch armed, and the deploy path cannot
+      delete rover runtime state. Hardware evidence closes F-008, not this feature.
+    category: "validation"
+    priority: "critical"
+    status: "in_progress"
+    tier: "fast"
+    verification:
+      - "scripts/jetson_smoke_test.sh motor stage pairs with test_esp32_loopback.py::test_send_velocity_moves_encoders and that test has an encoder-less branch"
+      - "preflight esp32 check connects, polls {T:130} and requires a T:1001 frame; enabled=false is WARN"
+      - "jetson_production.yaml ships command_set waveshare_stock, battery 10.5/9.5 V, emergency_latch on; jetson_lidar_only.yaml latch off"
+      - "deploy_remote.sh rsync --delete never lists a gitignored rover path; default REMOTE_SRC is the rover repo root"
+      - "F-008 depends_on includes F-059; select_next returns F-059 while F-008 is todo"
+    validation_command: "bash scripts/validations/F-059.sh"
+    implemented_in: null
+    depends_on: ["F-001"]
+    notes: >-
+      Bundle: openspec/changes/mouse-droid-rover-gate-closeout (rev 2 + round-3 review).
+      CF-1/2/4/5 ratified 2026-10-17. Phases 3-4 (bench, exclusive open, re-pin) report
+      under F-008.
