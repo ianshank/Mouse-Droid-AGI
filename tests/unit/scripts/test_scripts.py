@@ -162,6 +162,12 @@ class TestDeployJetsonSh:
 
 
 class TestFlashEsp32Sh:
+    """Text pins for the verify-then-dry-run flasher.
+
+    Behaviour is driven in ``test_flash_esp32.py`` (needs bash); these read the
+    script text, so they also run on Windows.
+    """
+
     @pytest.fixture
     def content(self) -> str:
         return (_SCRIPTS / "flash_esp32.sh").read_text(encoding="utf-8")
@@ -173,10 +179,11 @@ class TestFlashEsp32Sh:
         assert "set -euo pipefail" in content
 
     def test_requires_port_argument(self, content: str) -> None:
-        assert "${1:?" in content  # bash required arg
+        assert "--port is required" in content
 
     def test_requires_firmware_argument(self, content: str) -> None:
-        assert "${2:?" in content
+        # The firmware is named by the tracked record, not passed on the command line.
+        assert "deployments/esp32-firmware.json" in content
 
     def test_checks_firmware_file_exists(self, content: str) -> None:
         assert "! -f" in content
@@ -188,10 +195,20 @@ class TestFlashEsp32Sh:
         assert "esptool.py" in content
 
     def test_baud_rate_present(self, content: str) -> None:
-        assert "460800" in content
+        assert "115200" in content
 
-    def test_installs_esptool_if_missing(self, content: str) -> None:
-        assert "pip install esptool" in content
+    def test_never_installs_esptool(self, content: str) -> None:
+        # The install command is only ever printed for the operator, inside the die() hint.
+        assert re.search(r"^\s*pip install", content, re.M) is None
+        assert re.search(r'die "[^"]*run: pip install esptool', content) is not None
+
+    def test_hashes_operands_after_the_end_of_options(self, content: str) -> None:
+        assert 'sha256sum -- "$1"' in content
+        assert 'shasum -a 256 -- "$1"' in content
+
+    def test_dry_run_is_the_default(self, content: str) -> None:
+        assert "WRITE=0" in content
+        assert "--write" in content
 
 
 class TestMousedroidService:
