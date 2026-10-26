@@ -254,6 +254,47 @@ class TestEdgeCases:
         assert second.status == "circuit_open"
 
     @pytest.mark.asyncio
+    async def test_dead_esp32_diagnostics_does_not_trip_the_circuit(
+        self, safe_safety_monitor
+    ) -> None:
+        """A failing board is a payload, not a raise: a raise would lock every MCP tool out.
+
+        ``failure_threshold=1`` makes ONE raised handler open the breaker (see
+        ``test_circuit_open_returns_circuit_open_status``). ``esp32_diagnostics`` must report a
+        driver that raises on every read and still leave ``health_check`` reachable.
+        """
+        from unittest.mock import AsyncMock
+
+        from mousedroid.common.tools.registry import create_default_registry
+        from mousedroid.config.schema import CircuitBreakerConfig
+
+        driver = AsyncMock()
+        driver.read_encoders.side_effect = OSError("port vanished")
+        board_cfg = Settings.model_validate(
+            {
+                "mock_hardware": False,
+                "ultrasonic": {"trigger_pin": 17, "echo_pin": 27},
+                "esp32": {"command_set": "waveshare_stock"},
+            }
+        )
+        cfg = MCPConfig.model_validate(
+            {
+                "enabled": True,
+                "circuit_breaker": CircuitBreakerConfig(
+                    failure_threshold=1, recovery_timeout_s=60.0
+                ).model_dump(),
+            }
+        )
+        registry = create_default_registry(settings=board_cfg, esp32_driver=driver)
+        b = _bridge(cfg=cfg, monitor=safe_safety_monitor, registry=registry)
+        ctx = b.make_request_context()
+        diagnosed = await b.call_tool("esp32_diagnostics", None, ctx)
+        assert diagnosed.status == "ok"
+        assert diagnosed.payload == {"status": "error", "detail": "OSError: port vanished"}
+        health = await b.call_tool("health_check", None, ctx)
+        assert health.status == "ok"
+
+    @pytest.mark.asyncio
     async def test_non_dict_handler_payload_wrapped(self, safe_safety_monitor) -> None:
         from mousedroid.common.tools.registry import ToolRegistry, ToolSpec
 
