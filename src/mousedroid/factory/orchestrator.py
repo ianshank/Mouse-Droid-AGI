@@ -277,10 +277,14 @@ def build_orchestrator(cfg: Settings) -> object:
 
     from mousedroid.common.tools.registry import create_default_registry
 
+    # ``esp32`` is the orchestrator's own driver: it holds the exclusive serial port, so the
+    # ``esp32_diagnostics`` tool must read through it rather than open a second one (F-059 4.3).
     _tool_registry = create_default_registry(
         llm_gateway=llm_gateway,
         metrics_registry=metrics_registry,
         gcp_cfg=cfg.gcp,
+        settings=cfg,
+        esp32_driver=esp32,
     )
 
     # Motor tools — only registered for the rover platform; the arm

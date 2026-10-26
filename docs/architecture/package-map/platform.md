@@ -156,7 +156,7 @@ graph LR
 
 **Purpose:** Common utilities for MouseDroid.
 
-**Imports:** `cloud`, `comms`, `config`, `harness`, `logging`
+**Imports:** `cloud`, `comms`, `config`, `harness`, `logging`, `validation`
 
 **Dependents:** `cloud`, `cognitive`, `efficiency`, `factory`, `growth`, `learning`, `mcp`, `orchestrator`, `sim`, `skills`, `telemetry`, `tools`, `training`, `utils`, `validation`, `vla`, `voice`, `world_model`
 
@@ -168,6 +168,7 @@ graph LR
   common --> config
   common --> harness
   common --> logging
+  common --> validation
   cloud --> common
   cognitive --> common
   efficiency --> common
