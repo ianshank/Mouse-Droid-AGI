@@ -165,6 +165,43 @@ parsing the old hint:** with no recorded overlay the string was
 `python -m mousedroid.cli.rearm --operator <you> --confirm-area-clear` and is now
 `python -m mousedroid.cli.rearm --status`.
 
+### Fixed — deploy_remote.sh can no longer delete rover runtime state, and targets the checkout root
+
+`rsync -avz --delete` removes whatever the destination holds that the source lacks, and the default
+destination, `/opt/mousedroid/src`, is the package parent *inside* the rover's checkout: syncing the
+repository there nested a second copy of it and deleted the live package
+(`/opt/mousedroid/src/mousedroid/`) on a clean rover. `REMOTE_SRC` now defaults to
+`/opt/mousedroid`, the checkout root the compose bind mount and both systemd units run from
+(**behaviour change** for anyone who relied on the old default; `MOUSEDROID_REMOTE_SRC` still overrides
+it), and the sync carries one fence, `RSYNC_PROTECT_ARGS`, which `--print-rsync-args` prints: the seven
+runtime roots (`venv`, `weights`, `models`, `logs`, `reports`, `estop_latch`, `tensorrt_cache`) are excluded anchored
+to the transfer root and without a trailing slash, so a same-named source directory deeper in the
+tree still ships and a symlinked root is held too; the `.gitignore` merge keeps ignored files off the
+rover; and a `.gitkeep` include rule, placed ahead of that merge (which drops `!` re-includes), ships
+the tracked sentinels, all pinned by real `rsync -n --delete` fixture tests. The deploy then restarts
+what actually runs the code: `mousedroid-docker` when that unit is enabled, then the bare-metal unit if
+that is enabled too, and it health-checks the container with `docker exec`. **The unit restart
+recreates the container** (the unit's `ExecStop` is `docker compose down`), so packages hot-installed into
+its writable layer are lost and a recreate has wedged the camera before. `MOUSEDROID_REMOTE_RESTART_MODE`
+(default `unit`) follows one rule: where the unit is enabled it restarts the container, and the unit is
+attached to it (`docker compose up --abort-on-container-exit`, `Restart=on-failure`), so the script never
+restarts it any other way. On a rover with no unit enabled or running, whose container runs under
+compose alone, `unit` mode leaves it running and says so, and `container` mode runs `docker restart` in place, keeping the
+writable layer, only when no `mousedroid-docker` unit is enabled or running; it refuses otherwise (the unit
+enabled, or in any state but `inactive`, including `activating` while it waits to restart), before anything
+is synced, because an in-place restart would abort the unit or race its restart, and what compose then
+does to the container is unverified on hardware. It also skips the unit's fail-closed `ExecStartPre`
+preflight and keeps the image, compose config and `env_file` the container was created with, so it is not
+for use after a rebuild or a config change. After a unit
+restart the health check waits up to `MOUSEDROID_REMOTE_HEALTH_WAIT_S` (30 s, wall-clock) for the
+container to be listed and warns, rather than skips, if it never is or the rover cannot be reached;
+when the run restarted no unit it looks once. `--code-only` does not rebuild the image, and it no longer
+falls through to the bare-metal installer when the rover has no venv, which is what the Docker-spine
+rover looks like: only `--full` runs `deploy_jetson.sh`. `--config-only` refuses a remote tree whose
+schema lacks `safety.battery_implausible_below_v` ("deploy code first"; a rover that cannot be reached
+is reported as that, not as a stale tree): an old tree handed a YAML that arms the battery thresholds
+reads a missing voltage as 0.0 V and e-stops.
+
 ### Fixed — the nightly Spec Harness, red every night since 2026-09-08
 
 `validate-slow` runs `--strict-git`, which needs every `done` feature's `implemented_in` to resolve.

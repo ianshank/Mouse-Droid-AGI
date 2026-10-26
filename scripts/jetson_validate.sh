@@ -25,7 +25,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "${SCRIPT_DIR}")"
 REMOTE_USER="${MOUSEDROID_REMOTE_USER:-jetson}"
-REMOTE_SRC="${MOUSEDROID_REMOTE_SRC:-/opt/mousedroid/src}"
+# The rover's repo root, the same default as deploy_remote.sh's REMOTE_SRC (F-059).
+# resolve_remote_source_root still falls back to /opt/mousedroid when an override does not
+# hold scripts/preflight_check.sh.
+REMOTE_SRC="${MOUSEDROID_REMOTE_SRC:-/opt/mousedroid}"
 REMOTE_VENV="${MOUSEDROID_REMOTE_VENV:-/opt/mousedroid/venv}"
 REMOTE_CONFIG_DIR="${MOUSEDROID_REMOTE_CONFIG_DIR:-/etc/mousedroid}"
 REMOTE_CONFIGS_CSV="${MOUSEDROID_REMOTE_CONFIGS:-${REMOTE_CONFIG_DIR}/jetson_production.yaml,${REMOTE_CONFIG_DIR}/jetson_lidar_only.yaml}"
